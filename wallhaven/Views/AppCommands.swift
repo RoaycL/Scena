@@ -41,6 +41,10 @@ struct WallhavenCommands: Commands {
 
     var body: some Commands {
         // 文件
+        CommandGroup(after: .appInfo) {
+            Button("检查更新…") { Task { await UpdateManager.shared.checkForUpdates() } }
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("导入图片或视频…") { actions?.importLocal() }
                 .keyboardShortcut("o")
@@ -157,7 +161,13 @@ struct StatusMenuContent: View {
     @Environment(\.openWindow) private var openWindow
     private let volumeLevels = [0, 25, 50, 75, 100]
 
+    @ObservedObject private var updates = UpdateManager.shared
+
     var body: some View {
+        if updates.updateAvailable {
+            Button("更新到 Scena \(updates.latestVersion)…") { updates.downloadAndInstall() }
+            Divider()
+        }
         Button("素材中心") { showMainWindow() }
         Menu("播放列表") { PlaylistCommands(showsManageShortcut: false) }
         Button("导入本地图片或视频…") {

@@ -255,7 +255,7 @@ private struct WorkshopDetailPanel: View {
                     metaChip(rating.label, color: ratingColor(rating))
                 }
                 if item.fileSize > 0 {
-                    metaChip(ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file))
+                    metaChip(FileSizeText.string(Int64(item.fileSize)))
                 }
                 if item.subscriptions > 0 {
                     metaChip("\(item.subscriptions.formatted()) 订阅")

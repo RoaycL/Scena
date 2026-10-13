@@ -205,7 +205,7 @@ final class StorageManager: ObservableObject {
             }.value
             let available = (try? target.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? .max
             if needed > available {
-                let format = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+                let format = { (bytes: Int64) in FileSizeText.string(bytes) }
                 ToastCenter.shared.show("目标盘空间不足：需要 \(format(needed))，剩余 \(format(available))", style: .error)
                 isMigrating = false
                 return

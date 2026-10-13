@@ -21,6 +21,18 @@ nonisolated enum MediaType {
     }
 }
 
+/// 文件大小显示：始终用数字（ByteCountFormatter 默认把 0 显示成英文「Zero KB」）
+nonisolated enum FileSizeText {
+    static func string(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: bytes)
+    }
+
+    static func string(_ bytes: Int) -> String { string(Int64(bytes)) }
+}
+
 /// 静音、无缝循环播放的视频 NSView，App 内背景和桌面动态壁纸共用
 final class LoopingVideoNSView: NSView {
     private let player = AVQueuePlayer()

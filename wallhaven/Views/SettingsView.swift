@@ -87,7 +87,7 @@ private struct AccountStatusRow<Trailing: View>: View {
 }
 
 private func formatBytes(_ value: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    FileSizeText.string(value)
 }
 
 // MARK: - 通用
@@ -542,7 +542,7 @@ private struct StorageSettings: View {
 // MARK: - 关于
 
 private struct AboutSettings: View {
-    @StateObject private var updateManager = UpdateManager()
+    @ObservedObject private var updateManager = UpdateManager.shared
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -575,7 +575,7 @@ private struct AboutSettings: View {
                     } else if let error = updateManager.errorMessage {
                         Text(error).foregroundStyle(.red)
                     } else {
-                        Text("检查是否有新版本").foregroundStyle(.secondary)
+                        Text(updateManager.statusMessage ?? "当前版本 \(updateManager.currentVersion)").foregroundStyle(.secondary)
                     }
                     Spacer()
                     if updateManager.isChecking || updateManager.isDownloading {
@@ -595,6 +595,10 @@ private struct AboutSettings: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(6)
+                }
+                Toggle("自动检查更新", isOn: $updateManager.checksAutomatically)
+                Link(destination: UpdateManager.releasesPage) {
+                    LabeledContent("GitHub 发布页面") { Image(systemName: "arrow.up.right") }
                 }
             }
 

@@ -1056,7 +1056,7 @@ struct ContentView: View {
                 eyebrow: local.isVideo ? (isLive ? "LIVE · 正在桌面播放" : "LIVE WALLPAPER") : "LOCAL",
                 title: local.displayName,
                 meta: [
-                    ByteCountFormatter.string(fromByteCount: Int64(local.fileSize), countStyle: .file),
+                    FileSizeText.string(Int64(local.fileSize)),
                     local.url.pathExtension.uppercased(),
                 ]
             ) {
@@ -1158,7 +1158,7 @@ struct ContentView: View {
     private func workshopMeta(_ item: WorkshopItem) -> [String] {
         var meta: [String] = []
         if item.fileSize > 0 {
-            meta.append(ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file))
+            meta.append(FileSizeText.string(Int64(item.fileSize)))
         }
         if item.subscriptions > 0 { meta.append("\(item.subscriptions) 订阅") }
         if let rating = item.contentRating { meta.append(WorkshopRating(rawValue: rating)?.label ?? rating) }
@@ -1171,7 +1171,7 @@ struct ContentView: View {
         meta.append("♥ \(wallpaper.favorites)")
         if wallpaper.views > 0 { meta.append("\(wallpaper.views) 次浏览") }
         if wallpaper.fileSize > 0 {
-            meta.append(ByteCountFormatter.string(fromByteCount: Int64(wallpaper.fileSize), countStyle: .file))
+            meta.append(FileSizeText.string(Int64(wallpaper.fileSize)))
         }
         return meta
     }

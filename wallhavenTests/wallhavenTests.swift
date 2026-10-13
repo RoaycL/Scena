@@ -192,4 +192,11 @@ struct wallhavenTests {
         // 全部移除
         #expect(SelectionFallback.neighbor(of: "a", previousIDs: ["a"], currentIDs: []) == nil)
     }
+
+    @Test func updateVersionComparisonIsNumeric() {
+        #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
+        #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))
+        #expect(!UpdateManager.isNewer("1.0.2", than: "1.0.2"))
+        #expect(!UpdateManager.isNewer("1.0.1", than: "1.0.2"))
+    }
 }
