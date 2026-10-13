@@ -26,6 +26,7 @@ struct DownloadService {
     private let fm = FileManager.default
 
     func download(_ wallpaper: WallhavenWallpaper) async throws -> URL {
+        try StorageManager.shared.ensureAvailable()
         let destinationFolder = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true)
         if !fm.fileExists(atPath: destinationFolder.path) {
             try fm.createDirectory(at: destinationFolder, withIntermediateDirectories: true)

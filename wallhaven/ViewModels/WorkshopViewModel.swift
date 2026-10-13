@@ -74,6 +74,7 @@ final class WorkshopViewModel: ObservableObject {
     private var downloadQueue: [String] = []
     private var applyAfterDownload: String?
     private var isProcessingQueue = false
+    private var storageObserver: NSObjectProtocol?
 
     init() {
         let defaults = UserDefaults.standard
@@ -83,6 +84,9 @@ final class WorkshopViewModel: ObservableObject {
         extraFolders = (defaults.stringArray(forKey: Keys.folders) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
         subscribeOnDownload = defaults.object(forKey: Keys.subscribeOnDownload) as? Bool ?? true
         autoDownloadSubscriptions = defaults.object(forKey: Keys.autoDownload) as? Bool ?? true
+        storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshLibrary() }
+        }
     }
 
     var hasAPIKey: Bool { !apiKey.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -130,7 +134,12 @@ final class WorkshopViewModel: ObservableObject {
 
     /// 本地库根目录：Steam / steamcmd 默认下载目录 + 用户添加的文件夹
     var libraryRoots: [URL] {
-        [WorkshopLibrary.steamContentFolder] + extraFolders
+        // App 管理的下载目录（可能在外接盘上）+ Steam 默认目录 + 用户添加的文件夹
+        var roots = [StorageManager.shared.workshopContentFolder]
+        if roots[0].standardizedFileURL != WorkshopLibrary.steamContentFolder.standardizedFileURL {
+            roots.append(WorkshopLibrary.steamContentFolder)
+        }
+        return roots + extraFolders
     }
 
     // MARK: - Library

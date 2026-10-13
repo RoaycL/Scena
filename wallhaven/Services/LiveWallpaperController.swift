@@ -56,9 +56,10 @@ final class LiveWallpaperController: ObservableObject {
             return
         }
         guard let data = defaults.data(forKey: storageKey),
-              let content = try? JSONDecoder().decode(LiveContent.self, from: data),
-              FileManager.default.fileExists(atPath: content.path) else {
-            defaults.removeObject(forKey: storageKey)
+              let content = try? JSONDecoder().decode(LiveContent.self, from: data) else { return }
+        guard FileManager.default.fileExists(atPath: content.path) else {
+            // 外接盘没连接时保留设置，重新连接后会自动恢复；文件确实被删除才清除
+            if StorageManager.isReachable(content.url) { defaults.removeObject(forKey: storageKey) }
             return
         }
         try? start(content)
@@ -85,6 +86,13 @@ final class LiveWallpaperController: ObservableObject {
         }
         rebuildWindows()
         setStaticPoster(for: content)
+    }
+
+    /// 存储位置迁移后更新路径并重新播放（播放器还指向旧文件）
+    func remapPath(from oldPrefix: String, to newPrefix: String) {
+        guard let content = current, content.path == oldPrefix || content.path.hasPrefix(oldPrefix + "/") else { return }
+        let newPath = newPrefix + content.path.dropFirst(oldPrefix.count)
+        try? start(LiveContent(kind: content.kind, path: newPath, title: content.title))
     }
 
     func stop() {

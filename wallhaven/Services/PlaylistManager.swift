@@ -38,6 +38,21 @@ struct PlaylistEntry: Codable, Hashable, Identifiable {
         }
     }
 
+    private init(id: String, kind: Kind, title: String, thumbnail: String?, wallhaven: WallhavenWallpaper?, path: String?) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.thumbnail = thumbnail
+        self.wallhaven = wallhaven
+        self.path = path
+    }
+
+    /// 路径变化后的副本（本地文件的条目 ID 也随路径更新）
+    func with(path: String?, thumbnail: String?) -> PlaylistEntry {
+        let newID = kind == .local && path != nil ? "file-\(path!)" : id
+        return PlaylistEntry(id: newID, kind: kind, title: title, thumbnail: thumbnail, wallhaven: wallhaven, path: path)
+    }
+
     /// 从画廊条目创建；未下载的工坊壁纸返回 nil
     init?(_ item: GalleryItem) {
         switch item.origin {
@@ -169,6 +184,26 @@ final class PlaylistManager: ObservableObject {
     func setShuffle(_ shuffle: Bool, for id: UUID) {
         update(id) { $0.shuffle = shuffle }
         if activeID == id { rebuildOrder() }
+    }
+
+    /// 存储位置迁移后，把引用旧目录的条目路径改到新目录
+    func remapPaths(from oldPrefix: String, to newPrefix: String) {
+        let remap: (String?) -> String? = { path in
+            guard let path, path == oldPrefix || path.hasPrefix(oldPrefix + "/") else { return path }
+            return newPrefix + path.dropFirst(oldPrefix.count)
+        }
+        var changed = false
+        for playlistIndex in playlists.indices {
+            for entryIndex in playlists[playlistIndex].entries.indices {
+                let entry = playlists[playlistIndex].entries[entryIndex]
+                let newPath = remap(entry.path)
+                let newThumbnail = remap(entry.thumbnail)
+                guard newPath != entry.path || newThumbnail != entry.thumbnail else { continue }
+                playlists[playlistIndex].entries[entryIndex] = entry.with(path: newPath, thumbnail: newThumbnail)
+                changed = true
+            }
+        }
+        if changed { save() }
     }
 
     private func update(_ id: UUID, _ change: (inout Playlist) -> Void) {

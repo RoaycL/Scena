@@ -12,8 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 不需要窗口标签页，去掉「显示」菜单里的 Show Tab Bar
         NSWindow.allowsAutomaticWindowTabbing = false
+        StorageManager.configureImageCache()
         LiveWallpaperController.shared.restore()
         PlaylistManager.shared.restore()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        SteamCMDDownloader.shared.terminateAll()
     }
 
     // 关闭主窗口后继续运行，动态壁纸不中断

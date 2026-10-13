@@ -25,6 +25,13 @@ final class LocalMediaViewModel: ObservableObject {
     @Published private(set) var items: [LocalMediaItem] = []
 
     private let toast = ToastCenter.shared
+    private var storageObserver: NSObjectProtocol?
+
+    init() {
+        storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.loadMedia() }
+        }
+    }
 
     private var directoryURL: URL? {
         let downloadPath = DownloadLocation.currentPath
@@ -62,6 +69,12 @@ final class LocalMediaViewModel: ObservableObject {
     /// 从 Finder 导入图片或视频（复制到下载目录）
     func importFiles() {
         guard let directoryURL else { return }
+        do {
+            try StorageManager.shared.ensureAvailable()
+        } catch {
+            toast.show(error.localizedDescription, style: .error)
+            return
+        }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false

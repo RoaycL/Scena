@@ -56,6 +56,9 @@ final class SteamCMDDownloader {
 
     func isDownloading(_ id: String) -> Bool { running[id] != nil }
 
+    /// 是否有 steamcmd 下载正在进行
+    var isBusy: Bool { !running.isEmpty }
+
     nonisolated struct BatchResult: Sendable {
         var downloaded: [String: URL] = [:]
         var failed: [String: String] = [:]
@@ -77,12 +80,18 @@ final class SteamCMDDownloader {
 
         let process = Process()
         process.executableURL = steamcmd
+        try StorageManager.shared.ensureAvailable()
         var arguments = [
             "+@ShutdownOnFailedCommand", "0",
             "+@NoPromptForPassword", "1",
             "+@sSteamCmdForcePlatformType", "windows",
-            "+login", username,
         ]
+        // 设置了存储位置时，工坊壁纸下载到该位置（必须在 +login 之前）
+        if let installDir = StorageManager.shared.workshopInstallDir {
+            try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
+            arguments += ["+force_install_dir", installDir.path]
+        }
+        arguments += ["+login", username]
         for id in ids {
             arguments += ["+workshop_download_item", WorkshopConstants.appID, id, "validate"]
         }
@@ -116,6 +125,13 @@ final class SteamCMDDownloader {
         }
 
         return try Self.parse(output: output, ids: ids)
+    }
+
+    /// App 退出时终止下载，避免留下无人管理的 steamcmd 进程
+    func terminateAll() {
+        Set(running.values.map(ObjectIdentifier.init)).forEach { id in
+            running.values.first { ObjectIdentifier($0) == id }?.terminate()
+        }
     }
 
     func cancel(_ id: String) {

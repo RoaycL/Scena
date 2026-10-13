@@ -13,8 +13,8 @@ struct SettingsView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
     @ObservedObject private var steamAccount = SteamAccountSession.shared
+    @ObservedObject private var storage = StorageManager.shared
     @Environment(\.openWindow) private var openWindow
-    @AppStorage(DownloadLocation.storageKey) private var downloadPath: String = DownloadLocation.defaultPath
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
     @State private var selectedTab = 0
     @StateObject private var updateManager = UpdateManager()
@@ -84,45 +84,10 @@ struct SettingsView: View {
     
     private var generalContent: some View {
         VStack(alignment: .leading, spacing: 20) {
-            settingsSectionHeader(icon: "arrow.down.circle.fill", title: "下载设置", color: .blue)
-            
+            settingsSectionHeader(icon: "externaldrive.fill", title: "存储", color: .blue)
+
             settingsCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("保存路径")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    
-                    HStack(spacing: 10) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder.fill")
-                                .foregroundStyle(.blue.opacity(0.8))
-                                .font(.system(size: 13))
-                            Text(downloadPath)
-                                .font(.system(size: 12))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(.primary.opacity(0.85))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7)
-                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                        )
-                        
-                        Button("更改...") {
-                            selectDownloadFolder()
-                        }
-                        .controlSize(.small)
-                    }
-                    
-                    Text("下载的壁纸将保存在此文件夹中。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
+                storageCard
             }
 
             settingsSectionHeader(icon: "menubar.rectangle", title: "菜单栏", color: .purple)
@@ -371,7 +336,11 @@ struct SettingsView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                             Spacer()
-                            if url == WorkshopLibrary.steamContentFolder {
+                            if url == StorageManager.shared.workshopContentFolder {
+                                Text("存储位置")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            } else if url == WorkshopLibrary.steamContentFolder {
                                 Text("Steam 默认")
                                     .font(.system(size: 10))
                                     .foregroundStyle(.secondary)
@@ -564,52 +533,131 @@ struct SettingsView: View {
         }
     }
     
-    private func selectDownloadFolder() {
+    // MARK: - 存储
+
+    private var storageCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: storage.rootPath == nil ? "internaldrive" : "externaldrive")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.blue.opacity(0.85))
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let info = storage.volumeInfo() {
+                        HStack(spacing: 6) {
+                            Text(info.name).font(.system(size: 13, weight: .semibold))
+                            if info.isExternal {
+                                Text("外接盘")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.blue.opacity(0.15), in: Capsule())
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                        ProgressView(value: Double(info.total - info.available), total: Double(max(info.total, 1)))
+                            .frame(width: 220)
+                        Text("可用 \(bytes(info.available))，共 \(bytes(info.total))")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("存储盘未连接")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.orange)
+                        Text("连接后已下载的壁纸会自动恢复可用")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(storage.rootPath ?? "默认位置（本机）")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                usageRow("壁纸图片和视频", bytes: storage.usage.wallpapers, color: .blue)
+                usageRow("创意工坊壁纸", bytes: storage.usage.workshop, color: .purple)
+                usageRow("图片缓存（上限 1 GB）", bytes: storage.usage.cache, color: .gray)
+            }
+
+            if storage.isMigrating {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: Double(storage.migrationProgress.done), total: Double(max(storage.migrationProgress.total, 1)))
+                    Text("正在移动 \(storage.migrationProgress.done)/\(storage.migrationProgress.total)…移动完成前请不要拔出存储盘")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button("更改位置…") { selectStorageLocation() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                if storage.rootPath != nil {
+                    Button("恢复默认位置") { confirmMove(to: nil) }
+                        .controlSize(.small)
+                }
+                Button("在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([storage.rootURL ?? storage.wallpaperFolder])
+                }
+                .controlSize(.small)
+                Spacer()
+                Button("清除缓存") { storage.clearImageCache() }
+                    .controlSize(.small)
+            }
+            .disabled(storage.isMigrating)
+
+            Text("下载的 wallhaven 壁纸、导入的图片和视频、创意工坊壁纸都会保存在这里。更改位置时会自动移动已下载的内容，并更新播放列表和动态壁纸的引用。")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { storage.refreshUsage() }
+    }
+
+    private func usageRow(_ title: String, bytes value: Int64, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(title).font(.system(size: 12))
+            Spacer()
+            Text(bytes(value))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func bytes(_ value: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+    }
+
+    private func selectStorageLocation() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择下载目录"
-        
-        if panel.runModal() == .OK {
-            if let newPath = panel.url?.path {
-                let oldPath = downloadPath
-                guard newPath != oldPath else { return }
-                
-                // 迁移旧目录下的文件到新目录
-                let fm = FileManager.default
-                let oldURL = URL(fileURLWithPath: oldPath, isDirectory: true)
-                let newURL = URL(fileURLWithPath: newPath, isDirectory: true)
-                
-                if fm.fileExists(atPath: oldPath) {
-                    do {
-                        // 确保新目录存在
-                        if !fm.fileExists(atPath: newPath) {
-                            try fm.createDirectory(at: newURL, withIntermediateDirectories: true)
-                        }
-                        
-                        let files = try fm.contentsOfDirectory(at: oldURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-                        for file in files {
-                            let dest = newURL.appendingPathComponent(file.lastPathComponent)
-                            if !fm.fileExists(atPath: dest.path) {
-                                try fm.moveItem(at: file, to: dest)
-                            }
-                        }
-                        
-                        // 如果旧目录已清空则删除
-                        let remaining = try fm.contentsOfDirectory(at: oldURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)
-                        if remaining.isEmpty {
-                            try? fm.removeItem(at: oldURL)
-                        }
-                    } catch {
-                        // 迁移失败不阻断路径切换，仅打印日志
-                        print("文件迁移失败: \(error.localizedDescription)")
-                    }
-                }
-                
-                downloadPath = newPath
-            }
-        }
+        panel.message = "选择存储位置（可以是外接盘），将在其中创建 wallhaven 文件夹"
+        panel.prompt = "选择"
+        if let volumes = URL(string: "file:///Volumes/") { panel.directoryURL = volumes }
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+        // 选中盘符或普通文件夹时，在里面建一个 wallhaven 子文件夹，避免把文件散落在根目录
+        let root = chosen.lastPathComponent.lowercased() == "wallhaven" ? chosen : chosen.appendingPathComponent("wallhaven", isDirectory: true)
+        confirmMove(to: root)
+    }
+
+    private func confirmMove(to root: URL?) {
+        let alert = NSAlert()
+        alert.messageText = root == nil ? "恢复默认存储位置？" : "将存储位置改到「\(StorageManager.volumeName(of: root!))」？"
+        alert.informativeText = """
+        新位置：\(root?.path ?? "~/Pictures/Wallhaven 和 Steam 默认工坊目录")
+        已下载的内容（约 \(bytes(storage.usage.wallpapers + storage.usage.workshop))）会移动到新位置，跨盘移动可能需要一些时间。
+        """
+        alert.addButton(withTitle: "移动")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        storage.changeLocation(to: root)
     }
 }
