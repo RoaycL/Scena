@@ -48,6 +48,9 @@ struct ContentView: View {
     @State private var localSelectionID: String?
     @State private var librarySource: LibrarySource = .all
     @State private var libraryQuery = ""
+    @State private var topBarTabsWidth: CGFloat = 0
+    @State private var topBarLeadingWidth: CGFloat = 0
+    @State private var topBarTrailingWidth: CGFloat = 0
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
     @State private var workshopSelectionID: String?
@@ -348,7 +351,7 @@ struct ContentView: View {
                     .allowsHitTesting(!immersive.isChromeHidden)
 
                 VStack(spacing: 12) {
-                    topBar
+                    topBar(width: size.width)
                         .opacity(immersive.isChromeHidden ? 0 : 1)
                         .offset(y: immersive.isChromeHidden ? -12 : 0)
                         .allowsHitTesting(!immersive.isChromeHidden)
@@ -506,38 +509,72 @@ struct ContentView: View {
 
     // MARK: - Top bar
 
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 2) {
-                ForEach(MainTab.allCases) { tab in
-                    Button { switchTab(tab) } label: {
-                        Text(tab.rawValue)
-                            .font(.system(size: 13, weight: .medium))
-                            .lineLimit(1)
-                            .fixedSize()
-                            .foregroundStyle(currentTab == tab ? .white : .white.opacity(0.6))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 7)
-                            .background(Capsule().fill(currentTab == tab ? .white.opacity(0.2) : .clear))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+    /// 顶部栏：窗口够宽时主页签精确居中，来源切换放在左侧；放不下时回退为靠左排列，避免重叠
+    private func topBar(width: CGFloat) -> some View {
+        let leadingInset: CGFloat = 80 // 红绿灯
+        let trailingInset: CGFloat = 16
+        let gap: CGFloat = 12
+        let halfTabs = topBarTabsWidth / 2
+        let canCenter = topBarTabsWidth > 0
+            && width / 2 - halfTabs - gap >= leadingInset + topBarLeadingWidth
+            && width / 2 + halfTabs + gap <= width - trailingInset - topBarTrailingWidth
+
+        return ZStack {
+            HStack(spacing: 10) {
+                if !canCenter { mainTabs }
+                topBarLeading
+                    .measureWidth($topBarLeadingWidth)
+                Spacer(minLength: 12)
+                topBarTrailing
+                    .measureWidth($topBarTrailingWidth)
+            }
+            .padding(.leading, leadingInset)
+            .padding(.trailing, trailingInset)
+
+            if canCenter { mainTabs }
+        }
+        .animation(.easeInOut(duration: 0.2), value: canCenter)
+        .environment(\.colorScheme, .dark)
+        .onHover { immersive.setHold("topbar", active: $0) }
+    }
+
+    private var mainTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(MainTab.allCases) { tab in
+                Button { switchTab(tab) } label: {
+                    Text(tab.rawValue)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(currentTab == tab ? .white : .white.opacity(0.6))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(currentTab == tab ? .white.opacity(0.2) : .clear))
+                        .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
             }
-            .padding(4)
-            .background(.ultraThinMaterial, in: Capsule())
+        }
+        .padding(4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .measureWidth($topBarTabsWidth)
+    }
 
-            // 「发现」「收藏」里切换 Wallhaven / 创意工坊；资料库切换类型
-            if currentTab == .discover {
-                sourcePicker($discoverSource)
-            } else if currentTab == .collections {
-                sourcePicker($collectionSource)
-            } else if currentTab == .library {
-                librarySourcePicker
-            }
+    /// 页签旁的二级切换：「发现」「收藏」切换 Wallhaven / 创意工坊，资料库切换来源
+    @ViewBuilder
+    private var topBarLeading: some View {
+        if currentTab == .discover {
+            sourcePicker($discoverSource)
+        } else if currentTab == .collections {
+            sourcePicker($collectionSource)
+        } else if currentTab == .library {
+            librarySourcePicker
+        }
+    }
 
-            Spacer(minLength: 12)
-
+    @ViewBuilder
+    private var topBarTrailing: some View {
+        HStack(spacing: 10) {
             LiveWallpaperStatus(controller: liveController)
             WorkshopDownloadsButton()
 
@@ -581,10 +618,6 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("设置")
         }
-        .padding(.leading, 80) // 红绿灯
-        .padding(.trailing, 16)
-        .environment(\.colorScheme, .dark)
-        .onHover { immersive.setHold("topbar", active: $0) }
     }
 
     private func sourcePicker(_ selection: Binding<ContentSource>) -> some View {
@@ -1170,5 +1203,12 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+private extension View {
+    /// 测量视图宽度（用于顶部栏判断是否放得下居中布局）
+    func measureWidth(_ width: Binding<CGFloat>) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.wrappedValue = $0 }
     }
 }
