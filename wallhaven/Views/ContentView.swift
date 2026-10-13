@@ -136,10 +136,21 @@ struct ContentView: View {
         }
     }
 
-    private func ensureValidSelection() {
+    /// 选中项不在列表里时重新选择：
+    /// 若是被移除（取消订阅 / 取消收藏 / 删除），选原位置的下一项（没有则上一项），并保持滚动位置；
+    /// 若整个列表换了（搜索、筛选、切换页面），回到第一项
+    private func ensureValidSelection(previousIDs: [String] = []) {
         let items = currentItems
-        guard !items.isEmpty else { return }
-        if selectedItem == nil, let first = items.first {
+        guard !items.isEmpty, selectedItem == nil else { return }
+
+        if let removedID = selectedID(for: page),
+           let neighborID = SelectionFallback.neighbor(of: removedID, previousIDs: previousIDs, currentIDs: items.map(\.id)),
+           let neighbor = items.first(where: { $0.id == neighborID }) {
+            select(neighbor)
+            selectionWithoutScrollingID = neighborID
+            return
+        }
+        if let first = items.first {
             select(first)
         }
     }
@@ -187,24 +198,12 @@ struct ContentView: View {
         deleteFromLibrary(GalleryItem(origin: .local(item)), unsubscribe: false)
     }
 
-    /// 从资料库删除（移到废纸篓）：删除选中项后选中原位置的邻项，保留当前视口
+    /// 删除（移到废纸篓）。删除选中项后选中原位置的邻项由 ensureValidSelection 统一处理
     private func deleteFromLibrary(_ item: GalleryItem, unsubscribe: Bool) {
-        let before = libraryItems
-        let wasSelected = localSelectionID == item.id
-        let deletedIndex = before.firstIndex { $0.id == item.id }
         switch item.origin {
         case .local(let local): localViewModel.delete(item: local)
         case .workshop(let workshopItem): workshop.delete(workshopItem, unsubscribe: unsubscribe)
         case .remote: return
-        }
-        guard wasSelected, let deletedIndex else { return }
-        let remaining = before.filter { $0.id != item.id }
-        if remaining.isEmpty {
-            localSelectionID = nil
-        } else {
-            let neighborID = remaining[min(deletedIndex, remaining.count - 1)].id
-            selectionWithoutScrollingID = neighborID
-            localSelectionID = neighborID
         }
     }
 
@@ -409,8 +408,8 @@ struct ContentView: View {
         }
         .onChange(of: workshop.filters) { workshop.filtersDidChange() }
         .onChange(of: isWorkshopFilterPresented) { _, presented in immersive.setHold("workshopFilter", active: presented) }
-        .onChange(of: currentItems.map(\.id), initial: true) {
-            ensureValidSelection()
+        .onChange(of: currentItems.map(\.id), initial: true) { oldIDs, _ in
+            ensureValidSelection(previousIDs: oldIDs)
         }
         .onChange(of: selectedItem, initial: true) { _, item in
             guard let item else { return }

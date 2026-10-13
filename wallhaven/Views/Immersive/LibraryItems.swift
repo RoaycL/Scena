@@ -81,3 +81,16 @@ extension GalleryItem {
         return workshop?.tags.contains { $0.localizedCaseInsensitiveContains(keyword) || WorkshopTags.label(for: $0).contains(keyword) } ?? false
     }
 }
+
+/// 选中项被移除后的替代选择
+nonisolated enum SelectionFallback {
+    /// 新列表是旧列表的子集（只是移除了条目）时，返回被移除项原位置的下一项，没有则上一项；
+    /// 列表整体变化（搜索、筛选、切换页面）时返回 nil，由调用方回到第一项
+    static func neighbor(of removedID: String, previousIDs: [String], currentIDs: [String]) -> String? {
+        guard let oldIndex = previousIDs.firstIndex(of: removedID) else { return nil }
+        let remaining = Set(currentIDs)
+        guard !remaining.contains(removedID), Set(previousIDs).isSuperset(of: remaining) else { return nil }
+        return previousIDs[(oldIndex + 1)...].first(where: remaining.contains)
+            ?? previousIDs[..<oldIndex].last(where: remaining.contains)
+    }
+}

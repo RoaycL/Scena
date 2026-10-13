@@ -177,4 +177,19 @@ struct wallhavenTests {
         #expect(LibrarySource.workshop.matches(workshop) && !LibrarySource.workshop.matches(wallhaven))
         #expect([wallhaven, imported, workshop].allSatisfy(LibrarySource.all.matches))
     }
+
+    @Test func removingSelectedItemSelectsNeighborInPlace() {
+        let ids = ["a", "b", "c", "d"]
+        // 移除中间项：选下一项
+        #expect(SelectionFallback.neighbor(of: "b", previousIDs: ids, currentIDs: ["a", "c", "d"]) == "c")
+        // 移除最后一项：选上一项
+        #expect(SelectionFallback.neighbor(of: "d", previousIDs: ids, currentIDs: ["a", "b", "c"]) == "c")
+        // 同时移除多项：跳过也被移除的
+        #expect(SelectionFallback.neighbor(of: "b", previousIDs: ids, currentIDs: ["a", "d"]) == "d")
+        // 列表整体变化（搜索 / 筛选出了新条目）：回到第一项
+        #expect(SelectionFallback.neighbor(of: "b", previousIDs: ids, currentIDs: ["x", "y"]) == nil)
+        #expect(SelectionFallback.neighbor(of: "b", previousIDs: ids, currentIDs: ["a", "c", "z"]) == nil)
+        // 全部移除
+        #expect(SelectionFallback.neighbor(of: "a", previousIDs: ["a"], currentIDs: []) == nil)
+    }
 }

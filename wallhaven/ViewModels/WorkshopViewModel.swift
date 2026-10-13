@@ -600,10 +600,11 @@ final class WorkshopViewModel: ObservableObject {
             toast.show(SteamSessionError.notLoggedIn.localizedDescription, style: .error)
             return
         }
-        // 先更新界面，失败再回滚
+        // 先更新界面，失败再回滚（回滚时放回原来的位置）
+        let originalIndex = subscribedItems.firstIndex { $0.id == item.id }
         if subscribed {
             subscribedIDs.insert(item.id)
-            if !subscribedItems.contains(where: { $0.id == item.id }) { subscribedItems.insert(item, at: 0) }
+            if originalIndex == nil { subscribedItems.insert(item, at: 0) }
         } else {
             subscribedIDs.remove(item.id)
             subscribedItems.removeAll { $0.id == item.id }
@@ -622,7 +623,9 @@ final class WorkshopViewModel: ObservableObject {
                     subscribedItems.removeAll { $0.id == item.id }
                 } else {
                     subscribedIDs.insert(item.id)
-                    subscribedItems.insert(item, at: 0)
+                    if !subscribedItems.contains(where: { $0.id == item.id }) {
+                        subscribedItems.insert(item, at: min(originalIndex ?? 0, subscribedItems.count))
+                    }
                 }
                 toast.show("\(subscribed ? "订阅" : "取消订阅")失败：\(error.localizedDescription)", style: .error)
             }
