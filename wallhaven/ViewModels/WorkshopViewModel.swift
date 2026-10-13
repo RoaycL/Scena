@@ -38,6 +38,14 @@ final class WorkshopViewModel: ObservableObject {
     @Published var subscribeOnDownload: Bool {
         didSet { UserDefaults.standard.set(subscribeOnDownload, forKey: Keys.subscribeOnDownload) }
     }
+    /// 同时下载数量（每次 steamcmd 登录处理的条目数），超出的排队等待
+    @Published var maxConcurrentDownloads: Int {
+        didSet {
+            let clamped = min(10, max(1, maxConcurrentDownloads))
+            if clamped != maxConcurrentDownloads { maxConcurrentDownloads = clamped; return }
+            UserDefaults.standard.set(clamped, forKey: Keys.maxConcurrentDownloads)
+        }
+    }
     @Published var autoDownloadSubscriptions: Bool {
         didSet { UserDefaults.standard.set(autoDownloadSubscriptions, forKey: Keys.autoDownload) }
     }
@@ -67,6 +75,7 @@ final class WorkshopViewModel: ObservableObject {
         static let subscribeOnDownload = "workshop.subscribeOnDownload"
         static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
+        static let maxConcurrentDownloads = "workshop.maxConcurrentDownloads"
     }
 
     private let api = SteamWorkshopAPI()
@@ -94,6 +103,8 @@ final class WorkshopViewModel: ObservableObject {
         extraFolders = (defaults.stringArray(forKey: Keys.folders) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
         subscribeOnDownload = defaults.object(forKey: Keys.subscribeOnDownload) as? Bool ?? true
         autoDownloadSubscriptions = defaults.object(forKey: Keys.autoDownload) as? Bool ?? true
+        let savedConcurrency = defaults.integer(forKey: Keys.maxConcurrentDownloads)
+        maxConcurrentDownloads = savedConcurrency == 0 ? 3 : min(10, max(1, savedConcurrency))
         if let data = defaults.data(forKey: Keys.downloadJobs),
            let saved = try? JSONDecoder().decode([WorkshopDownloadJob].self, from: data) {
             downloadJobs = WorkshopDownloadQueue.restored(saved)
@@ -369,9 +380,19 @@ final class WorkshopViewModel: ObservableObject {
         processDownloadQueue()
     }
 
+    /// 批次中的某个条目已下载完成：立即更新状态，不等整批结束
+    fileprivate func markDownloaded(_ id: String) {
+        guard let index = downloadJobs.firstIndex(where: { $0.id == id }), downloadJobs[index].state == .downloading else { return }
+        downloadJobs[index].state = .completed
+        downloadJobs[index].error = nil
+        activeDownloads.remove(id)
+        refreshLibrary()
+    }
+
     private func processDownloadQueue() {
         guard !isProcessingQueue, !isShuttingDown else { return }
-        let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(10).map(\.id))
+        // 同时下载数量：这一批标记为「下载中」，其余继续排队
+        let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(maxConcurrentDownloads).map(\.id))
         guard !batch.isEmpty else { return }
         isProcessingQueue = true
         batchInterrupted = false
@@ -392,7 +413,10 @@ final class WorkshopViewModel: ObservableObject {
                 if batchInterrupted || isShuttingDown {
                     result = .init()
                 } else {
-                    result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername)
+                    let relay = DownloadProgressRelay(self)
+                    result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername) { id in
+                        relay.downloaded(id)
+                    }
                 }
             } catch {
                 result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
@@ -631,5 +655,19 @@ final class WorkshopViewModel: ObservableObject {
         } catch {
             toast.show(error.localizedDescription, style: .error)
         }
+    }
+}
+
+/// 把 steamcmd 输出线程上的「单个条目下载完成」转发回主线程
+nonisolated private final class DownloadProgressRelay: @unchecked Sendable {
+    private weak var target: WorkshopViewModel?
+
+    init(_ target: WorkshopViewModel) {
+        self.target = target
+    }
+
+    func downloaded(_ id: String) {
+        let target = self.target
+        Task { @MainActor in target?.markDownloaded(id) }
     }
 }

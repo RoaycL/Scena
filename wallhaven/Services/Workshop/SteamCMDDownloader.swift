@@ -73,7 +73,8 @@ final class SteamCMDDownloader {
     }
 
     /// 一次登录下载多个条目（减少登录次数，也更快）
-    func download(ids: [String], username: String) async throws -> BatchResult {
+    /// onItemDownloaded：某个条目下载完成时立即回调（不必等整批结束），在后台线程调用
+    func download(ids: [String], username: String, onItemDownloaded: (@Sendable (String) -> Void)? = nil) async throws -> BatchResult {
         guard let steamcmd = Self.locate() else { throw SteamCMDError.notInstalled }
         guard Self.isValidUsername(username) else { throw SteamCMDError.missingUsername }
         let ids = ids.filter { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
@@ -112,6 +113,9 @@ final class SteamCMDDownloader {
             let buffer = OutputBuffer()
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 buffer.append(handle.availableData)
+                if let onItemDownloaded {
+                    buffer.newlyDownloadedIDs().forEach(onItemDownloaded)
+                }
             }
             process.terminationHandler = { _ in
                 pipe.fileHandleForReading.readabilityHandler = nil
@@ -169,11 +173,11 @@ final class SteamCMDDownloader {
         status=$?
         echo
         if [ $status -eq 0 ]; then
-            echo "✅ 登录成功，可以关闭此窗口，回到 wallhaven 下载壁纸。"
+            echo "✅ 登录成功，可以关闭此窗口，回到 Scena 下载壁纸。"
         else
             echo "❌ 登录失败（退出码 $status）。请检查上方的错误信息："
             echo "   Invalid Password → 密码错误（注意输入法）；Rate Limit → 尝试次数过多，请稍后再试。"
-            echo "   修正后在 wallhaven 设置里重新点击「在终端登录 steamcmd」。"
+            echo "   修正后在 Scena 设置里重新点击「在终端登录 steamcmd」。"
         fi
         """
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("wallhaven-steam-login.command")
@@ -230,5 +234,17 @@ nonisolated private final class OutputBuffer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private var reported = Set<String>()
+
+    /// 输出中新出现的「Success. Downloaded item <id>」
+    func newlyDownloadedIDs() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        let text = String(decoding: data, as: UTF8.self)
+        return text.matches(of: /Success\. Downloaded item (\d+) to/)
+            .map { String($0.1) }
+            .filter { reported.insert($0).inserted }
     }
 }
