@@ -24,29 +24,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private var isFreezingBeforeQuit = false
+    private var isPreparingToQuit = false
 
-    /// 退出前把动态壁纸定格成静态壁纸（最多等 3 秒，不能卡住退出）
+    /// 定格画面最多等 3 秒；随后等待后台更新安装结束，不能提前退出复制过程。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard LiveWallpaperController.shared.isActive, !isFreezingBeforeQuit else { return .terminateNow }
-        isFreezingBeforeQuit = true
-        var replied = false
-        let reply = {
-            guard !replied else { return }
-            replied = true
-            sender.reply(toApplicationShouldTerminate: true)
-        }
+        if isPreparingToQuit { return .terminateLater }
+        let updates = UpdateManager.shared
+        guard !updates.isInstalling else { return .terminateCancel }
+        guard LiveWallpaperController.shared.isActive || updates.isReadyToInstall else { return .terminateNow }
+        isPreparingToQuit = true
         Task {
-            await LiveWallpaperController.shared.freezeCurrentFrame()
-            reply()
+            if LiveWallpaperController.shared.isActive {
+                await withCheckedContinuation { continuation in
+                    var finished = false
+                    let finish = {
+                        guard !finished else { return }
+                        finished = true
+                        continuation.resume()
+                    }
+                    Task {
+                        await LiveWallpaperController.shared.freezeCurrentFrame()
+                        finish()
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish() }
+                }
+            }
+            do {
+                try await updates.installPendingUpdateBeforeQuit()
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                isPreparingToQuit = false
+                sender.reply(toApplicationShouldTerminate: false)
+            }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { reply() }
         return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         SteamCMDDownloader.shared.terminateAll()
-        UpdateManager.shared.installPendingUpdateOnQuit()
+        UpdateManager.shared.cancelDownload()
     }
 
     /// 点击 Dock 图标：桌面上的动态壁纸窗口也算「可见窗口」，系统会因此不重新打开主窗口，
@@ -102,7 +118,7 @@ struct wallhavenApp: App {
         Window("播放列表", id: PlaylistsWindow.id) {
             PlaylistsView()
         }
-        .defaultSize(width: 760, height: 520)
+        .defaultSize(width: 960, height: 680)
 
         Window("下载任务", id: DownloadsWindow.id) {
             WorkshopDownloadsView()
@@ -122,12 +138,11 @@ struct wallhavenApp: App {
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
         } label: {
-            Image(systemName: statusIcon)
+            Image(nsImage: StatusBarIcon.image)
+                .renderingMode(.template)
+                .accessibilityLabel("Scena")
         }
     }
 
-    private var statusIcon: String {
-        guard liveController.isActive else { return "photo.on.rectangle.angled" }
-        return liveController.isPaused ? "pause.rectangle" : "play.rectangle"
-    }
+
 }

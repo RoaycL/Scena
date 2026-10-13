@@ -23,6 +23,15 @@ final class UpdateManager: ObservableObject {
     @Published private(set) var releaseNotes = ""
     @Published private(set) var releaseURL: URL?
     @Published private(set) var isDownloading = false
+    @Published private(set) var isPreparingUpdate = false
+    @Published private(set) var isInstalling = false
+    @Published private(set) var downloadedBytes: Int64 = 0
+    @Published private(set) var downloadSize: Int64?
+
+    var downloadFraction: Double? {
+        guard let downloadSize, downloadSize > 0 else { return nil }
+        return min(1, max(0, Double(downloadedBytes) / Double(downloadSize)))
+    }
     /// 新版本已下载并解压，重启（或退出）即可完成安装
     @Published private(set) var isReadyToInstall = false
     @Published private(set) var errorMessage: String?
@@ -38,7 +47,12 @@ final class UpdateManager: ObservableObject {
     private var downloadURL: URL?
     /// 已解压、等待安装的新版本
     private var stagedApp: URL?
+    private var isRestartRequested = false
     private var isRelaunching = false
+    private var downloadTask: Task<Void, Never>?
+    private var downloadGeneration = UUID()
+    private var updateAlert: NSAlert?
+    private var expectedDownloadSize: Int64?
 
     private enum Keys {
         static let automatic = "update.checksAutomatically"
@@ -113,9 +127,9 @@ final class UpdateManager: ObservableObject {
             latestVersion = version
             releaseNotes = release.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             releaseURL = URL(string: release.htmlURL)
-            downloadURL = release.assets
-                .first { $0.name.hasSuffix(".zip") }
-                .flatMap { URL(string: $0.browserDownloadURL) }
+            let asset = release.assets.first { $0.name.hasSuffix(".zip") }
+            downloadURL = asset.flatMap { URL(string: $0.browserDownloadURL) }
+            expectedDownloadSize = asset?.size
 
             updateAvailable = Self.isNewer(version, than: currentVersion)
             guard updateAvailable else {
@@ -146,10 +160,7 @@ final class UpdateManager: ObservableObject {
         alert.informativeText = "当前版本 \(currentVersion)。\(notes)"
         alert.addButton(withTitle: canInstallInApp ? "下载并安装" : "打开发布页面")
         alert.addButton(withTitle: "稍后")
-        NSApp.activate()
-        if alert.runModal() == .alertFirstButtonReturn {
-            installUpdate()
-        }
+        present(alert) { [weak self] in self?.installUpdate() }
     }
 
     /// 设置页 / 菜单里的「更新」按钮：已下载则重启，否则开始下载
@@ -164,27 +175,67 @@ final class UpdateManager: ObservableObject {
     }
 
     private func downloadUpdate() {
-        guard let downloadURL, !isDownloading else { return }
+        guard let downloadURL, !isDownloading, !isInstalling else { return }
         isDownloading = true
+        isPreparingUpdate = false
+        downloadedBytes = 0
+        downloadSize = expectedDownloadSize
         errorMessage = nil
         statusMessage = "正在下载 Scena \(latestVersion)…"
+        let generation = UUID()
+        downloadGeneration = generation
 
-        Task {
-            defer { isDownloading = false }
+        downloadTask = Task { [self] in
+            defer {
+                isDownloading = false
+                isPreparingUpdate = false
+                downloadTask = nil
+            }
             do {
-                let (tempURL, response) = try await URLSession.shared.download(from: downloadURL)
+                let progress = UpdateDownloadProgress { [self] bytes, expected in
+                    Task { @MainActor [self] in
+                        guard self.downloadGeneration == generation,
+                              self.isDownloading, !self.isPreparingUpdate else { return }
+                        self.downloadedBytes = max(self.downloadedBytes, bytes)
+                        if expected > 0 { self.downloadSize = expected }
+                    }
+                }
+                let (tempURL, response) = try await progress.download(from: downloadURL)
+                defer { try? FileManager.default.removeItem(at: tempURL) }
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw UpdateError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
                 }
-                stagedApp = try await Task.detached { try Self.extractApp(from: tempURL) }.value
+                try Task.checkCancellation()
+                downloadedBytes = (try tempURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? downloadedBytes
+                downloadSize = downloadedBytes
+                isPreparingUpdate = true
+                statusMessage = "下载完成，正在解压并准备更新…"
+                let extracted = try await Task.detached(priority: .utility) { try Self.extractApp(from: tempURL) }.value
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: extracted.deletingLastPathComponent())
+                    throw CancellationError()
+                }
+                stagedApp = extracted
                 isReadyToInstall = true
+                // 提示出现前结束下载状态，避免界面一直显示“下载中”。
+                isDownloading = false
+                isPreparingUpdate = false
                 statusMessage = "Scena \(latestVersion) 已下载，重启即可完成更新"
                 promptToRestart()
             } catch {
-                statusMessage = nil
-                errorMessage = "下载更新失败：\(error.localizedDescription)"
+                if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                    statusMessage = "下载已取消，可以重新下载"
+                } else {
+                    statusMessage = nil
+                    errorMessage = "下载更新失败：\(error.localizedDescription)"
+                    ToastCenter.shared.show(errorMessage ?? "下载更新失败", style: .error)
+                }
             }
         }
+    }
+
+    func cancelDownload() {
+        downloadTask?.cancel()
     }
 
     private func promptToRestart() {
@@ -193,9 +244,25 @@ final class UpdateManager: ObservableObject {
         alert.informativeText = "重启 Scena 即可完成更新。选择「稍后」会在下次退出时自动安装。"
         alert.addButton(withTitle: "立即重启")
         alert.addButton(withTitle: "稍后")
+        present(alert) { [weak self] in self?.restartToUpdate() }
+    }
+
+    /// 使用异步 sheet，避免 runModal 阻塞下载任务和退出回调。
+    private func present(_ alert: NSAlert, onConfirm: @escaping @MainActor () -> Void) {
+        guard updateAlert == nil else { return }
+        guard let window = NSApp.keyWindow ?? MainWindow.existingWindow,
+              window.attachedSheet == nil else {
+            ToastCenter.shared.show(statusMessage ?? "发现新版本，请在设置中查看更新", style: .info)
+            return
+        }
+        updateAlert = alert
         NSApp.activate()
-        if alert.runModal() == .alertFirstButtonReturn {
-            restartToUpdate()
+        window.makeKeyAndOrderFront(nil)
+        alert.beginSheetModal(for: window) { [weak self] response in
+            Task { @MainActor in
+                self?.updateAlert = nil
+                if response == .alertFirstButtonReturn { onConfirm() }
+            }
         }
     }
 
@@ -204,6 +271,8 @@ final class UpdateManager: ObservableObject {
         let fm = FileManager.default
         let folder = fm.temporaryDirectory.appendingPathComponent("ScenaUpdate-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        var succeeded = false
+        defer { if !succeeded { try? fm.removeItem(at: folder) } }
 
         // ditto 能正确保留 .app 内的符号链接和权限
         let ditto = Process()
@@ -215,43 +284,68 @@ final class UpdateManager: ObservableObject {
 
         let contents = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
         guard let app = contents.first(where: { $0.pathExtension == "app" }) else { throw UpdateError.noApp }
+        succeeded = true
         return app
     }
 
     // MARK: - Installing
 
-    /// 替换 App 后重启：等当前进程完全退出再打开新版本，避免同时运行两个实例
+    /// 复制和原子替换在后台完成，完成后才退出并重启。
     func restartToUpdate() {
-        do {
-            try replaceCurrentApp()
-            let pid = ProcessInfo.processInfo.processIdentifier
-            let relauncher = Process()
-            relauncher.executableURL = URL(fileURLWithPath: "/bin/sh")
-            relauncher.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
-            try relauncher.run()
-            isRelaunching = true
-            NSApp.terminate(nil)
-        } catch {
-            errorMessage = "安装更新失败：\(error.localizedDescription)"
-            ToastCenter.shared.show(errorMessage ?? "安装更新失败", style: .error)
+        guard isReadyToInstall, !isInstalling, !isRestartRequested else { return }
+        isRestartRequested = true
+        Task {
+            do {
+                try await replaceCurrentApp()
+                let pid = ProcessInfo.processInfo.processIdentifier
+                let relauncher = Process()
+                relauncher.executableURL = URL(fileURLWithPath: "/bin/sh")
+                relauncher.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+                try relauncher.run()
+                isRelaunching = true
+                // terminate 会进入嵌套事件循环。先结束当前 Swift 任务，
+                // 否则同一 MainActor 上的退出准备任务无法执行，永远等不到 reply。
+                RunLoop.main.perform {
+                    MainActor.assumeIsolated { NSApp.terminate(nil) }
+                }
+            } catch {
+                isRestartRequested = false
+                reportInstallFailure(error)
+            }
         }
     }
 
-    /// 退出时安装已下载的更新（选择了「稍后」）
-    func installPendingUpdateOnQuit() {
+    /// 正常退出需要等后台安装完成；安装失败时保留旧应用并取消退出。
+    func installPendingUpdateBeforeQuit() async throws {
         guard !isRelaunching, isReadyToInstall else { return }
-        try? replaceCurrentApp()
+        do {
+            try await replaceCurrentApp()
+        } catch {
+            reportInstallFailure(error)
+            throw error
+        }
     }
 
-    private func replaceCurrentApp() throws {
+    private func reportInstallFailure(_ error: Error) {
+        errorMessage = "安装更新失败：\(error.localizedDescription)"
+        ToastCenter.shared.show(errorMessage ?? "安装更新失败", style: .error)
+    }
+
+    private func replaceCurrentApp() async throws {
         guard let stagedApp else { throw UpdateError.noApp }
-        let fm = FileManager.default
+        guard !isInstalling else { throw UpdateError.installing }
+        isInstalling = true
+        statusMessage = "正在安装更新，请稍候…"
+        defer { isInstalling = false }
         let current = URL(fileURLWithPath: Bundle.main.bundlePath)
-        try AppReplacement.replace(staged: stagedApp, current: current,
-                                   bundleID: Bundle.main.bundleIdentifier ?? "com.roayc.wallhaven")
-        try? fm.removeItem(at: stagedApp.deletingLastPathComponent())
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.roayc.wallhaven"
+        try await Task.detached(priority: .utility) {
+            try AppReplacement.replace(staged: stagedApp, current: current, bundleID: bundleID)
+            try? FileManager.default.removeItem(at: stagedApp.deletingLastPathComponent())
+        }.value
         self.stagedApp = nil
         isReadyToInstall = false
+        statusMessage = "更新已安装，正在重启…"
     }
 
     nonisolated static func isNewer(_ latest: String, than current: String) -> Bool {
@@ -263,12 +357,14 @@ enum UpdateError: LocalizedError {
     case http(Int)
     case extract
     case noApp
+    case installing
 
     var errorDescription: String? {
         switch self {
         case .http(let code): "GitHub 请求失败（\(code)）"
         case .extract: "解压安装包失败"
         case .noApp: "安装包中没有找到 Scena.app"
+        case .installing: "更新正在安装，请等待完成"
         }
     }
 }
@@ -290,9 +386,11 @@ nonisolated struct GitHubRelease: Decodable, Sendable {
 nonisolated struct GitHubAsset: Decodable, Sendable {
     let name: String
     let browserDownloadURL: String
+    let size: Int64?
 
     enum CodingKeys: String, CodingKey {
         case name
         case browserDownloadURL = "browser_download_url"
+        case size
     }
 }

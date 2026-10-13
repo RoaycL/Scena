@@ -6,8 +6,7 @@
 import Kingfisher
 import SwiftUI
 
-/// 全窗口背景：切换时新旧两张交叉淡化；
-/// 每张先用已缓存的缩略图模糊放大顶上，原图加载完成后再淡入
+/// 全窗口背景：保留当前清晰画面，下一张图片或动态首帧就绪后再交叉淡化。
 struct ImmersiveBackground: View {
     let item: GalleryItem?
     /// 未下载的工坊条目是否显示预览卡片（网格页面里预览在右侧详情栏，界面隐藏时才显示）
@@ -15,16 +14,35 @@ struct ImmersiveBackground: View {
     /// 卡片居中；否则放在右上区域，避开左下角的信息面板
     var centersPreviewCard = true
 
+    @State private var displayedItem: GalleryItem?
+    @State private var requestedID: String?
+
+    private var layers: [GalleryItem] {
+        if let displayedItem, let item, displayedItem.id != item.id { return [displayedItem, item] }
+        return [item ?? displayedItem].compactMap { $0 }
+    }
+
     var body: some View {
         ZStack {
             Color.black
-            if let item {
-                BackgroundLayer(item: item, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard)
-                    .id(item.id)
-                    .transition(.opacity)
+            ForEach(layers) { candidate in
+                BackgroundLayer(item: candidate, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard, onFailure: {
+                    DispatchQueue.main.async {
+                        guard requestedID == candidate.id else { return }
+                        ToastCenter.shared.show("暂时无法加载这张壁纸", style: .error)
+                    }
+                }) {
+                    // 回调可能来自上一轮的加载任务，只提交当前请求的清晰画面。
+                    DispatchQueue.main.async {
+                        guard requestedID == candidate.id else { return }
+                        withAnimation(.easeInOut(duration: 0.25)) { displayedItem = candidate }
+                    }
+                }
+                .opacity(displayedItem?.id == candidate.id ? 1 : 0)
+                .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.5), value: item?.id)
+        .onChange(of: item?.id, initial: true) { requestedID = item?.id }
         .clipped()
     }
 }
@@ -33,7 +51,8 @@ private struct BackgroundLayer: View {
     let item: GalleryItem
     let showsPreviewCard: Bool
     let centersPreviewCard: Bool
-    @State private var isFullLoaded = false
+    let onFailure: () -> Void
+    let onReady: () -> Void
 
     /// 未下载的工坊条目只有一张小尺寸方形预览图（391～1024px），不能直接铺满窗口
     private var onlinePreviewItem: WorkshopItem? {
@@ -44,7 +63,7 @@ private struct BackgroundLayer: View {
     var body: some View {
         GeometryReader { geo in
             if let workshop = onlinePreviewItem {
-                OnlinePreviewShowcase(item: item, workshop: workshop, size: geo.size, showsCard: showsPreviewCard, centered: centersPreviewCard)
+                OnlinePreviewShowcase(item: item, workshop: workshop, size: geo.size, showsCard: showsPreviewCard, centered: centersPreviewCard, onFailure: onFailure, onReady: onReady)
             } else {
                 layers(in: geo.size)
             }
@@ -53,40 +72,27 @@ private struct BackgroundLayer: View {
 
     private func layers(in size: CGSize) -> some View {
         ZStack {
-            if let thumb = item.thumbnailSource, !isFullLoaded {
-                KFImage(source: thumb)
-                    .setProcessor(item.thumbnailProcessor)
-                    .scaleFactor(ImageSizing.scale)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size.width, height: size.height)
-                    .blur(radius: 28, opaque: true)
-                    .scaleEffect(1.08)
-            }
-
             if item.isVideo, let url = item.local?.url {
-                LoopingVideoView(url: url)
+                LoopingVideoView(url: url, onReady: onReady)
                     .frame(width: size.width, height: size.height)
             } else if let workshopItem = item.playableWorkshopItem {
-                // 工坊壁纸实时渲染；首帧出来之前保留模糊封面
+                // 首帧就绪前由外层保留上一张清晰画面。
                 WorkshopPlayerView(item: workshopItem) { state in
                     if state == .ready {
-                        withAnimation(.easeInOut(duration: 0.4)) { isFullLoaded = true }
+                        onReady()
+                    } else if case .failed = state {
+                        onFailure()
                     }
                 }
                 .frame(width: size.width, height: size.height)
-                .opacity(isFullLoaded ? 1 : 0)
             } else if let full = item.fullSource {
                 KFImage(source: full)
                     .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
                     .scaleFactor(ImageSizing.scale)
-                    .fade(duration: 0.35)
-                    .onSuccess { _ in
-                        // 等淡入结束再移除模糊占位
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            isFullLoaded = true
-                        }
-                    }
+                    .loadDiskFileSynchronously(false)
+                    .cancelOnDisappear(true)
+                    .onSuccess { _ in onReady() }
+                    .onFailure { _ in onFailure() }
                     .resizable()
                     .scaledToFill()
                     .frame(width: size.width, height: size.height)
@@ -104,6 +110,8 @@ private struct OnlinePreviewShowcase: View {
     let size: CGSize
     let showsCard: Bool
     let centered: Bool
+    let onFailure: () -> Void
+    let onReady: () -> Void
 
     var body: some View {
         // 不超过预览图的原始尺寸太多（方图最大 1024px ≈ Retina 下 512pt，适度放大到 560pt 仍清晰）
@@ -126,6 +134,8 @@ private struct OnlinePreviewShowcase: View {
                     // 静态预览（缩略图条已缓存，立即显示）
                     KFImage(source: item.thumbnailSource)
                         .setProcessor(item.thumbnailProcessor)
+                        .onSuccess { _ in onReady() }
+                        .onFailure { _ in onFailure() }
                         .placeholder { Color.white.opacity(0.06) }
                         .resizable()
                         .scaledToFit()
@@ -153,6 +163,7 @@ private struct OnlinePreviewShowcase: View {
         }
         .frame(width: size.width, height: size.height)
         .clipped()
+        .onAppear { if item.thumbnailSource == nil { onReady() } }
     }
 }
 

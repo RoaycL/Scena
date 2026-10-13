@@ -128,7 +128,7 @@ struct PlaylistCommands: View {
 
         if let active = manager.activePlaylist {
             Divider()
-            Text("正在播放：\(active.name)")
+            Text("正在播放：\(MenuText.compact(active.name))")
             Button("下一张") { manager.next() }
             Button("上一张") { manager.previous() }
             Button("停止播放列表") { manager.stop() }
@@ -141,9 +141,9 @@ struct PlaylistCommands: View {
                     manager.play(playlist.id)
                 } label: {
                     if manager.activeID == playlist.id {
-                        Label(playlist.name, systemImage: "checkmark")
+                        Label(MenuText.compact(playlist.name), systemImage: "checkmark")
                     } else {
-                        Text("播放「\(playlist.name)」")
+                        Text("播放「\(MenuText.compact(playlist.name))」")
                     }
                 }
                 .disabled(playlist.entries.isEmpty)
@@ -165,7 +165,7 @@ struct StatusMenuContent: View {
 
     var body: some View {
         if updates.updateAvailable {
-            Button(updates.isReadyToInstall ? "重启以更新到 Scena \(updates.latestVersion)" : "更新到 Scena \(updates.latestVersion)…") { updates.installUpdate() }
+            Button(updates.isReadyToInstall ? "重启并更新…" : "更新 Scena…") { updates.installUpdate() }
             Divider()
         }
         Button("素材中心") { showMainWindow() }
@@ -183,7 +183,7 @@ struct StatusMenuContent: View {
         Divider()
 
         if let content = liveController.current {
-            Text("正在播放：\(content.title)")
+            Text("当前：\(MenuText.compact(content.title))").help(content.title)
         }
         Menu("切换壁纸") {
             Button("上一张") { playlists.previous() }
@@ -225,7 +225,7 @@ struct StatusMenuContent: View {
         .disabled(!liveController.isActive && playlists.activePlaylist == nil)
         Divider()
 
-        Menu("下载任务（\(workshop.downloading.count) 个进行中）") {
+        Menu(workshop.downloading.isEmpty ? "下载任务" : "下载任务 · \(workshop.downloading.count)") {
             Button("管理下载…") {
                 NSApp.activate()
                 openWindow(id: DownloadsWindow.id)
@@ -281,5 +281,12 @@ enum MainWindow {
             existingWindow?.makeKeyAndOrderFront(nil)
         }
         if tab != nil { NotificationCenter.default.post(name: navigationNotification, object: nil) }
+    }
+}
+
+/// 原生菜单根据最长标题决定宽度，界面截断不修改实际素材和列表名称。
+enum MenuText {
+    static func compact(_ title: String, limit: Int = 12) -> String {
+        title.count > limit ? String(title.prefix(limit)) + "…" : title
     }
 }

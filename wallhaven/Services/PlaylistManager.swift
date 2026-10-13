@@ -136,13 +136,16 @@ final class PlaylistManager: ObservableObject {
 
     @discardableResult
     func create(name: String? = nil, entries: [PlaylistEntry] = []) -> Playlist {
-        let playlist = Playlist(id: UUID(), name: name ?? "播放列表 \(playlists.count + 1)", entries: entries)
+        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let playlist = Playlist(id: UUID(), name: trimmedName.flatMap { $0.isEmpty ? nil : $0 } ?? "播放列表 \(playlists.count + 1)", entries: entries)
         playlists.append(playlist)
         save()
         return playlist
     }
 
     func rename(_ id: UUID, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
         update(id) { $0.name = name }
     }
 

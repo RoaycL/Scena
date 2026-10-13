@@ -24,12 +24,13 @@ final class ImmersiveWindowController: ObservableObject {
     private weak var window: NSWindow?
     private var monitor: Any?
     private var menuObservers: [NSObjectProtocol] = []
-    /// 子菜单有各自的跟踪周期；只有最后一个菜单关闭后才恢复自动隐藏。
+    /// 子菜单有各自的跟踪周期；最后一个关闭后才解除菜单暂停。
     private var trackingMenus: Set<ObjectIdentifier> = []
-    /// 鼠标悬停在界面元素上、搜索框聚焦、弹出面板打开时不自动隐藏
+    /// 搜索、筛选和菜单操作期间保持当前预览。
     private var holdReasons: Set<String> = []
     /// 用户按空格手动隐藏后，只有再按空格（或 Esc）才恢复，移动鼠标不恢复
     private var isManuallyHidden = false
+    private var autoplay = GalleryAutoplayState()
 
     // 拖动滚动状态
     private weak var dragScrollView: NSScrollView?
@@ -53,6 +54,9 @@ final class ImmersiveWindowController: ObservableObject {
     }
 
     func setHold(_ reason: String, active: Bool) {
+        if ["search", "filter", "workshopFilter", "alert", "menu"].contains(reason) {
+            autoplay.interacted(at: ProcessInfo.processInfo.systemUptime)
+        }
         if active {
             holdReasons.insert(reason)
             if !isManuallyHidden { setChromeHidden(false) }
@@ -79,14 +83,21 @@ final class ImmersiveWindowController: ObservableObject {
     // MARK: - Manual visibility
 
     private func userDidInteract() {
+        autoplay.interacted(at: ProcessInfo.processInfo.systemUptime)
         guard !isManuallyHidden else { return }
         if isChromeHidden { setChromeHidden(false) }
+    }
+
+    func userDidSelectThumbnail() {
+        autoplay.selectedManually(at: ProcessInfo.processInfo.systemUptime)
     }
 
     /// 编辑和菜单跟踪期间保持当前预览；关闭或隐藏窗口时不再轮播。
     var canAdvanceGallery: Bool {
         holdReasons.isDisjoint(with: ["search", "filter", "workshopFilter", "alert", "menu"])
-            && !isManuallyHidden && window?.isVisible == true && !NSApp.isHidden
+            && !isManuallyHidden && window?.isVisible == true
+            && window?.attachedSheet == nil && !NSApp.isHidden
+            && autoplay.canAdvance(at: ProcessInfo.processInfo.systemUptime)
     }
 
     private func setChromeHidden(_ hidden: Bool) {
@@ -130,7 +141,10 @@ final class ImmersiveWindowController: ObservableObject {
         guard monitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .scrollWheel, .keyDown, .leftMouseDown, .rightMouseDown, .leftMouseDragged, .leftMouseUp]
         monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            guard let self, let window = self.window, event.window === window else { return event }
+            guard let self else { return event }
+            // 设置窗口、命名对话框等应用内操作也计入一分钟的空闲等待。
+            self.userDidInteract()
+            guard let window = self.window, event.window === window else { return event }
             return self.handle(event, in: window)
         }
     }
@@ -140,17 +154,14 @@ final class ImmersiveWindowController: ObservableObject {
         guard trackingMenus.isEmpty else { return event }
         switch event.type {
         case .rightMouseDown:
-            userDidInteract()
             return event
         case .mouseMoved:
-            userDidInteract()
             return event
 
         case .keyDown:
             return handleKey(event, in: window)
 
         case .scrollWheel:
-            userDidInteract()
             guard let scrollView = horizontalScrollView(at: event.locationInWindow, in: window) else { return event }
             let dx = event.scrollingDeltaX
             let dy = event.scrollingDeltaY
@@ -161,7 +172,6 @@ final class ImmersiveWindowController: ObservableObject {
             return nil
 
         case .leftMouseDown:
-            userDidInteract()
             dragScrollView = horizontalScrollView(at: event.locationInWindow, in: window)
             isDragScrolling = false
             dragStartX = event.locationInWindow.x

@@ -126,9 +126,12 @@ final class LoopingVideoNSView: NSView {
 
 struct LoopingVideoView: NSViewRepresentable {
     let url: URL
+    var onReady: () -> Void = {}
 
     func makeNSView(context: Context) -> LoopingVideoNSView {
-        LoopingVideoNSView(url: url)
+        let view = LoopingVideoNSView(url: url)
+        view.whenReady(onReady)
+        return view
     }
 
     func updateNSView(_ nsView: LoopingVideoNSView, context: Context) {}

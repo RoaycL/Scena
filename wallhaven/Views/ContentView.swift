@@ -127,7 +127,8 @@ struct ContentView: View {
         return currentItems.first { $0.id == id }
     }
 
-    private func select(_ item: GalleryItem) {
+    private func select(_ item: GalleryItem, isUserInitiated: Bool = false) {
+        if isUserInitiated { immersive.userDidSelectThumbnail() }
         selectionWithoutScrollingID = nil
         switch page {
         case .home: viewModel.selectedWallpaper = item.remote
@@ -163,7 +164,7 @@ struct ContentView: View {
         let index = selectedItem.flatMap { item in items.firstIndex(of: item) } ?? 0
         let newIndex = max(0, min(items.count - 1, index + offset))
         let item = items[newIndex]
-        select(item)
+        select(item, isUserInitiated: true)
         if page == .home, let wallpaper = item.remote {
             viewModel.loadMoreIfNeeded(current: wallpaper)
         }
@@ -176,12 +177,18 @@ struct ContentView: View {
     private func prefetchNeighbors(of item: GalleryItem) {
         let items = currentItems
         guard let index = items.firstIndex(of: item) else { return }
-        let sources = [index + 1, index + 2, index - 1]
-            .filter { items.indices.contains($0) }
-            .compactMap { items[$0].remote == nil ? nil : items[$0].fullSource }
+        // 循环播放时也预加载第一张；本地图片与在线原图使用同一处理和缓存配置。
+        var seen: Set<String> = [item.id]
+        let sources = [1, 2, -1].compactMap { offset -> Source? in
+            let candidate = items[(index + offset + items.count) % items.count]
+            guard seen.insert(candidate.id).inserted,
+                  candidate.remote != nil || (candidate.local != nil && !candidate.isVideo) else { return nil }
+            return candidate.fullSource
+        }
         guard !sources.isEmpty else { return }
         prefetcher?.stop()
         let newPrefetcher = ImagePrefetcher(sources: sources, options: ImageSizing.backgroundOptions)
+        newPrefetcher.maxConcurrentDownloads = 2
         newPrefetcher.start()
         prefetcher = newPrefetcher
     }
@@ -904,15 +911,16 @@ struct ContentView: View {
             || (page == .workshop && workshop.mode == .online && workshop.isLoading)
 
         if page == .playlists {
-            PlaylistsView(embedded: true)
+            PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)))
                 .scrollContentBackground(.hidden)
                 .background(.regularMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
                 .environment(\.colorScheme, .dark)
-                .padding(.top, 58)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 78)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 24)
                 .onHover { immersive.setHold("playlists", active: $0) }
         } else if items.isEmpty && !isLoading {
             emptyState
@@ -924,7 +932,7 @@ struct ContentView: View {
                 selectedID: selectedItem?.workshop?.id,
                 size: size,
                 columnCount: $workshopColumns,
-                onSelect: { select(GalleryItem(origin: .workshop($0))) },
+                onSelect: { select(GalleryItem(origin: .workshop($0)), isUserInitiated: true) },
                 onHover: { reason, active in immersive.setHold(reason, active: active) },
                 contextMenu: { contextMenu(for: GalleryItem(origin: .workshop($0))) },
                 topInset: topBarInset
@@ -946,7 +954,7 @@ struct ContentView: View {
                     selectionWithoutScrollingID: selectionWithoutScrollingID,
                     isLoading: isLoading,
                     thumbHeight: max(72, min(130, size.height * 0.13)),
-                    onSelect: { select($0) },
+                    onSelect: { select($0, isUserInitiated: true) },
                     onItemAppear: { item in
                         if page == .home, let wallpaper = item.remote {
                             viewModel.loadMoreIfNeeded(current: wallpaper)

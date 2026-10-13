@@ -745,6 +745,14 @@ private struct StorageSettings: View {
 private struct AboutSettings: View {
     @ObservedObject private var updateManager = UpdateManager.shared
 
+    private var updateDownloadText: String {
+        let received = FileSizeText.string(updateManager.downloadedBytes)
+        guard let size = updateManager.downloadSize, size > 0,
+              let fraction = updateManager.downloadFraction else { return "已下载 \(received)" }
+        let total = FileSizeText.string(size)
+        return "\(Int(fraction * 100))% · \(received) / \(total)"
+    }
+
     private var version: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "—"
@@ -770,7 +778,11 @@ private struct AboutSettings: View {
 
             Section {
                 HStack {
-                    if updateManager.isReadyToInstall {
+                    if updateManager.isInstalling {
+                        Text("正在安装更新，请稍候…").foregroundStyle(.secondary)
+                    } else if updateManager.isPreparingUpdate {
+                        Text("下载完成，正在解压并准备更新…").foregroundStyle(.secondary)
+                    } else if updateManager.isReadyToInstall {
                         Label("v\(updateManager.latestVersion) 已下载，重启即可完成更新", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     } else if updateManager.isDownloading {
@@ -778,26 +790,45 @@ private struct AboutSettings: View {
                     } else if updateManager.updateAvailable {
                         Label("发现新版本 v\(updateManager.latestVersion)", systemImage: "arrow.down.circle.fill")
                             .foregroundStyle(.green)
-                    } else if let error = updateManager.errorMessage {
-                        Text(error).foregroundStyle(.red)
                     } else {
                         Text(updateManager.statusMessage ?? "当前版本 \(updateManager.currentVersion)").foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if updateManager.isChecking || updateManager.isDownloading {
+                    if updateManager.isChecking || updateManager.isDownloading || updateManager.isInstalling {
                         ProgressView().controlSize(.small)
                     }
-                    if updateManager.isReadyToInstall {
+                    if updateManager.isReadyToInstall && !updateManager.isInstalling {
                         Button("立即重启") { updateManager.restartToUpdate() }
                             .buttonStyle(.borderedProminent)
                     } else if updateManager.updateAvailable {
                         Button(updateManager.isDevelopmentBuild ? "打开发布页面" : "下载并安装") { updateManager.installUpdate() }
                             .buttonStyle(.borderedProminent)
-                            .disabled(updateManager.isDownloading)
+                            .disabled(updateManager.isDownloading || updateManager.isInstalling)
                     } else {
                         Button("检查更新") { Task { await updateManager.checkForUpdates() } }
                             .disabled(updateManager.isChecking)
                     }
+                }
+                if updateManager.isDownloading {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let fraction = updateManager.downloadFraction {
+                            ProgressView(value: fraction)
+                        } else {
+                            ProgressView().progressViewStyle(.linear)
+                        }
+                        HStack {
+                            Text(updateDownloadText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                            Spacer()
+                            Button("取消下载") { updateManager.cancelDownload() }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                if let error = updateManager.errorMessage {
+                    Text(error).font(.caption).foregroundStyle(.red)
                 }
                 if updateManager.updateAvailable, !updateManager.releaseNotes.isEmpty {
                     Text(updateManager.releaseNotes)
