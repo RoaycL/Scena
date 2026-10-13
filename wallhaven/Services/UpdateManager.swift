@@ -105,7 +105,7 @@ final class UpdateManager: ObservableObject {
         statusMessage = nil
         defer { isChecking = false }
 
-        var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repository)/releases/latest")!)
+        var request = URLRequest(url: Self.latestReleaseURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 20
 
@@ -248,13 +248,28 @@ final class UpdateManager: ObservableObject {
     }
 
     /// 使用异步 sheet，避免 runModal 阻塞下载任务和退出回调。
+    /// 只挂在可见的窗口上：主窗口关闭后 SwiftUI 仍保留着窗口对象，挂在它上面的提示看不见，
+    /// 之后的提示也会被这个「看不见的提示」挡住。没有可见窗口时等用户切回 Scena 再提示
     private func present(_ alert: NSAlert, onConfirm: @escaping @MainActor () -> Void) {
         guard updateAlert == nil else { return }
-        guard let window = NSApp.keyWindow ?? MainWindow.existingWindow,
-              window.attachedSheet == nil else {
-            ToastCenter.shared.show(statusMessage ?? "发现新版本，请在设置中查看更新", style: .info)
+        let window = [NSApp.keyWindow, MainWindow.existingWindow, NSApp.mainWindow]
+            .compactMap { $0 }
+            .first { $0.isVisible && !$0.isMiniaturized && $0.attachedSheet == nil && $0.canBecomeKey }
+        guard let window else {
+            pendingPrompt = (alert, onConfirm)
+            if NSApp.isActive, !hasOpenedWindowForPrompt {
+                hasOpenedWindowForPrompt = true
+                // 用户正在用 Scena（比如从菜单栏检查更新）但没有窗口：打开主窗口再提示
+                MainWindow.show()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    MainActor.assumeIsolated { self?.presentPendingPrompt() }
+                }
+            } else {
+                observeActivationForPendingPrompt()
+            }
             return
         }
+        hasOpenedWindowForPrompt = false
         updateAlert = alert
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
@@ -264,6 +279,31 @@ final class UpdateManager: ObservableObject {
                 if response == .alertFirstButtonReturn { onConfirm() }
             }
         }
+    }
+
+    private var pendingPrompt: (alert: NSAlert, onConfirm: @MainActor () -> Void)?
+    /// 为显示提示打开过一次主窗口；仍然没有可见窗口时改为等待用户切回，避免反复尝试
+    private var hasOpenedWindowForPrompt = false
+    private var activationObserver: NSObjectProtocol?
+
+    private func observeActivationForPendingPrompt() {
+        guard activationObserver == nil else { return }
+        activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            // 点 Dock 图标会重新打开主窗口，稍等窗口出现再提示
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                MainActor.assumeIsolated { self?.presentPendingPrompt() }
+            }
+        }
+    }
+
+    private func presentPendingPrompt() {
+        guard let pending = pendingPrompt else { return }
+        pendingPrompt = nil
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
+        // 期间可能已经通过设置或菜单栏完成了重启 / 安装
+        guard isReadyToInstall || updateAvailable else { return }
+        present(pending.alert, onConfirm: pending.onConfirm)
     }
 
     /// 解压安装包，返回其中的 .app
@@ -346,6 +386,14 @@ final class UpdateManager: ObservableObject {
         self.stagedApp = nil
         isReadyToInstall = false
         statusMessage = "更新已安装，正在重启…"
+    }
+
+    /// 最新发布信息。开发版可以用环境变量 SCENA_UPDATE_FEED 指向本地文件服务器，测试完整的更新流程
+    private static var latestReleaseURL: URL {
+        #if DEBUG
+        if let feed = ProcessInfo.processInfo.environment["SCENA_UPDATE_FEED"], let url = URL(string: feed) { return url }
+        #endif
+        return URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
     }
 
     nonisolated static func isNewer(_ latest: String, than current: String) -> Bool {
