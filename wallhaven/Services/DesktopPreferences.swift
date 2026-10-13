@@ -19,6 +19,7 @@ enum DesktopSettings {
     static let disabledDisplays = "desktop.disabledDisplays"
     static let showDockIcon = "app.showDockIcon"
 
+    static let pauseWhenOccluded = "autoPause.occluded"
     static let pauseWhenOtherAppActive = "autoPause.otherAppActive"
     static let pauseWhenFullScreen = "autoPause.fullScreen"
     static let pauseOnBattery = "autoPause.battery"

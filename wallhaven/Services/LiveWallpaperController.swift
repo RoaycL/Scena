@@ -288,7 +288,8 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 桌面被其他窗口完全挡住（最大化、全屏、铺满的窗口）时，这块屏幕上的壁纸看不见，暂停渲染
     private func isOccluded(_ window: NSWindow) -> Bool {
-        revealedWindows.contains(ObjectIdentifier(window)) && !window.occlusionState.contains(.visible)
+        DesktopSettings.bool(DesktopSettings.pauseWhenOccluded, default: true)
+            && revealedWindows.contains(ObjectIdentifier(window)) && !window.occlusionState.contains(.visible)
     }
 
     /// 新窗口淡入完成后再移除旧窗口
@@ -525,6 +526,8 @@ final class LiveWallpaperController: ObservableObject {
         observers.append(center.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                // 暂停相关的开关可能变了
+                self.updatePlayback()
                 let signature = Self.currentLayoutSignature
                 guard signature != self.layoutSignature else { return }
                 self.layoutSignature = signature

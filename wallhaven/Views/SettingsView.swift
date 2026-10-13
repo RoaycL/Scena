@@ -434,6 +434,7 @@ private struct LiveDisplaySection: View {
 /// 自动暂停条件
 private struct AutoPauseSection: View {
     @ObservedObject var live: LiveWallpaperController
+    @AppStorage(DesktopSettings.pauseWhenOccluded) private var occluded = true
     @AppStorage(DesktopSettings.pauseWhenOtherAppActive) private var otherApp = false
     @AppStorage(DesktopSettings.pauseWhenFullScreen) private var fullScreen = true
     @AppStorage(DesktopSettings.pauseOnBattery) private var battery = false
@@ -442,6 +443,7 @@ private struct AutoPauseSection: View {
 
     var body: some View {
         Section {
+            Toggle("桌面被窗口完全挡住时（看不见就不渲染，推荐）", isOn: $occluded)
             Toggle("其他 App 在使用时（只在桌面 / 访达处于前台时播放）", isOn: $otherApp)
             Toggle("其他 App 全屏时（只暂停被盖住的显示器）", isOn: $fullScreen)
             Toggle("未连接电源时", isOn: $battery)
@@ -460,7 +462,7 @@ private struct AutoPauseSection: View {
         } header: {
             Text("自动暂停")
         } footer: {
-            SettingsFootnote("条件解除后自动继续播放。手动暂停的优先级更高：手动暂停后不会被自动恢复。")
+            SettingsFootnote("条件解除后自动继续播放。手动暂停的优先级更高：手动暂停后不会被自动恢复。菜单栏图标的「自动暂停」菜单里也可以快速切换。")
         }
     }
 }

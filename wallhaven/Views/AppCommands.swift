@@ -108,6 +108,8 @@ struct WallhavenCommands: Commands {
                 .disabled(!liveController.isActive)
             Button("停止动态壁纸") { liveController.stop() }
                 .disabled(!liveController.isActive)
+            Divider()
+            Menu("自动暂停") { AutoPauseMenuItems() }
         }
     }
 }
@@ -205,6 +207,7 @@ struct StatusMenuContent: View {
             }
         }
         .disabled(!liveController.isActive && playlists.activePlaylist == nil)
+        Menu("自动暂停") { AutoPauseMenuItems() }
         Menu("音量调节") {
             ForEach(volumeLevels, id: \.self) { level in
                 Button {
@@ -288,5 +291,30 @@ enum MainWindow {
 enum MenuText {
     static func compact(_ title: String, limit: Int = 12) -> String {
         title.count > limit ? String(title.prefix(limit)) + "…" : title
+    }
+}
+
+/// 自动暂停条件的菜单项（顶部菜单栏和状态栏共用），与设置页同步
+struct AutoPauseMenuItems: View {
+    @AppStorage(DesktopSettings.pauseWhenOccluded) private var occluded = true
+    @AppStorage(DesktopSettings.pauseWhenOtherAppActive) private var otherApp = false
+    @AppStorage(DesktopSettings.pauseWhenFullScreen) private var fullScreen = true
+    @AppStorage(DesktopSettings.pauseOnBattery) private var battery = false
+    @AppStorage(DesktopSettings.pauseWhenIdle) private var idle = false
+    @AppStorage(DesktopSettings.idleMinutes) private var idleMinutes = 10
+    private let idleChoices = [5, 10, 15, 30, 60]
+
+    var body: some View {
+        Toggle("桌面被挡住时", isOn: $occluded)
+        Toggle("其他 App 在使用时", isOn: $otherApp)
+        Toggle("其他 App 全屏时", isOn: $fullScreen)
+        Toggle("未连接电源时", isOn: $battery)
+        Divider()
+        Toggle("电脑不活跃时", isOn: $idle)
+        Picker("不活跃超过", selection: $idleMinutes) {
+            ForEach(idleChoices, id: \.self) { Text("\($0) 分钟").tag($0) }
+            if !idleChoices.contains(idleMinutes) { Text("\(idleMinutes) 分钟").tag(idleMinutes) }
+        }
+        .disabled(!idle)
     }
 }
