@@ -95,9 +95,8 @@ final class WorkshopViewModel: ObservableObject {
     /// 已下载模式在本地按关键词和筛选条件过滤；在线模式由服务端过滤
     var items: [WorkshopItem] {
         switch mode {
-        // 已下载 / 已订阅是「我的内容」，只按关键词搜索，不应用在线浏览的筛选条件
-        case .library: libraryItems.filter { WorkshopFilters.matchesQuery($0, query: query) }
-        case .subscribed: subscribedItems.filter { WorkshopFilters.matchesQuery($0, query: query) }
+        case .library: libraryItems.filter { filters.matches($0, query: query) }
+        case .subscribed: subscribedItems.filter { filters.matches($0, query: query) }
         case .online: onlineItems
         }
     }

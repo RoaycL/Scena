@@ -447,10 +447,7 @@ struct ContentView: View {
             case .workshop:
                 WorkshopModePicker()
                 workshopSearchField
-                // 筛选只作用于在线浏览
-                if workshop.mode == .online {
-                    workshopFilterButton
-                }
+                workshopFilterButton
                 if workshop.mode == .subscribed, workshop.isLoggedIn {
                     Button { workshop.syncSubscriptions(force: true) } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
