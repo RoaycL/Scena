@@ -26,7 +26,8 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 fi
 
 echo "==> 构建 Release"
-xcodebuild -project wallhaven.xcodeproj -scheme wallhaven -configuration Release build -quiet
+# generic 目标才会同时构建 Apple 芯片和 Intel；不指定时 xcodebuild 会选本机，只得到 arm64
+xcodebuild -project wallhaven.xcodeproj -scheme wallhaven -configuration Release -destination 'generic/platform=macOS' build -quiet
 
 # 产物位置由 Xcode 的 Locations 设置决定，从构建设置里读取
 APP="$(setting CODESIGNING_FOLDER_PATH)"
@@ -37,6 +38,8 @@ mkdir -p "$OUT"
 ZIP="$OUT/Scena-$VERSION.zip"
 rm -f "$ZIP"
 # ditto 会保留 .app 内的符号链接和权限
+ARCHS_BUILT="$(lipo -archs "$APP/Contents/MacOS/Scena")"
+[[ "$ARCHS_BUILT" == *arm64* && "$ARCHS_BUILT" == *x86_64* ]] || { echo "安装包缺少架构：$ARCHS_BUILT" >&2; exit 1; }
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "==> 安装包 $ZIP（$(du -h "$ZIP" | cut -f1)）"
 
