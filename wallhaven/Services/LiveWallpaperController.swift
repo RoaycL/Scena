@@ -116,9 +116,20 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 存储位置迁移后更新路径并重新播放（播放器还指向旧文件）
     func remapPath(from oldPrefix: String, to newPrefix: String) {
-        guard let content = current, content.path == oldPrefix || content.path.hasPrefix(oldPrefix + "/") else { return }
-        let newPath = newPrefix + content.path.dropFirst(oldPrefix.count)
-        try? start(LiveContent(kind: content.kind, path: newPath, title: content.title))
+        let matches = { (path: String) in path == oldPrefix || path.hasPrefix(oldPrefix + "/") }
+        if let content = current {
+            guard matches(content.path) else { return }
+            let newPath = newPrefix + content.path.dropFirst(oldPrefix.count)
+            try? start(LiveContent(kind: content.kind, path: newPath, title: content.title))
+            return
+        }
+        // 还没开始播放（App 启动阶段）：直接改保存的设置，稍后 restore() 会用新路径
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: storageKey),
+              let saved = try? JSONDecoder().decode(LiveContent.self, from: data),
+              matches(saved.path) else { return }
+        let updated = LiveContent(kind: saved.kind, path: newPrefix + saved.path.dropFirst(oldPrefix.count), title: saved.title)
+        if let encoded = try? JSONEncoder().encode(updated) { defaults.set(encoded, forKey: storageKey) }
     }
 
     func stop() {

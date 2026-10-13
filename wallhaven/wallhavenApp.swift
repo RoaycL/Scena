@@ -69,6 +69,11 @@ struct wallhavenApp: App {
     @StateObject private var liveController = LiveWallpaperController.shared
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
 
+    init() {
+        // 旧目录结构整理成 Scena/{Wallhaven, Wallpaper Engine, Imported}，要在其他组件读取路径之前完成
+        StorageManager.shared.upgradeLayoutIfNeeded()
+    }
+
     var body: some Scene {
         WindowGroup("Scena", id: MainWindow.id) {
             ContentView()

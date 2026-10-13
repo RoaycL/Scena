@@ -2,10 +2,11 @@
 //  StorageManager.swift
 //  wallhaven
 //
-//  统一的存储位置：所有下载内容放在同一个根目录下，可以设到外接盘
-//    <根目录>/Wallhaven/                                     wallhaven 图片、导入的图片和视频
-//    <根目录>/Workshop/steamapps/workshop/content/431960/   创意工坊壁纸（steamcmd +force_install_dir）
-//  未设置根目录时沿用默认位置（~/Pictures/Wallhaven 和 Steam 默认工坊目录）。
+//  统一的存储位置：所有内容放在同一个 Scena 文件夹下，可以设到外接盘
+//    <所选位置>/Scena/Wallhaven/            wallhaven 下载的壁纸
+//    <所选位置>/Scena/Wallpaper Engine/     创意工坊壁纸（steamcmd +force_install_dir，内含 steamapps/workshop/content/431960）
+//    <所选位置>/Scena/Imported/             导入的图片和视频
+//  未设置时沿用默认位置（~/Pictures/Wallhaven、其中的 Imported 子文件夹，和 Steam 默认工坊目录）。
 //
 
 import AppKit
@@ -21,8 +22,19 @@ final class StorageManager: ObservableObject {
 
     static let rootKey = "storage.rootPath"
 
+    /// 存储目录内的文件夹名
+    enum Layout {
+        static let root = "Scena"
+        static let wallhaven = "Wallhaven"
+        static let workshop = "Wallpaper Engine"
+        static let imported = "Imported"
+        /// steamcmd 安装目录内的工坊内容路径
+        static let workshopContent = "steamapps/workshop/content/\(WorkshopConstants.appID)"
+    }
+
     struct Usage {
         var wallpapers: Int64 = 0
+        var imported: Int64 = 0
         var workshop: Int64 = 0
         var cache: Int64 = 0
     }
@@ -55,13 +67,19 @@ final class StorageManager: ObservableObject {
     /// 图片 / 视频目录（与旧版「下载路径」设置共用同一个 key）
     var wallpaperFolder: URL { URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true) }
 
+    /// 导入的图片和视频
+    var importFolder: URL {
+        rootURL?.appendingPathComponent(Layout.imported, isDirectory: true)
+            ?? wallpaperFolder.appendingPathComponent(Layout.imported, isDirectory: true)
+    }
+
     /// steamcmd 的安装目录（+force_install_dir）；nil 表示使用 steamcmd 默认位置
-    var workshopInstallDir: URL? { rootURL?.appendingPathComponent("Workshop", isDirectory: true) }
+    var workshopInstallDir: URL? { rootURL?.appendingPathComponent(Layout.workshop, isDirectory: true) }
 
     /// App 管理的创意工坊下载目录
     var workshopContentFolder: URL {
         guard let installDir = workshopInstallDir else { return WorkshopLibrary.steamContentFolder }
-        return installDir.appendingPathComponent("steamapps/workshop/content/\(WorkshopConstants.appID)", isDirectory: true)
+        return installDir.appendingPathComponent(Layout.workshopContent, isDirectory: true)
     }
 
     // MARK: - Availability
@@ -105,12 +123,17 @@ final class StorageManager: ObservableObject {
 
     func refreshUsage() {
         let wallpaperFolder = wallpaperFolder
+        let importFolder = importFolder
         let workshopFolder = workshopContentFolder
         Task {
             async let wallpapers = Task.detached { Self.size(of: wallpaperFolder) }.value
+            async let imported = Task.detached { Self.size(of: importFolder) }.value
             async let workshop = Task.detached { Self.size(of: workshopFolder) }.value
             let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0)
-            usage = Usage(wallpapers: await wallpapers, workshop: await workshop, cache: cache)
+            var usage = Usage(wallpapers: await wallpapers, imported: await imported, workshop: await workshop, cache: cache)
+            // 默认位置下导入文件夹在壁纸文件夹里面，避免重复计算
+            if importFolder.path.hasPrefix(wallpaperFolder.path + "/") { usage.wallpapers -= usage.imported }
+            self.usage = usage
         }
     }
 
@@ -152,15 +175,20 @@ final class StorageManager: ObservableObject {
         }
         let fm = FileManager.default
         let oldWallpapers = wallpaperFolder
+        let oldImports = importFolder
         let oldWorkshop = workshopContentFolder
 
-        let newWallpapers = newRoot?.appendingPathComponent("Wallhaven", isDirectory: true)
+        let newWallpapers = newRoot?.appendingPathComponent(Layout.wallhaven, isDirectory: true)
             ?? URL(fileURLWithPath: DownloadLocation.defaultPath, isDirectory: true)
+        let newImports = newRoot?.appendingPathComponent(Layout.imported, isDirectory: true)
+            ?? newWallpapers.appendingPathComponent(Layout.imported, isDirectory: true)
         let newWorkshop = newRoot?
-            .appendingPathComponent("Workshop/steamapps/workshop/content/\(WorkshopConstants.appID)", isDirectory: true)
+            .appendingPathComponent(Layout.workshop, isDirectory: true)
+            .appendingPathComponent(Layout.workshopContent, isDirectory: true)
             ?? WorkshopLibrary.steamContentFolder
 
-        let pairs = [(oldWallpapers, newWallpapers), (oldWorkshop, newWorkshop)]
+        // 先移导入文件夹：默认位置下它在壁纸文件夹里面，不能被当作壁纸一起移到 Wallhaven/
+        let pairs = [(oldImports, newImports), (oldWallpapers, newWallpapers), (oldWorkshop, newWorkshop)]
             .filter { $0.0.standardizedFileURL != $0.1.standardizedFileURL }
 
         isMigrating = true
@@ -235,9 +263,10 @@ final class StorageManager: ObservableObject {
             rootPath = newRoot?.path
             isAvailable = Self.isReachable(rootURL)
             for (source, destination) in pairs {
-                PlaylistManager.shared.remapPaths(from: source.path, to: destination.path)
-                LiveWallpaperController.shared.remapPath(from: source.path, to: destination.path)
+                Self.remapReferences(from: source.path, to: destination.path)
             }
+            // 壁纸文件夹里混着的导入文件（旧版本导入的）归到 Imported/
+            Self.moveImportedFiles(from: newWallpapers, to: newImports)
             NotificationCenter.default.post(name: .storageLocationDidChange, object: nil)
 
             isMigrating = false
@@ -247,6 +276,85 @@ final class StorageManager: ObservableObject {
             } else {
                 ToastCenter.shared.show(skipped > 0 ? "已移动 \(moved) 项（\(skipped) 项目标位置已存在，保留原文件）" : "存储位置已更改，已移动 \(moved) 项", style: .success)
             }
+        }
+    }
+
+    // MARK: - Layout upgrade
+
+    /// 旧版本的目录结构（<根目录>/Wallhaven 里混着导入的文件、<根目录>/Workshop）整理成新结构：
+    /// 根目录改名为 Scena、Workshop 改名为 Wallpaper Engine、导入的文件移到 Imported/。
+    /// 都在同一块盘内改名或移动，瞬间完成；App 启动时在其他组件读取路径之前调用一次。
+    func upgradeLayoutIfNeeded() {
+        guard var root = rootURL, Self.isReachable(root), !SteamCMDDownloader.shared.isBusy else { return }
+        let fm = FileManager.default
+        let defaults = UserDefaults.standard
+
+        // 1. 旧版本自动创建的 wallhaven 根目录改名为 Scena（只在里面只有本 App 的文件夹时）
+        let knownNames: Set<String> = [Layout.wallhaven, "Workshop", Layout.workshop, Layout.imported, ".DS_Store"]
+        let renamedRoot = root.deletingLastPathComponent().appendingPathComponent(Layout.root, isDirectory: true)
+        if root.lastPathComponent.lowercased() == "wallhaven",
+           let contents = try? fm.contentsOfDirectory(atPath: root.path),
+           Set(contents).isSubset(of: knownNames),
+           !fm.fileExists(atPath: renamedRoot.path),
+           (try? fm.moveItem(at: root, to: renamedRoot)) != nil {
+            Self.remapReferences(from: root.path, to: renamedRoot.path)
+            root = renamedRoot
+            defaults.set(root.path, forKey: Self.rootKey)
+            rootPath = root.path
+        }
+
+        // 下载目录始终是 <根目录>/Wallhaven
+        let wallhaven = root.appendingPathComponent(Layout.wallhaven, isDirectory: true)
+        let oldDownloadPath = DownloadLocation.currentPath
+        if oldDownloadPath != wallhaven.path {
+            Self.remapReferences(from: oldDownloadPath, to: wallhaven.path)
+            defaults.set(wallhaven.path, forKey: DownloadLocation.storageKey)
+        }
+
+        // 2. Workshop → Wallpaper Engine
+        let oldWorkshop = root.appendingPathComponent("Workshop", isDirectory: true)
+        let newWorkshop = root.appendingPathComponent(Layout.workshop, isDirectory: true)
+        if fm.fileExists(atPath: oldWorkshop.path), !fm.fileExists(atPath: newWorkshop.path),
+           (try? fm.moveItem(at: oldWorkshop, to: newWorkshop)) != nil {
+            Self.remapReferences(from: oldWorkshop.path, to: newWorkshop.path)
+        }
+
+        // 3. 导入的文件：Wallhaven/Imported/ 和 Wallhaven/ 里非 wallhaven ID 命名的文件 → Imported/
+        let imported = root.appendingPathComponent(Layout.imported, isDirectory: true)
+        Self.moveImportedFiles(from: wallhaven.appendingPathComponent(Layout.imported, isDirectory: true), to: imported, movesEverything: true)
+        Self.moveImportedFiles(from: wallhaven, to: imported)
+        if let rest = try? fm.contentsOfDirectory(atPath: wallhaven.appendingPathComponent(Layout.imported).path),
+           rest.filter({ !$0.hasPrefix(".") }).isEmpty {
+            try? fm.removeItem(at: wallhaven.appendingPathComponent(Layout.imported, isDirectory: true))
+        }
+    }
+
+    /// 把 source 里的导入文件移到 destination。movesEverything 为 false 时只移走不是 wallhaven ID 命名的媒体文件
+    private static func moveImportedFiles(from source: URL, to destination: URL, movesEverything: Bool = false) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return }
+        let toMove = files.filter { MediaType.isSupported($0) && (movesEverything || !LocalMediaViewModel.isWallhavenFileName($0)) }
+        guard !toMove.isEmpty else { return }
+        try? fm.createDirectory(at: destination, withIntermediateDirectories: true)
+        for file in toMove {
+            let target = destination.appendingPathComponent(file.lastPathComponent)
+            guard !fm.fileExists(atPath: target.path), (try? fm.moveItem(at: file, to: target)) != nil else { continue }
+            remapReferences(from: file.path, to: target.path)
+        }
+    }
+
+    /// 更新引用了旧路径的地方：播放列表、动态壁纸、工坊库的自定义文件夹
+    private static func remapReferences(from oldPath: String, to newPath: String) {
+        PlaylistManager.shared.remapPaths(from: oldPath, to: newPath)
+        LiveWallpaperController.shared.remapPath(from: oldPath, to: newPath)
+        let key = "workshop.libraryFolders"
+        if let folders = UserDefaults.standard.stringArray(forKey: key) {
+            let remapped = folders.map { path in
+                path.lowercased() == oldPath.lowercased() || path.lowercased().hasPrefix(oldPath.lowercased() + "/")
+                    ? newPath + path.dropFirst(oldPath.count)
+                    : path
+            }
+            if remapped != folders { UserDefaults.standard.set(remapped, forKey: key) }
         }
     }
 

@@ -48,9 +48,9 @@ final class LocalMediaViewModel: ObservableObject {
         return URL(fileURLWithPath: downloadPath, isDirectory: true)
     }
 
-    /// 导入的文件单独放在 Imported 子文件夹，和 wallhaven 下载的区分开
+    /// 导入的文件单独放在 Imported 文件夹，和 wallhaven 下载的区分开
     private var importedURL: URL? {
-        directoryURL?.appendingPathComponent("Imported", isDirectory: true)
+        StorageManager.shared.importFolder
     }
 
     /// wallhaven 壁纸 ID：6 位小写字母或数字

@@ -474,11 +474,12 @@ private struct StorageSettings: View {
             } header: {
                 Text("存储位置")
             } footer: {
-                SettingsFootnote("下载的 wallhaven 壁纸、导入的图片和视频、创意工坊壁纸都保存在这里，可以设到外接盘。更改位置时会移动已下载的内容，并更新播放列表和动态壁纸的引用。")
+                SettingsFootnote("所选位置里会创建 Scena 文件夹，内含 Wallhaven（wallhaven 下载）、Wallpaper Engine（创意工坊）、Imported（导入的图片和视频）。可以设到外接盘；更改位置时会移动已有内容，并更新播放列表和动态壁纸的引用。")
             }
 
             Section {
-                usageRow("壁纸图片和视频", storage.usage.wallpapers, .blue)
+                usageRow("Wallhaven", storage.usage.wallpapers, .blue)
+                usageRow("本地导入", storage.usage.imported, .green)
                 usageRow("创意工坊壁纸", storage.usage.workshop, .purple)
                 usageRow("图片缓存", storage.usage.cache, .gray)
                 HStack {
@@ -513,12 +514,14 @@ private struct StorageSettings: View {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "选择存储位置（可以是外接盘），将在其中创建 wallhaven 文件夹"
+        panel.message = "选择存储位置（可以是外接盘），将在其中创建 Scena 文件夹"
         panel.prompt = "选择"
         if let volumes = URL(string: "file:///Volumes/") { panel.directoryURL = volumes }
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
-        // 选中盘符或普通文件夹时，在里面建一个 wallhaven 子文件夹，避免把文件散落在根目录
-        let root = chosen.lastPathComponent.lowercased() == "wallhaven" ? chosen : chosen.appendingPathComponent("wallhaven", isDirectory: true)
+        // 在所选位置里建一个 Scena 文件夹，避免把文件散落在根目录；选中的文件夹本身就叫 Scena 时直接使用
+        let root = chosen.lastPathComponent.lowercased() == StorageManager.Layout.root.lowercased()
+            ? chosen
+            : chosen.appendingPathComponent(StorageManager.Layout.root, isDirectory: true)
         confirmMove(to: root)
     }
 
@@ -527,7 +530,7 @@ private struct StorageSettings: View {
         alert.messageText = root.map { "将存储位置改到「\(StorageManager.volumeName(of: $0))」？" } ?? "恢复默认存储位置？"
         alert.informativeText = """
         新位置：\(root?.path ?? "~/Pictures/Wallhaven 和 Steam 默认工坊目录")
-        已下载的内容（约 \(formatBytes(storage.usage.wallpapers + storage.usage.workshop))）会移动到新位置，跨盘移动可能需要一些时间。
+        已有内容（约 \(formatBytes(storage.usage.wallpapers + storage.usage.imported + storage.usage.workshop))）会移动到新位置，跨盘移动可能需要一些时间。
         """
         alert.addButton(withTitle: "移动")
         alert.addButton(withTitle: "取消")
