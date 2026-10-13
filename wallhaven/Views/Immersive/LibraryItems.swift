@@ -1,0 +1,83 @@
+//
+//  LibraryItems.swift
+//  wallhaven
+//
+//  「资料库」：硬盘上所有可以直接设为壁纸的内容放在一起
+//  （wallhaven 下载、导入的图片和视频、已下载的创意工坊壁纸），沉浸式展示。
+//
+
+import SwiftUI
+
+/// 资料库的类型筛选
+enum LibraryKind: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case image = "图片"
+    case video = "视频"
+    case workshop = "工坊"
+
+    var id: String { rawValue }
+
+    func matches(_ item: GalleryItem) -> Bool {
+        switch self {
+        case .all: true
+        case .image: item.local.map { !$0.isVideo } ?? false
+        case .video: item.local?.isVideo ?? false
+        case .workshop: item.workshop != nil
+        }
+    }
+}
+
+extension GalleryItem {
+    var libraryTitle: String {
+        switch origin {
+        case .remote(let wallpaper): "wallhaven #\(wallpaper.id)"
+        case .local(let item): item.displayName
+        case .workshop(let item): item.title
+        }
+    }
+
+    var libraryKindLabel: String {
+        switch origin {
+        case .remote: "wallhaven"
+        case .local(let item): item.isVideo ? "视频" : "图片"
+        case .workshop(let item): "工坊 · \(item.type.label)"
+        }
+    }
+
+    var librarySymbol: String {
+        switch origin {
+        case .remote: "photo"
+        case .local(let item): item.isVideo ? "film" : "photo"
+        case .workshop(let item):
+            switch item.type {
+            case .video: "film"
+            case .web: "globe"
+            default: "cube"
+            }
+        }
+    }
+
+    /// 本地文件夹或文件（用于在 Finder 中显示）
+    var libraryFileURL: URL? {
+        switch origin {
+        case .remote: nil
+        case .local(let item): item.url
+        case .workshop(let item): item.localFolder
+        }
+    }
+
+    var libraryFileSize: Int {
+        switch origin {
+        case .remote(let wallpaper): wallpaper.fileSize
+        case .local(let item): item.fileSize
+        case .workshop(let item): item.fileSize
+        }
+    }
+
+    func matchesLibrarySearch(_ query: String) -> Bool {
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return true }
+        if libraryTitle.localizedCaseInsensitiveContains(keyword) { return true }
+        return workshop?.tags.contains { $0.localizedCaseInsensitiveContains(keyword) || WorkshopTags.label(for: $0).contains(keyword) } ?? false
+    }
+}

@@ -14,6 +14,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
     var onItemAppear: (GalleryItem) -> Void = { _ in }
+    /// 工坊条目的下载状态（显示「下载中 / 排队中」遮罩）
+    var downloadState: (GalleryItem) -> DownloadState = { _ in .none }
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
 
     private let corner: CGFloat = 10
@@ -62,12 +64,26 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .resizable()
             .scaledToFill()
             .frame(width: thumbWidth, height: thumbHeight)
+            .overlay {
+                let state = downloadState(item)
+                if state == .queued || state == .downloading {
+                    DownloadingOverlay(state: state)
+                }
+            }
             .overlay(alignment: .bottomLeading) {
                 if item.isVideo {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 14))
                         .foregroundStyle(.white)
                         .shadow(radius: 3)
+                        .padding(6)
+                } else if let workshopItem = item.workshop {
+                    // 工坊条目：类型图标；未下载时显示下载箭头
+                    Image(systemName: workshopItem.isDownloaded ? item.librarySymbol : "arrow.down.circle")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(.black.opacity(0.45), in: Circle())
                         .padding(6)
                 }
             }

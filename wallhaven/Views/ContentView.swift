@@ -48,7 +48,6 @@ struct ContentView: View {
     @State private var localSelectionID: String?
     @State private var libraryKind: LibraryKind = .all
     @State private var libraryQuery = ""
-    @State private var libraryColumns = 4
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
     @State private var workshopSelectionID: String?
@@ -242,12 +241,13 @@ struct ContentView: View {
         return true
     }
 
+    /// 只有「发现 · 创意工坊」（在线小方图）用网格，其他页面都是沉浸式大图
+    private var isWorkshopGrid: Bool {
+        page == .workshop && currentTab == .discover
+    }
+
     private var gridColumns: Int? {
-        switch page {
-        case .workshop: workshopColumns
-        case .library: libraryColumns
-        default: nil
-        }
+        isWorkshopGrid ? workshopColumns : nil
     }
 
     private var hasSearch: Bool {
@@ -323,11 +323,16 @@ struct ContentView: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack(alignment: .top) {
-                ImmersiveBackground(item: backgroundItem, showsPreviewCard: immersive.isChromeHidden)
+                // 未下载的工坊条目：网格页的预览在详情栏里；沉浸式页面平时把卡片放在右上，隐藏界面后居中
+                ImmersiveBackground(
+                    item: backgroundItem,
+                    showsPreviewCard: isWorkshopGrid ? immersive.isChromeHidden : true,
+                    centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden
+                )
                     .frame(width: size.width, height: size.height)
 
                 // 网格类页面整体压暗，保证缩略图和文字清晰
-                if page == .workshop || page == .library || page == .playlists {
+                if isWorkshopGrid || page == .playlists {
                     Color.black.opacity(immersive.isChromeHidden ? 0 : 0.35)
                         .allowsHitTesting(false)
                 }
@@ -852,20 +857,7 @@ struct ContentView: View {
         } else if items.isEmpty && !isLoading {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if page == .library {
-            LibraryGridView(
-                liveController: liveController,
-                items: items,
-                selectedID: selectedItem?.id,
-                size: size,
-                columnCount: $libraryColumns,
-                onSelect: { select($0) },
-                onApply: { apply($0) },
-                onDelete: { deleteFromLibrary($0, unsubscribe: $1) },
-                onHover: { reason, active in immersive.setHold(reason, active: active) },
-                contextMenu: { contextMenu(for: $0) }
-            )
-        } else if page == .workshop {
+        } else if isWorkshopGrid {
             WorkshopGridView(
                 liveController: liveController,
                 items: workshop.items,
@@ -902,6 +894,7 @@ struct ContentView: View {
                             workshop.loadMoreIfNeeded(current: workshopItem)
                         }
                     },
+                    downloadState: { $0.workshop.map(workshop.downloadState(of:)) ?? .none },
                     contextMenu: { contextMenu(for: $0) }
                 )
                 .padding(.horizontal, 20)
@@ -1028,10 +1021,102 @@ struct ContentView: View {
                 CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
             }
 
-        case .workshop:
-            // 工坊页使用网格 + 右侧详情栏（WorkshopGridView）
-            EmptyView()
+        case .workshop(let workshopItem):
+            workshopInfoPanel(workshopItem, item: item)
         }
+    }
+
+    /// 沉浸式页面（收藏 · 创意工坊、资料库）里的工坊壁纸信息面板
+    @ViewBuilder
+    private func workshopInfoPanel(_ workshopItem: WorkshopItem, item: GalleryItem) -> some View {
+        let isLive = workshopItem.localFolder.map { liveController.currentURL?.standardizedFileURL == $0.standardizedFileURL } ?? false
+        let state = workshop.downloadState(of: workshopItem)
+        let isSubscribed = workshop.isSubscribed(workshopItem)
+        InfoPanel(
+            eyebrow: isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(workshopItem.type.label)",
+            title: workshopItem.title,
+            meta: workshopMeta(workshopItem),
+            tags: workshopItem.tags,
+            onTag: { tag in
+                if page == .library {
+                    libraryQuery = WorkshopTags.label(for: tag)
+                } else {
+                    workshop.applyTag(tag)
+                }
+            },
+            tagLabel: WorkshopTags.label(for:)
+        ) {
+            if !workshopItem.type.isPlayable {
+                Text("Windows 程序，macOS 无法运行")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else if state == .queued || state == .downloading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text(state.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                    Button("取消") { workshop.cancelDownload(workshopItem) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+            } else if workshopItem.isDownloaded {
+                PrimaryActionButton(title: "设为动态壁纸") { workshop.apply(workshopItem) }
+            } else {
+                PrimaryActionButton(title: "下载并应用", systemImage: "arrow.down") { workshop.apply(workshopItem) }
+            }
+
+            if workshop.isLoggedIn, workshopItem.workshopPageURL != nil {
+                CircleIconButton(
+                    systemImage: isSubscribed ? "checkmark.circle.fill" : "plus.circle",
+                    tint: isSubscribed ? .green : .white,
+                    help: isSubscribed ? "已订阅（点击取消订阅）" : "订阅到 Steam 账号"
+                ) { workshop.toggleSubscription(workshopItem) }
+            }
+            if workshopItem.isDownloaded {
+                AddToPlaylistButton(item: item)
+            }
+            if let folder = workshopItem.localFolder {
+                CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                }
+            }
+            if workshopItem.workshopPageURL != nil {
+                CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开") { workshop.openInSteam(workshopItem) }
+            }
+            if workshopItem.isDownloaded {
+                if isSubscribed {
+                    Menu {
+                        Button("移到废纸篓") { deleteFromLibrary(item, unsubscribe: false) }
+                        Button("移到废纸篓并取消订阅", role: .destructive) { deleteFromLibrary(item, unsubscribe: true) }
+                    } label: {
+                        CircleIconLabel(systemImage: "trash", tint: .red.opacity(0.9))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("删除")
+                } else {
+                    CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") {
+                        deleteFromLibrary(item, unsubscribe: false)
+                    }
+                }
+            }
+        }
+    }
+
+    private func workshopMeta(_ item: WorkshopItem) -> [String] {
+        var meta: [String] = []
+        if item.fileSize > 0 {
+            meta.append(ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file))
+        }
+        if item.subscriptions > 0 { meta.append("\(item.subscriptions) 订阅") }
+        if let rating = item.contentRating { meta.append(WorkshopRating(rawValue: rating)?.label ?? rating) }
+        meta.append(item.isDownloaded ? "已下载" : "未下载")
+        return meta
     }
 
     private func remoteMeta(_ wallpaper: WallhavenWallpaper) -> [String] {
