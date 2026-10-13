@@ -26,6 +26,8 @@ final class LoopingVideoNSView: NSView {
     private let player = AVQueuePlayer()
     private let playerLayer = AVPlayerLayer()
     private var looper: AVPlayerLooper?
+    private var readyObservation: NSKeyValueObservation?
+    private var readyCallbacks: [() -> Void] = []
 
     init(url: URL) {
         super.init(frame: .zero)
@@ -41,6 +43,26 @@ final class LoopingVideoNSView: NSView {
 
         looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
         player.play()
+
+        readyObservation = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async { self?.fireReady() }
+        }
+    }
+
+    /// 第一帧可以显示时回调（已就绪则立即回调）
+    func whenReady(_ action: @escaping () -> Void) {
+        if playerLayer.isReadyForDisplay {
+            action()
+        } else {
+            readyCallbacks.append(action)
+        }
+    }
+
+    private func fireReady() {
+        let callbacks = readyCallbacks
+        readyCallbacks.removeAll()
+        callbacks.forEach { $0() }
     }
 
     @available(*, unavailable)
@@ -60,6 +82,8 @@ final class LoopingVideoNSView: NSView {
     func pause() { player.pause() }
 
     func stop() {
+        readyObservation = nil
+        readyCallbacks.removeAll()
         player.pause()
         looper?.disableLooping()
         looper = nil

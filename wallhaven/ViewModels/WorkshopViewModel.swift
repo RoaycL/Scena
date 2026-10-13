@@ -8,6 +8,10 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum DownloadState {
+    case none, queued, downloading
+}
+
 final class WorkshopViewModel: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case library = "已下载"
@@ -23,6 +27,8 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     /// 排队中 + 正在下载
     @Published private(set) var downloading: Set<String> = []
+    /// 正在下载的这一批（其余为排队中）
+    @Published private(set) var activeDownloads: Set<String> = []
 
     // 订阅同步
     @Published private(set) var subscribedIDs: Set<String> = []
@@ -102,6 +108,12 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     var isLoggedIn: Bool { account.isLoggedIn }
+
+    func downloadState(of item: WorkshopItem) -> DownloadState {
+        if activeDownloads.contains(item.id) { return .downloading }
+        if downloading.contains(item.id) { return .queued }
+        return .none
+    }
 
     func isSubscribed(_ item: WorkshopItem) -> Bool {
         subscribedIDs.contains(item.id)
@@ -312,6 +324,8 @@ final class WorkshopViewModel: ObservableObject {
             }
             let batch = Array(downloadQueue.prefix(10))
             downloadQueue.removeFirst(batch.count)
+            activeDownloads = Set(batch)
+            defer { activeDownloads.subtract(batch) }
             toast.show(batch.count == 1 ? "正在通过 steamcmd 下载…" : "正在通过 steamcmd 下载 \(batch.count) 个壁纸…", style: .progress)
 
             do {

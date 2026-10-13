@@ -40,6 +40,8 @@ final class LiveWallpaperController: ObservableObject {
     private var players: [LivePlaybackView] = []
     private var observers: [NSObjectProtocol] = []
     private var mouseMonitors: [Any] = []
+    /// 每次重建窗口递增，用于丢弃过期的回调
+    private var generation = 0
     /// 系统原因（锁屏、睡眠）导致的暂停，与用户手动暂停分开记录
     private var isSystemSuspended = false
 
@@ -129,9 +131,20 @@ final class LiveWallpaperController: ObservableObject {
         }
     }
 
+    /// 新窗口先以透明状态创建，播放器出第一帧后淡入，再移除旧窗口：切换时不会黑屏
     private func rebuildWindows() {
-        tearDownWindows()
-        guard let content = current else { return }
+        generation += 1
+        let currentGeneration = generation
+        let oldWindows = windows
+        let oldPlayers = players
+        removeMouseTracking()
+        windows = []
+        players = []
+
+        guard let content = current else {
+            fadeOut(oldWindows, oldPlayers)
+            return
+        }
 
         for screen in NSScreen.screens {
             guard let player = makePlayer(for: content) else { continue }
@@ -139,32 +152,89 @@ final class LiveWallpaperController: ObservableObject {
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
             window.ignoresMouseEvents = true
-            window.isOpaque = true
+            window.isOpaque = false
             window.hasShadow = false
-            window.backgroundColor = .black
+            window.backgroundColor = .clear
             window.isReleasedWhenClosed = false
             // ⌘H 隐藏 App 时壁纸窗口不能跟着消失
             window.canHide = false
+            window.alphaValue = 0
             window.contentView = player
             window.setFrame(screen.frame, display: true)
+            // 同一层级里后 orderFront 的在上面，盖住旧窗口
             window.orderFront(nil)
 
             windows.append(window)
             players.append(player)
         }
+
+        var pending = windows.count
+        let finish = { [weak self] in
+            guard let self, self.generation == currentGeneration else { return }
+            self.retire(oldWindows, oldPlayers)
+        }
+        for (window, player) in zip(windows, players) {
+            player.whenReady { [weak self, weak window] in
+                guard let self, self.generation == currentGeneration, let window else { return }
+                self.reveal(window)
+                pending -= 1
+                if pending == 0 { finish() }
+            }
+        }
+        // 兜底：播放器迟迟没有就绪时也要显示出来，不能一直停留在旧壁纸上
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self, self.generation == currentGeneration else { return }
+            self.windows.filter { $0.alphaValue < 1 }.forEach(self.reveal)
+            finish()
+        }
+
         if players.contains(where: { $0 is WorkshopPlayerNSView }) {
             installMouseTracking()
         }
         updatePlayback()
     }
 
+    private func reveal(_ window: NSWindow) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.35
+            window.animator().alphaValue = 1
+        }
+    }
+
+    /// 新窗口淡入完成后再移除旧窗口
+    private func retire(_ oldWindows: [NSWindow], _ oldPlayers: [LivePlaybackView]) {
+        guard !oldWindows.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            oldPlayers.forEach { $0.stop() }
+            oldWindows.forEach { $0.orderOut(nil) }
+        }
+    }
+
+    /// 停止动态壁纸时淡出，露出下面的静态壁纸
+    private func fadeOut(_ oldWindows: [NSWindow], _ oldPlayers: [LivePlaybackView]) {
+        guard !oldWindows.isEmpty else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.35
+            oldWindows.forEach { $0.animator().alphaValue = 0 }
+        } completionHandler: {
+            MainActor.assumeIsolated {
+                oldPlayers.forEach { $0.stop() }
+                oldWindows.forEach { $0.orderOut(nil) }
+            }
+        }
+    }
+
     private func tearDownWindows() {
-        mouseMonitors.forEach { NSEvent.removeMonitor($0) }
-        mouseMonitors.removeAll()
-        players.forEach { $0.stop() }
-        windows.forEach { $0.orderOut(nil) }
+        generation += 1
+        removeMouseTracking()
+        fadeOut(windows, players)
         players.removeAll()
         windows.removeAll()
+    }
+
+    private func removeMouseTracking() {
+        mouseMonitors.forEach { NSEvent.removeMonitor($0) }
+        mouseMonitors.removeAll()
     }
 
     private func updatePlayback() {

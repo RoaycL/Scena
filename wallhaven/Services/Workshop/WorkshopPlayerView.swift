@@ -17,6 +17,8 @@ protocol LivePlaybackView: NSView {
     func play()
     func pause()
     func stop()
+    /// 第一帧渲染完成（或加载失败）时回调，用于新旧壁纸无缝切换
+    func whenReady(_ action: @escaping () -> Void)
 }
 
 extension LoopingVideoNSView: LivePlaybackView {}
@@ -181,7 +183,23 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
 
     var onStateChange: ((State) -> Void)?
     private(set) var state: State = .loading {
-        didSet { onStateChange?(state) }
+        didSet {
+            onStateChange?(state)
+            if state != .loading {
+                let callbacks = readyCallbacks
+                readyCallbacks.removeAll()
+                callbacks.forEach { $0() }
+            }
+        }
+    }
+    private var readyCallbacks: [() -> Void] = []
+
+    func whenReady(_ action: @escaping () -> Void) {
+        if state == .loading {
+            readyCallbacks.append(action)
+        } else {
+            action()
+        }
     }
 
     private let item: WorkshopItem

@@ -46,7 +46,7 @@ struct WorkshopGridView<MenuItems: View>: View {
                             WorkshopTile(
                                 item: item,
                                 isSelected: item.id == selectedID,
-                                isDownloading: workshop.downloading.contains(item.id),
+                                downloadState: workshop.downloadState(of: item),
                                 isLive: isLive(item)
                             )
                             .id(item.id)
@@ -101,7 +101,7 @@ struct WorkshopGridView<MenuItems: View>: View {
 private struct WorkshopTile: View {
     let item: WorkshopItem
     let isSelected: Bool
-    let isDownloading: Bool
+    let downloadState: DownloadState
     let isLive: Bool
 
     @State private var isHovered = false
@@ -140,6 +140,11 @@ private struct WorkshopTile: View {
                     .background(
                         LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
                     )
+            }
+            .overlay {
+                if downloadState != .none {
+                    DownloadingOverlay(state: downloadState)
+                }
             }
             .overlay(alignment: .topLeading) {
                 typeBadge.padding(6)
@@ -187,12 +192,6 @@ private struct WorkshopTile: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.green, in: Capsule())
-        } else if isDownloading {
-            ProgressView()
-                .controlSize(.mini)
-                .tint(.white)
-                .frame(width: 20, height: 20)
-                .background(.black.opacity(0.45), in: Circle())
         } else if item.isDownloaded {
             Image(systemName: "checkmark")
                 .font(.system(size: 9, weight: .bold))
@@ -227,6 +226,10 @@ private struct WorkshopDetailPanel: View {
                 if let url = item.previewURL {
                     AnimatedPreviewImage(url: url)
                         .id(url)
+                }
+                let state = workshop.downloadState(of: item)
+                if state != .none {
+                    DownloadingOverlay(state: state, large: true)
                 }
             }
             .frame(width: 264, height: 264)
@@ -378,5 +381,35 @@ private struct WorkshopDetailPanel: View {
         case .questionable: .orange
         case .mature: .red
         }
+    }
+}
+
+/// 下载中 / 排队中的遮罩：中间显示旋转的刷新图标
+struct DownloadingOverlay: View {
+    let state: DownloadState
+    var large = false
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+            VStack(spacing: large ? 10 : 6) {
+                Group {
+                    if state == .downloading {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .symbolEffect(.rotate, options: .repeat(.continuous))
+                    } else {
+                        Image(systemName: "clock")
+                    }
+                }
+                .font(.system(size: large ? 34 : 22, weight: .semibold))
+                .foregroundStyle(.white)
+
+                Text(state == .downloading ? "下载中…" : "排队中")
+                    .font(.system(size: large ? 13 : 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .transition(.opacity)
+        .allowsHitTesting(false)
     }
 }

@@ -179,18 +179,33 @@ struct StatusMenuContent: View {
             .keyboardShortcut("q")
     }
 
-    /// 已有主窗口就带到前台，否则新建
     private func showMainWindow() {
-        NSApp.activate()
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MainWindow.id) == true }) {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            openWindow(id: MainWindow.id)
-        }
+        MainWindow.opener = { openWindow(id: MainWindow.id) }
+        MainWindow.show()
     }
 }
 
 enum MainWindow {
     static let id = "main"
+
+    /// SwiftUI 的 openWindow 只能在视图里拿到，主窗口出现时保存下来，供 Dock 图标重新打开窗口使用
+    static var opener: (() -> Void)?
+
+    static var existingWindow: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix(id) == true }
+    }
+
+    /// 已有主窗口就带到前台（包括最小化的），否则新建一个
+    static func show() {
+        NSApp.activate()
+        if let window = existingWindow, window.isVisible || window.isMiniaturized {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else if let opener {
+            // 已关闭的窗口交给 SwiftUI 重新创建
+            opener()
+        } else {
+            existingWindow?.makeKeyAndOrderFront(nil)
+        }
+    }
 }

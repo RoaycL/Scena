@@ -19,11 +19,10 @@ enum WallpaperManager {
         guard !screens.isEmpty else {
             throw WallperError.wallpaper("未找到活动屏幕。")
         }
-        // 设置静态壁纸时关闭动态壁纸，否则会被视频窗口遮住
-        LiveWallpaperController.shared.stop()
-        // 应用到所有显示器
+        // 先换好静态壁纸，再淡出上层的动态壁纸窗口，避免中间露出旧壁纸或黑屏
         for screen in screens {
             try NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [:])
         }
+        LiveWallpaperController.shared.stop()
     }
 }

@@ -277,6 +277,7 @@ struct ContentView: View {
         .background(WindowAccessor { immersive.attach(to: $0) })
         .focusedSceneValue(\.galleryActions, commandActions)
         .onAppear {
+            MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
             viewModel.search(reset: true)
             localViewModel.loadMedia()

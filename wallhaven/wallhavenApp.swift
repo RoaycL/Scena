@@ -21,6 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SteamCMDDownloader.shared.terminateAll()
     }
 
+    /// 点击 Dock 图标：桌面上的动态壁纸窗口也算「可见窗口」，系统会因此不重新打开主窗口，
+    /// 所以这里只看主窗口本身是否可见
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if MainWindow.existingWindow?.isVisible != true {
+            MainWindow.show()
+            return false
+        }
+        return true
+    }
+
     // 关闭主窗口后继续运行，动态壁纸不中断
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
