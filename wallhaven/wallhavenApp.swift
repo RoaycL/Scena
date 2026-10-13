@@ -10,6 +10,8 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 不需要窗口标签页，去掉「显示」菜单里的 Show Tab Bar
+        NSWindow.allowsAutomaticWindowTabbing = false
         LiveWallpaperController.shared.restore()
     }
 
@@ -19,20 +21,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+enum AppSettings {
+    static let showStatusItemKey = "showStatusItem"
+}
+
 @main
 struct wallhavenApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = WallpaperViewModel()
     @StateObject private var workshop = WorkshopViewModel()
     @StateObject private var liveController = LiveWallpaperController.shared
+    @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: MainWindow.id) {
             ContentView()
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            WallhavenCommands(liveController: liveController)
+        }
 
         Settings {
             SettingsView()
@@ -40,22 +50,17 @@ struct wallhavenApp: App {
                 .environmentObject(workshop)
         }
 
-        // 动态壁纸播放时在菜单栏显示控制项
-        MenuBarExtra(isInserted: .constant(liveController.isActive)) {
-            if let content = liveController.current {
-                Text(content.title)
-                Divider()
-            }
-            Button(liveController.isPaused ? "继续播放" : "暂停") { liveController.togglePause() }
-            Button("停止动态壁纸") { liveController.stop() }
-            Divider()
-            Button("打开 wallhaven") {
-                NSApp.activate()
-                NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
-            }
-            Button("退出") { NSApp.terminate(nil) }
+        // 状态栏图标（可在设置中关闭）
+        MenuBarExtra(isInserted: $showStatusItem) {
+            StatusMenuContent(liveController: liveController)
+                .environmentObject(viewModel)
         } label: {
-            Image(systemName: liveController.isPaused ? "pause.rectangle" : "play.rectangle")
+            Image(systemName: statusIcon)
         }
+    }
+
+    private var statusIcon: String {
+        guard liveController.isActive else { return "photo.on.rectangle.angled" }
+        return liveController.isPaused ? "pause.rectangle" : "play.rectangle"
     }
 }

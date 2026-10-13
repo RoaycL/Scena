@@ -387,6 +387,31 @@ final class WallpaperViewModel: ObservableObject {
         }
     }
 
+    /// 状态栏「随机换一张」：优先从当前列表里挑，列表为空时按当前筛选随机取一页
+    func applyRandomWallpaper() {
+        if let wallpaper = wallpapers.randomElement() {
+            downloadAndApply(wallpaper)
+            return
+        }
+        Task {
+            do {
+                let results = try await client.search(
+                    query: query,
+                    page: 1,
+                    sorting: .random,
+                    categories: categoriesValue,
+                    purity: purityValue,
+                    apiKey: storedAPIKey
+                )
+                if let wallpaper = results.randomElement() {
+                    downloadAndApply(wallpaper)
+                }
+            } catch {
+                ToastCenter.shared.show("获取随机壁纸失败：\(error.localizedDescription)", style: .error)
+            }
+        }
+    }
+
     /// 按需加载壁纸标签（详情接口），结果缓存
     func loadTagsIfNeeded(for wallpaper: WallhavenWallpaper) async {
         guard tagsByID[wallpaper.id] == nil else { return }

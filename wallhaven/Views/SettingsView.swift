@@ -13,6 +13,7 @@ struct SettingsView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
     @AppStorage(DownloadLocation.storageKey) private var downloadPath: String = DownloadLocation.defaultPath
+    @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
     @State private var selectedTab = 0
     @StateObject private var updateManager = UpdateManager()
     
@@ -119,6 +120,19 @@ struct SettingsView: View {
                     Text("下载的壁纸将保存在此文件夹中。")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
+                }
+            }
+
+            settingsSectionHeader(icon: "menubar.rectangle", title: "菜单栏", color: .purple)
+
+            settingsCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("在菜单栏显示图标", isOn: $showStatusItem)
+                        .font(.system(size: 13))
+                    Text("可以在菜单栏控制动态壁纸、随机换一张壁纸。关闭主窗口后 App 会继续在后台运行。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

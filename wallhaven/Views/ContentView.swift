@@ -174,6 +174,56 @@ struct ContentView: View {
         return true
     }
 
+    /// 提供给顶部菜单栏的操作
+    private var commandActions: GalleryCommandActions {
+        let item = selectedItem
+        let canDownload: Bool = switch item?.origin {
+        case .remote: true
+        case .workshop(let workshopItem): !workshopItem.isDownloaded && workshopItem.type.isPlayable
+        default: false
+        }
+        return GalleryCommandActions(
+            currentTab: currentTab,
+            hasSelection: item != nil,
+            canDownload: canDownload,
+            canFavorite: item?.remote != nil,
+            isFavorite: item?.remote.map { viewModel.isFavorite($0.id) } ?? false,
+            canOpenInBrowser: item?.remote != nil || item?.workshop?.workshopPageURL != nil,
+            hasSearch: currentTab == .home || currentTab == .workshop,
+            isChromeHidden: immersive.isChromeHidden,
+            apply: { if let item = selectedItem { apply(item) } },
+            download: {
+                switch selectedItem?.origin {
+                case .remote(let wallpaper): viewModel.downloadImage(wallpaper)
+                case .workshop(let workshopItem): workshop.download(workshopItem)
+                default: break
+                }
+            },
+            toggleFavorite: { if let wallpaper = selectedItem?.remote { viewModel.toggleFavorite(wallpaper) } },
+            move: { moveSelection(by: $0) },
+            toggleChrome: { immersive.toggleChrome() },
+            switchTab: { switchTab($0) },
+            focusSearch: {
+                immersive.showChrome()
+                isSearchFocused = true
+            },
+            openInBrowser: {
+                if let url = selectedItem?.remote?.url ?? selectedItem?.workshop?.workshopPageURL {
+                    NSWorkspace.shared.open(url)
+                }
+            },
+            importLocal: {
+                switchTab(.local)
+                localViewModel.importFiles()
+            },
+            addWorkshopFolder: {
+                switchTab(.workshop)
+                workshop.mode = .library
+                workshop.addLibraryFolder()
+            }
+        )
+    }
+
     private func switchTab(_ tab: MainTab) {
         withAnimation(.easeInOut(duration: 0.2)) { currentTab = tab }
     }
@@ -224,6 +274,7 @@ struct ContentView: View {
         .ignoresSafeArea()
         .frame(minWidth: 820, minHeight: 520)
         .background(WindowAccessor { immersive.attach(to: $0) })
+        .focusedSceneValue(\.galleryActions, commandActions)
         .onAppear {
             immersive.keyHandler = handleKey
             viewModel.search(reset: true)
