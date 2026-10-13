@@ -100,7 +100,16 @@ final class WorkshopViewModel: ObservableObject {
         apiKey = defaults.string(forKey: Keys.apiKey) ?? ""
         steamUsername = defaults.string(forKey: Keys.username) ?? ""
         filters = defaults.data(forKey: Keys.filters).flatMap { try? JSONDecoder().decode(WorkshopFilters.self, from: $0) } ?? WorkshopFilters()
-        extraFolders = (defaults.stringArray(forKey: Keys.folders) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
+        // 去掉与默认目录或彼此之间只差大小写的重复文件夹（旧版本按区分大小写比较时加进来的）
+        var seenFolders: Set<String> = [Self.pathKey(StorageManager.shared.workshopContentFolder), Self.pathKey(WorkshopLibrary.steamContentFolder)]
+        let savedFolders = defaults.stringArray(forKey: Keys.folders) ?? []
+        let uniqueFolders = savedFolders
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            .filter { seenFolders.insert(Self.pathKey($0)).inserted }
+        if uniqueFolders.count != savedFolders.count {
+            defaults.set(uniqueFolders.map(\.path), forKey: Keys.folders)
+        }
+        extraFolders = uniqueFolders
         subscribeOnDownload = defaults.object(forKey: Keys.subscribeOnDownload) as? Bool ?? true
         autoDownloadSubscriptions = defaults.object(forKey: Keys.autoDownload) as? Bool ?? true
         let savedConcurrency = defaults.integer(forKey: Keys.maxConcurrentDownloads)
@@ -170,11 +179,14 @@ final class WorkshopViewModel: ObservableObject {
     /// 本地库根目录：Steam / steamcmd 默认下载目录 + 用户添加的文件夹
     var libraryRoots: [URL] {
         // App 管理的下载目录（可能在外接盘上）+ Steam 默认目录 + 用户添加的文件夹
-        var roots = [StorageManager.shared.workshopContentFolder]
-        if roots[0].standardizedFileURL != WorkshopLibrary.steamContentFolder.standardizedFileURL {
-            roots.append(WorkshopLibrary.steamContentFolder)
-        }
-        return roots + extraFolders
+        // macOS 文件系统不区分大小写，steamcmd 报告的路径可能是小写，按不区分大小写去重
+        var seen = Set<String>()
+        return ([StorageManager.shared.workshopContentFolder, WorkshopLibrary.steamContentFolder] + extraFolders)
+            .filter { seen.insert(Self.pathKey($0)).inserted }
+    }
+
+    static func pathKey(_ url: URL) -> String {
+        url.standardizedFileURL.path.lowercased()
     }
 
     // MARK: - Library
@@ -423,7 +435,7 @@ final class WorkshopViewModel: ObservableObject {
             }
             for folder in result.downloaded.values {
                 let root = folder.deletingLastPathComponent()
-                if !libraryRoots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
+                if !libraryRoots.contains(where: { Self.pathKey($0) == Self.pathKey(root) }) {
                     setExtraFolders(extraFolders + [root])
                 }
             }

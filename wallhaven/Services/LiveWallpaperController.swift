@@ -40,6 +40,20 @@ final class LiveWallpaperController: ObservableObject {
         }
     }
 
+    /// 场景 / 网页类工坊壁纸的渲染帧率（视频按原始帧率播放）
+    @Published private(set) var frameRate: Int = {
+        let saved = UserDefaults.standard.integer(forKey: "liveWallpaper.fps")
+        return [15, 30, 60].contains(saved) ? saved : 30
+    }()
+
+    func setFrameRate(_ fps: Int) {
+        guard [15, 30, 60].contains(fps), fps != frameRate else { return }
+        frameRate = fps
+        UserDefaults.standard.set(fps, forKey: "liveWallpaper.fps")
+        // 只有 WebGL 渲染的壁纸受帧率影响，重新创建播放器使其生效
+        if players.contains(where: { $0 is WorkshopPlayerNSView }) { rebuildWindows() }
+    }
+
     var isActive: Bool { current != nil }
     /// 视频文件或工坊文件夹的地址
     var currentURL: URL? { current?.url }
@@ -132,7 +146,7 @@ final class LiveWallpaperController: ObservableObject {
             if let videoURL = item.nativeVideoURL {
                 return LoopingVideoNSView(url: videoURL)
             }
-            let player = WorkshopPlayerNSView(item: item, fps: 30)
+            let player = WorkshopPlayerNSView(item: item, fps: frameRate)
             player.onStateChange = { state in
                 if case .failed(let message) = state {
                     ToastCenter.shared.show("动态壁纸渲染失败：\(message)", style: .error)

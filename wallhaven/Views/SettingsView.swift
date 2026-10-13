@@ -2,635 +2,509 @@
 //  SettingsView.swift
 //  wallhaven
 //
-//  Created by RoaycL on 2026/4/17.
+//  原生 macOS 偏好设置：顶部图标标签 + 分组表单。
+//  通用 / 账户（Wallhaven 与 Steam 集中管理）/ 动态壁纸 / 创意工坊 / 存储 / 关于
 //
 
 import AppKit
 import SwiftUI
-import Kingfisher
 
 struct SettingsView: View {
-    @EnvironmentObject private var viewModel: WallpaperViewModel
-    @EnvironmentObject private var workshop: WorkshopViewModel
-    @ObservedObject private var steamAccount = SteamAccountSession.shared
-    @ObservedObject private var storage = StorageManager.shared
-    @Environment(\.openWindow) private var openWindow
-    @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
-    @State private var selectedTab = 0
-    @StateObject private var updateManager = UpdateManager()
-    
-    private let tabs: [(String, String)] = [
-        ("常规", "gearshape.fill"),
-        ("账户", "person.crop.circle.fill"),
-        ("创意工坊", "square.stack.3d.up.fill"),
-        ("关于", "info.circle.fill")
-    ]
-    
+    private enum Tab: Hashable {
+        case general, accounts, live, workshop, storage, about
+    }
+
+    @State private var tab: Tab = .general
+
     var body: some View {
-        VStack(spacing: 0) {
-            // 顶部标签栏
-            HStack(spacing: 4) {
-                ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            selectedTab = index
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: tab.1)
-                                .font(.system(size: 12))
-                            Text(tab.0)
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .foregroundStyle(selectedTab == index ? .white : .secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule()
-                                .fill(selectedTab == index ? Color.accentColor.opacity(0.85) : .clear)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(6)
-            .background(Color.primary.opacity(0.06), in: Capsule())
-            .padding(.top, 18)
-            .padding(.bottom, 10)
-            
-            Divider().opacity(0.5)
-            
-            // 内容区
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    switch selectedTab {
-                    case 0: generalContent
-                    case 1: accountContent
-                    case 2: workshopContent
-                    case 3: aboutContent
-                    default: EmptyView()
-                    }
-                }
-                .padding(28)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        TabView(selection: $tab) {
+            GeneralSettings()
+                .tabItem { Label("通用", systemImage: "gearshape") }
+                .tag(Tab.general)
+            AccountSettings()
+                .tabItem { Label("账户", systemImage: "person.crop.circle") }
+                .tag(Tab.accounts)
+            LiveWallpaperSettings()
+                .tabItem { Label("动态壁纸", systemImage: "play.rectangle") }
+                .tag(Tab.live)
+            WorkshopSettings()
+                .tabItem { Label("创意工坊", systemImage: "square.stack.3d.up") }
+                .tag(Tab.workshop)
+            StorageSettings()
+                .tabItem { Label("存储", systemImage: "externaldrive") }
+                .tag(Tab.storage)
+            AboutSettings()
+                .tabItem { Label("关于", systemImage: "info.circle") }
+                .tag(Tab.about)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .frame(width: 520, height: 460)
+        .frame(width: 580, height: 560)
     }
-    
-    // MARK: - 常规
-    
-    private var generalContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSectionHeader(icon: "externaldrive.fill", title: "存储", color: .blue)
+}
 
-            settingsCard {
-                storageCard
-            }
+// MARK: - Shared
 
-            settingsSectionHeader(icon: "menubar.rectangle", title: "菜单栏", color: .purple)
+/// 分组下方的说明文字
+private struct SettingsFootnote: View {
+    let text: String
 
-            settingsCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("在菜单栏显示图标", isOn: $showStatusItem)
-                        .font(.system(size: 13))
-                    Text("可以在菜单栏控制动态壁纸、随机换一张壁纸。关闭主窗口后 App 会继续在后台运行。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-    
-    // MARK: - 账户
-    
-    private var accountContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSectionHeader(icon: "key.fill", title: "Wallhaven 账户", color: .orange)
-            
-            settingsCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    settingsField(label: "API 密钥", systemImage: "lock.fill") {
-                        SecureField("输入您的 API 密钥", text: $viewModel.apiKeyInput)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                    }
-                    
-                    settingsField(label: "用户名", systemImage: "person.fill") {
-                        TextField("输入您的用户名", text: $viewModel.usernameInput)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                    }
-                    
-                    HStack(spacing: 8) {
-                        Button {
-                            viewModel.login()
-                        } label: {
-                            Text(viewModel.isAuthenticated ? "更新配置" : "登录验证")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        
-                        Button("获取 API 密钥") {
-                            viewModel.openAPIKeyPage()
-                        }
-                        .controlSize(.small)
-                        
-                        if viewModel.isAuthenticated {
-                            Spacer()
-                            Button("退出登录") {
-                                viewModel.logout()
-                            }
-                            .controlSize(.small)
-                            .foregroundStyle(.red.opacity(0.85))
-                        }
-                    }
-                    .padding(.top, 2)
-                    
-                    Text("登录后可访问 NSFW 内容，配置用户名后可同步线上收藏夹到本地。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            
-            if viewModel.isAuthenticated {
-                settingsSectionHeader(icon: "arrow.triangle.2.circlepath", title: "收藏同步", color: .green)
-                
-                settingsCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 10) {
-                            Button {
-                                Task {
-                                    await viewModel.syncCollections()
-                                }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "icloud.and.arrow.down")
-                                        .font(.system(size: 12))
-                                    Text("同步线上收藏到本地")
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .tint(.green.opacity(0.85))
-                            .disabled(viewModel.isSyncing)
-                            
-                            if viewModel.isSyncing {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(viewModel.syncProgress)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        
-                        Text("将云端收藏夹结构同步到本地。考虑到 API 速率限制（45次/分钟），收藏较多时耐心等待。")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-        }
-    }
-    
-    // MARK: - 创意工坊
-
-    private var workshopContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSectionHeader(icon: "magnifyingglass", title: "在线浏览", color: .blue)
-
-            settingsCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    settingsField(label: "Steam Web API Key", systemImage: "lock.fill") {
-                        SecureField("输入您的 Steam Web API Key", text: $workshop.apiKey)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                    }
-                    HStack(spacing: 8) {
-                        Button("申请 API Key") { workshop.openAPIKeyPage() }
-                            .controlSize(.small)
-                        if workshop.hasAPIKey {
-                            Label("已配置", systemImage: "checkmark.circle.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.green)
-                        }
-                    }
-                    Text("可选。不填也能浏览创意工坊（解析工坊网页）；填写后改用 Steam 官方接口，速度更快、更稳定。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            settingsSectionHeader(icon: "arrow.down.circle.fill", title: "下载（steamcmd）", color: .green)
-
-            settingsCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 8) {
-                        Image(systemName: workshop.steamCMDPath == nil ? "xmark.circle.fill" : "checkmark.circle.fill")
-                            .foregroundStyle(workshop.steamCMDPath == nil ? .orange : .green)
-                        Text(workshop.steamCMDPath?.path ?? "未找到 steamcmd")
-                            .font(.system(size: 12, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    if workshop.steamCMDPath == nil {
-                        HStack(spacing: 6) {
-                            Text("用 Homebrew 安装：")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                            Text("brew install --cask steamcmd")
-                                .font(.system(size: 11, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                    }
-
-                    settingsField(label: "Steam 用户名", systemImage: "person.fill") {
-                        TextField("登录 steamcmd 使用的账号名", text: $workshop.steamUsername)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                    }
-
-                    Button("在终端登录 steamcmd") { workshop.loginSteamCMD() }
-                        .controlSize(.small)
-                        .disabled(workshop.steamCMDPath == nil || workshop.steamUsername.isEmpty)
-
-                    Text("账号需要已购买 Wallpaper Engine。首次需要在终端里输入密码和 Steam 令牌完成登录（App 不会读取或保存你的密码），之后 steamcmd 会缓存登录状态，在 App 内即可一键下载。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            settingsSectionHeader(icon: "arrow.triangle.2.circlepath", title: "Steam 订阅同步", color: .teal)
-
-            settingsCard {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 10) {
-                        Image(systemName: steamAccount.isLoggedIn ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
-                            .font(.system(size: 22))
-                            .foregroundStyle(steamAccount.isLoggedIn ? .green : .secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(steamAccount.isLoggedIn ? (steamAccount.personaName ?? "已登录") : "未登录")
-                                .font(.system(size: 13, weight: .semibold))
-                            if let id = steamAccount.steamID {
-                                Text(id)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        if steamAccount.isLoggedIn {
-                            Button("退出登录") { workshop.logoutSteam() }
-                                .controlSize(.small)
-                        } else {
-                            Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }
-                                .controlSize(.small)
-                                .buttonStyle(.borderedProminent)
-                        }
-                    }
-
-                    if steamAccount.isLoggedIn {
-                        Toggle("在 Mac 上下载时同时订阅（Windows 自动获取）", isOn: $workshop.subscribeOnDownload)
-                            .font(.system(size: 12))
-                        Toggle("自动下载在其他设备上新订阅的壁纸", isOn: $workshop.autoDownloadSubscriptions)
-                            .font(.system(size: 12))
-
-                        HStack(spacing: 8) {
-                            Button("立即同步") { workshop.syncSubscriptions(force: true) }
-                                .controlSize(.small)
-                                .disabled(workshop.isSyncing)
-                            if workshop.isSyncing {
-                                ProgressView().controlSize(.small)
-                            } else if let last = workshop.lastSyncAt {
-                                Text("上次同步 \(last.formatted(date: .omitted, time: .shortened)) · \(workshop.subscribedIDs.count) 个订阅")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    Text("在 Steam 官方登录页中登录，App 只使用登录后的会话读取和修改订阅，不会读取或保存密码。同步只在启动、打开工坊页（10 分钟内不重复）或手动点击时进行，请求会限速。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            settingsSectionHeader(icon: "folder.fill", title: "本地壁纸库", color: .purple)
-
-            settingsCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(workshop.libraryRoots, id: \.self) { url in
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder")
-                                .foregroundStyle(.secondary)
-                            Text(url.path)
-                                .font(.system(size: 12, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            if url == StorageManager.shared.workshopContentFolder {
-                                Text("存储位置")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                            } else if url == WorkshopLibrary.steamContentFolder {
-                                Text("Steam 默认")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Button {
-                                    workshop.removeLibraryFolder(url)
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundStyle(.red.opacity(0.8))
-                                }
-                                .buttonStyle(.plain)
-                                .help("从库中移除（不会删除文件）")
-                            }
-                        }
-                    }
-                    Button("添加文件夹…") { workshop.addLibraryFolder() }
-                        .controlSize(.small)
-                        .padding(.top, 4)
-                    Text("可以添加单个壁纸文件夹，或从 Windows 电脑拷贝的整个 steamapps/workshop/content/431960 目录。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Text("壁纸渲染使用开源项目 webwallgl（MIT 许可）。创意工坊内容版权归各自作者所有，仅供个人使用。")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+    init(_ text: String) {
+        self.text = text
     }
 
-    // MARK: - 关于
-    
-    private var aboutContent: some View {
-        VStack(spacing: 24) {
-            Spacer().frame(height: 20)
-            
-            Image(nsImage: NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage ?? NSImage())
-                .resizable()
-                .frame(width: 80, height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-            
-            VStack(spacing: 6) {
-                Text("Scena")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                
-                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                    Text("版本 \(version)")
-                        .font(.system(size: 12))
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// 账号状态行：头像图标 + 名称 + 副标题
+private struct AccountStatusRow<Trailing: View>: View {
+    let isConnected: Bool
+    let title: String
+    let subtitle: String?
+    @ViewBuilder let trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isConnected ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 18))
+                .foregroundStyle(isConnected ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 3)
-                        .background(Color.primary.opacity(0.06))
-                        .clipShape(Capsule())
-                }
-            }
-            
-            Text("图片、视频与创意工坊壁纸")
-                .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            
-            Link(destination: URL(string: "https://wallhaven.cc")!) {
-                HStack(spacing: 5) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 11))
-                    Text("访问 Wallhaven 官网")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(Color.accentColor.opacity(0.12))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            
-            // 更新检查区域
-            VStack(spacing: 12) {
-                Button(action: {
-                    Task { await updateManager.checkForUpdates() }
-                }) {
-                    HStack {
-                        if updateManager.isChecking {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.swap")
-                        }
-                        Text(updateManager.isChecking ? "正在检查..." : "检查更新")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.secondary.opacity(0.15))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(updateManager.isChecking || updateManager.isDownloading)
-                
-                if updateManager.updateAvailable {
-                    VStack(spacing: 8) {
-                        Text("发现新版本: v\(updateManager.latestVersion)")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.green)
-                        
-                        if updateManager.isDownloading {
-                            ProgressView("正在自动更新...")
-                                .controlSize(.small)
-                                .font(.system(size: 11))
-                                .padding(.top, 4)
-                        } else {
-                            Button(action: {
-                                updateManager.downloadAndInstall()
-                            }) {
-                                Text("立即更新并重启")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(Color.blue)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 24)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(12)
-                }
-                
-                if let errorMsg = updateManager.errorMessage {
-                    Text(errorMsg)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                }
-            }
-            .padding(.top, 10)
-            
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-    
-    // MARK: - 复用组件
-    
-    private func settingsSectionHeader(icon: String, title: String, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 14))
-                .foregroundStyle(color)
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-        }
-    }
-    
-    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-            )
-    }
-    
-    private func settingsField<Content: View>(label: String, systemImage: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-            
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(.secondary.opacity(0.7))
-                    .font(.system(size: 12))
-                    .frame(width: 16)
-                content()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-        }
-    }
-    
-    // MARK: - 存储
-
-    private var storageCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: storage.rootPath == nil ? "internaldrive" : "externaldrive")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.blue.opacity(0.85))
-                    .frame(width: 32)
-                VStack(alignment: .leading, spacing: 4) {
-                    if let info = storage.volumeInfo() {
-                        HStack(spacing: 6) {
-                            Text(info.name).font(.system(size: 13, weight: .semibold))
-                            if info.isExternal {
-                                Text("外接盘")
-                                    .font(.system(size: 10, weight: .medium))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.blue.opacity(0.15), in: Capsule())
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                        ProgressView(value: Double(info.total - info.available), total: Double(max(info.total, 1)))
-                            .frame(width: 220)
-                        Text("可用 \(bytes(info.available))，共 \(bytes(info.total))")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("存储盘未连接")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.orange)
-                        Text("连接后已下载的壁纸会自动恢复可用")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(storage.rootPath ?? "默认位置（本机）")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                usageRow("壁纸图片和视频", bytes: storage.usage.wallpapers, color: .blue)
-                usageRow("创意工坊壁纸", bytes: storage.usage.workshop, color: .purple)
-                usageRow("图片缓存（上限 1 GB）", bytes: storage.usage.cache, color: .gray)
-            }
-
-            if storage.isMigrating {
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView(value: Double(storage.migrationProgress.done), total: Double(max(storage.migrationProgress.total, 1)))
-                    Text("正在移动 \(storage.migrationProgress.done)/\(storage.migrationProgress.total)…移动完成前请不要拔出存储盘")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Button("更改位置…") { selectStorageLocation() }
-                    .controlSize(.small)
-                    .buttonStyle(.borderedProminent)
-                if storage.rootPath != nil {
-                    Button("恢复默认位置") { confirmMove(to: nil) }
-                        .controlSize(.small)
-                }
-                Button("在 Finder 中显示") {
-                    NSWorkspace.shared.activateFileViewerSelecting([storage.rootURL ?? storage.wallpaperFolder])
-                }
-                .controlSize(.small)
-                Spacer()
-                Button("清除缓存") { storage.clearImageCache() }
-                    .controlSize(.small)
-            }
-            .disabled(storage.isMigrating)
-
-            Text("下载的 wallhaven 壁纸、导入的图片和视频、创意工坊壁纸都会保存在这里。更改位置时会自动移动已下载的内容，并更新播放列表和动态壁纸的引用。")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            trailing()
         }
-        .onAppear { storage.refreshUsage() }
+    }
+}
+
+private func formatBytes(_ value: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+}
+
+// MARK: - 通用
+
+private struct GeneralSettings: View {
+    @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("在菜单栏显示图标", isOn: $showStatusItem)
+            } header: {
+                Text("菜单栏")
+            } footer: {
+                SettingsFootnote("通过菜单栏图标可以控制动态壁纸和播放列表、随机换一张壁纸。")
+            }
+
+            Section {
+                LabeledContent("关闭主窗口") { Text("继续在后台运行，动态壁纸不中断").foregroundStyle(.secondary) }
+                LabeledContent("退出 App") { Text("动态壁纸定格为当前画面").foregroundStyle(.secondary) }
+            } header: {
+                Text("窗口")
+            }
+
+            Section("快捷键") {
+                shortcut("切换上一张 / 下一张", "← →")
+                shortcut("设为壁纸", "↩")
+                shortcut("隐藏 / 显示界面", "空格")
+                shortcut("下载 / 收藏", "D / L")
+                shortcut("全屏", "F")
+                shortcut("搜索", "/  或  ⌘F")
+                shortcut("切换页签", "1 – 4")
+            }
+        }
+        .formStyle(.grouped)
     }
 
-    private func usageRow(_ title: String, bytes value: Int64, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(title).font(.system(size: 12))
-            Spacer()
-            Text(bytes(value))
-                .font(.system(size: 12, design: .monospaced))
+    private func shortcut(_ title: String, _ keys: String) -> some View {
+        LabeledContent(title) {
+            Text(keys)
+                .font(.system(.body, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
     }
+}
 
-    private func bytes(_ value: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+// MARK: - 账户
+
+private struct AccountSettings: View {
+    @EnvironmentObject private var viewModel: WallpaperViewModel
+    @EnvironmentObject private var workshop: WorkshopViewModel
+    @ObservedObject private var steamAccount = SteamAccountSession.shared
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Form {
+            wallhavenSection
+            if viewModel.isAuthenticated { wallhavenSyncSection }
+            steamSection
+            steamCMDSection
+        }
+        .formStyle(.grouped)
+    }
+
+    private var wallhavenSection: some View {
+        Section {
+            AccountStatusRow(
+                isConnected: viewModel.isAuthenticated,
+                title: viewModel.isAuthenticated ? "已登录" : "未登录",
+                subtitle: viewModel.isAuthenticated && !viewModel.usernameInput.isEmpty ? viewModel.usernameInput : nil
+            ) {
+                if viewModel.isAuthenticated {
+                    Button("退出登录") { viewModel.logout() }
+                }
+            }
+            SecureField("API 密钥", text: $viewModel.apiKeyInput, prompt: Text("在 wallhaven.cc 账户设置中获取"))
+            TextField("用户名", text: $viewModel.usernameInput, prompt: Text("同步收藏夹时需要"))
+            HStack {
+                Button("获取 API 密钥") { viewModel.openAPIKeyPage() }
+                Spacer()
+                Button(viewModel.isAuthenticated ? "更新" : "登录") { viewModel.login() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.apiKeyInput.isEmpty)
+            }
+        } header: {
+            Label("Wallhaven", systemImage: "photo.on.rectangle")
+        } footer: {
+            SettingsFootnote("登录后可浏览 Sketchy / NSFW 内容；填写用户名后可把线上收藏夹同步到本地。")
+        }
+    }
+
+    private var wallhavenSyncSection: some View {
+        Section {
+            HStack {
+                Button("同步线上收藏到本地") {
+                    Task { await viewModel.syncCollections() }
+                }
+                .disabled(viewModel.isSyncing)
+                if viewModel.isSyncing {
+                    ProgressView().controlSize(.small)
+                    Text(viewModel.syncProgress)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        } footer: {
+            SettingsFootnote("受 API 频率限制（每分钟 45 次），收藏较多时需要稍等。")
+        }
+    }
+
+    private var steamSection: some View {
+        Section {
+            AccountStatusRow(
+                isConnected: steamAccount.isLoggedIn,
+                title: steamAccount.isLoggedIn ? (steamAccount.personaName ?? "已登录") : "未登录",
+                subtitle: steamAccount.steamID
+            ) {
+                if steamAccount.isLoggedIn {
+                    Button("退出登录") { workshop.logoutSteam() }
+                } else {
+                    Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            if steamAccount.isLoggedIn {
+                Toggle("在 Mac 上下载时同时订阅", isOn: $workshop.subscribeOnDownload)
+                Toggle("自动下载其他设备上新订阅的壁纸", isOn: $workshop.autoDownloadSubscriptions)
+                HStack {
+                    Button("立即同步订阅") { workshop.syncSubscriptions(force: true) }
+                        .disabled(workshop.isSyncing)
+                    if workshop.isSyncing {
+                        ProgressView().controlSize(.small)
+                    } else if let last = workshop.lastSyncAt {
+                        Text("上次同步 \(last.formatted(date: .omitted, time: .shortened)) · \(workshop.subscribedIDs.count) 个订阅")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Label("Steam 账号（创意工坊订阅）", systemImage: "arrow.triangle.2.circlepath")
+        } footer: {
+            SettingsFootnote("在 Steam 官方登录页登录，只使用登录后的会话读写订阅，不会读取或保存密码。同步在启动、打开工坊页或手动点击时进行，请求会限速。")
+        }
+    }
+
+    private var steamCMDSection: some View {
+        Section {
+            LabeledContent("steamcmd") {
+                if let path = workshop.steamCMDPath {
+                    Label(path.path, systemImage: "checkmark.circle.fill")
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Label("未安装", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            if workshop.steamCMDPath == nil {
+                LabeledContent("安装命令") {
+                    Text("brew install --cask steamcmd")
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+            }
+            TextField("Steam 用户名", text: $workshop.steamUsername, prompt: Text("登录 steamcmd 使用的账号名"))
+            HStack {
+                Spacer()
+                Button("在终端登录 steamcmd") { workshop.loginSteamCMD() }
+                    .disabled(workshop.steamCMDPath == nil || workshop.steamUsername.isEmpty)
+            }
+        } header: {
+            Label("Steam 下载（steamcmd）", systemImage: "arrow.down.circle")
+        } footer: {
+            SettingsFootnote("账号需已购买 Wallpaper Engine。首次需在终端输入密码和 Steam 令牌，之后 steamcmd 会缓存登录状态，App 内即可下载。")
+        }
+    }
+}
+
+// MARK: - 动态壁纸
+
+private struct LiveWallpaperSettings: View {
+    @ObservedObject private var live = LiveWallpaperController.shared
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("当前") {
+                    if let content = live.current {
+                        Text(content.title).lineLimit(1)
+                    } else {
+                        Text("未播放").foregroundStyle(.secondary)
+                    }
+                }
+                if live.isActive {
+                    HStack {
+                        Spacer()
+                        Button(live.isPaused ? "继续播放" : "暂停") { live.togglePause() }
+                        Button("停止动态壁纸") { live.stop() }
+                    }
+                }
+            } header: {
+                Text("播放状态")
+            }
+
+            Section {
+                LabeledContent("音量") {
+                    HStack {
+                        Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                        Slider(value: Binding(get: { live.volume }, set: { live.setVolume($0) }), in: 0...1)
+                            .frame(width: 200)
+                        Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+                    }
+                }
+                Picker("渲染帧率", selection: Binding(get: { live.frameRate }, set: { live.setFrameRate($0) })) {
+                    Text("15 fps（省电）").tag(15)
+                    Text("30 fps").tag(30)
+                    Text("60 fps（流畅）").tag(60)
+                }
+            } header: {
+                Text("播放")
+            } footer: {
+                SettingsFootnote("声音只在主显示器播放。帧率只影响场景和网页类工坊壁纸，视频按原始帧率播放。")
+            }
+
+            Section {
+                LabeledContent("锁屏、睡眠、显示器关闭") { Text("自动暂停").foregroundStyle(.secondary) }
+                LabeledContent("退出 App") { Text("定格为当前画面").foregroundStyle(.secondary) }
+            } header: {
+                Text("节能")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - 创意工坊
+
+private struct WorkshopSettings: View {
+    @EnvironmentObject private var workshop: WorkshopViewModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Form {
+            Section {
+                SecureField("Steam Web API Key", text: $workshop.apiKey, prompt: Text("可选"))
+                HStack {
+                    Button("申请 API Key") { workshop.openAPIKeyPage() }
+                    Spacer()
+                    if workshop.hasAPIKey {
+                        Label("已配置", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                }
+            } header: {
+                Text("在线浏览")
+            } footer: {
+                SettingsFootnote("不填也能浏览创意工坊；填写后改用 Steam 官方接口，速度更快、更稳定。")
+            }
+
+            Section {
+                Stepper(value: $workshop.maxConcurrentDownloads, in: 1...10) {
+                    LabeledContent("同时下载数量") {
+                        Text("\(workshop.maxConcurrentDownloads) 个")
+                            .monospacedDigit()
+                    }
+                }
+                HStack {
+                    Text("下载任务")
+                    Spacer()
+                    Text("\(workshop.downloading.count) 个进行中")
+                        .foregroundStyle(.secondary)
+                    Button("打开") { openWindow(id: DownloadsWindow.id) }
+                }
+            } header: {
+                Text("下载")
+            } footer: {
+                SettingsFootnote("超出数量的壁纸会排队等待。同一个 Steam 账号同时只能运行一个 steamcmd，这里的数量是每次登录处理的壁纸数。")
+            }
+
+            Section {
+                ForEach(workshop.libraryRoots, id: \.self) { url in
+                    HStack {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text(url.path)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        if url == StorageManager.shared.workshopContentFolder {
+                            Text("存储位置").font(.caption).foregroundStyle(.secondary)
+                        } else if url == WorkshopLibrary.steamContentFolder {
+                            Text("Steam 默认").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Button {
+                                workshop.removeLibraryFolder(url)
+                            } label: {
+                                Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("从库中移除（不删除文件）")
+                        }
+                    }
+                }
+                HStack {
+                    Spacer()
+                    Button("添加文件夹…") { workshop.addLibraryFolder() }
+                }
+            } header: {
+                Text("本地壁纸库")
+            } footer: {
+                SettingsFootnote("可以添加单个壁纸文件夹，或从 Windows 电脑拷贝的 steamapps/workshop/content/431960 目录。")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - 存储
+
+private struct StorageSettings: View {
+    @ObservedObject private var storage = StorageManager.shared
+
+    var body: some View {
+        Form {
+            Section {
+                if let info = storage.volumeInfo() {
+                    LabeledContent("磁盘") {
+                        HStack(spacing: 6) {
+                            Text(info.name)
+                            if info.isExternal {
+                                Text("外接盘")
+                                    .font(.caption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            }
+                        }
+                    }
+                    LabeledContent("可用空间") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            ProgressView(value: Double(info.total - info.available), total: Double(max(info.total, 1)))
+                                .frame(width: 180)
+                            Text("\(formatBytes(info.available)) 可用，共 \(formatBytes(info.total))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    LabeledContent("磁盘") {
+                        Label("存储盘未连接", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                LabeledContent("位置") {
+                    Text(storage.rootPath ?? "默认位置（本机）")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if storage.isMigrating {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: Double(storage.migrationProgress.done), total: Double(max(storage.migrationProgress.total, 1)))
+                        Text("正在移动 \(storage.migrationProgress.done)/\(storage.migrationProgress.total)，完成前请不要拔出存储盘")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    Button("在 Finder 中显示") {
+                        NSWorkspace.shared.activateFileViewerSelecting([storage.rootURL ?? storage.wallpaperFolder])
+                    }
+                    Spacer()
+                    if storage.rootPath != nil {
+                        Button("恢复默认位置") { confirmMove(to: nil) }
+                    }
+                    Button("更改位置…") { selectStorageLocation() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .disabled(storage.isMigrating)
+            } header: {
+                Text("存储位置")
+            } footer: {
+                SettingsFootnote("下载的 wallhaven 壁纸、导入的图片和视频、创意工坊壁纸都保存在这里，可以设到外接盘。更改位置时会移动已下载的内容，并更新播放列表和动态壁纸的引用。")
+            }
+
+            Section {
+                usageRow("壁纸图片和视频", storage.usage.wallpapers, .blue)
+                usageRow("创意工坊壁纸", storage.usage.workshop, .purple)
+                usageRow("图片缓存", storage.usage.cache, .gray)
+                HStack {
+                    Spacer()
+                    Button("清除图片缓存") { storage.clearImageCache() }
+                }
+            } header: {
+                Text("空间占用")
+            } footer: {
+                SettingsFootnote("图片缓存上限 1 GB，保留 14 天，清除后缩略图会重新下载。")
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { storage.refreshUsage() }
+    }
+
+    private func usageRow(_ title: String, _ value: Int64, _ color: Color) -> some View {
+        LabeledContent {
+            Text(formatBytes(value)).monospacedDigit().foregroundStyle(.secondary)
+        } label: {
+            Label {
+                Text(title)
+            } icon: {
+                Circle().fill(color).frame(width: 8, height: 8)
+            }
+        }
     }
 
     private func selectStorageLocation() {
@@ -650,14 +524,95 @@ struct SettingsView: View {
 
     private func confirmMove(to root: URL?) {
         let alert = NSAlert()
-        alert.messageText = root == nil ? "恢复默认存储位置？" : "将存储位置改到「\(StorageManager.volumeName(of: root!))」？"
+        alert.messageText = root.map { "将存储位置改到「\(StorageManager.volumeName(of: $0))」？" } ?? "恢复默认存储位置？"
         alert.informativeText = """
         新位置：\(root?.path ?? "~/Pictures/Wallhaven 和 Steam 默认工坊目录")
-        已下载的内容（约 \(bytes(storage.usage.wallpapers + storage.usage.workshop))）会移动到新位置，跨盘移动可能需要一些时间。
+        已下载的内容（约 \(formatBytes(storage.usage.wallpapers + storage.usage.workshop))）会移动到新位置，跨盘移动可能需要一些时间。
         """
         alert.addButton(withTitle: "移动")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         storage.changeLocation(to: root)
+    }
+}
+
+// MARK: - 关于
+
+private struct AboutSettings: View {
+    @StateObject private var updateManager = UpdateManager()
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String
+        return build.map { "\(short) (\($0))" } ?? short
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 16) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .frame(width: 64, height: 64)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Scena").font(.title2.bold())
+                        Text("图片、视频与创意工坊壁纸").foregroundStyle(.secondary)
+                        Text("版本 \(version)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("更新") {
+                HStack {
+                    if updateManager.updateAvailable {
+                        Label("发现新版本 v\(updateManager.latestVersion)", systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(.green)
+                    } else if let error = updateManager.errorMessage {
+                        Text(error).foregroundStyle(.red)
+                    } else {
+                        Text("检查是否有新版本").foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if updateManager.isChecking || updateManager.isDownloading {
+                        ProgressView().controlSize(.small)
+                    }
+                    if updateManager.updateAvailable {
+                        Button("立即更新并重启") { updateManager.downloadAndInstall() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(updateManager.isDownloading)
+                    } else {
+                        Button("检查更新") { Task { await updateManager.checkForUpdates() } }
+                            .disabled(updateManager.isChecking)
+                    }
+                }
+                if updateManager.updateAvailable, !updateManager.releaseNotes.isEmpty {
+                    Text(updateManager.releaseNotes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(6)
+                }
+            }
+
+            Section("链接") {
+                Link(destination: URL(string: "https://wallhaven.cc")!) {
+                    LabeledContent("Wallhaven 官网") { Image(systemName: "arrow.up.right") }
+                }
+                Link(destination: URL(string: "https://steamcommunity.com/app/431960/workshop/")!) {
+                    LabeledContent("Wallpaper Engine 创意工坊") { Image(systemName: "arrow.up.right") }
+                }
+            }
+
+            Section {
+                LabeledContent("webwallgl") { Text("MIT · 工坊壁纸渲染").foregroundStyle(.secondary) }
+                LabeledContent("Kingfisher") { Text("MIT · 图片加载与缓存").foregroundStyle(.secondary) }
+            } header: {
+                Text("开源组件")
+            } footer: {
+                SettingsFootnote("创意工坊内容版权归各自作者所有，仅供个人使用。")
+            }
+        }
+        .formStyle(.grouped)
     }
 }
