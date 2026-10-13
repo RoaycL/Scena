@@ -7,7 +7,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-enum MediaType {
+nonisolated enum MediaType {
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "webp", "gif"]
     static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
 

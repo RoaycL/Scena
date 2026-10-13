@@ -23,24 +23,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct wallhavenApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = WallpaperViewModel()
+    @StateObject private var workshop = WorkshopViewModel()
     @StateObject private var liveController = LiveWallpaperController.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .environmentObject(workshop)
         }
         .windowStyle(.hiddenTitleBar)
 
         Settings {
             SettingsView()
                 .environmentObject(viewModel)
+                .environmentObject(workshop)
         }
 
         // 动态壁纸播放时在菜单栏显示控制项
         MenuBarExtra(isInserted: .constant(liveController.isActive)) {
-            if let url = liveController.currentURL {
-                Text(url.deletingPathExtension().lastPathComponent)
+            if let content = liveController.current {
+                Text(content.title)
                 Divider()
             }
             Button(liveController.isPaused ? "继续播放" : "暂停") { liveController.togglePause() }

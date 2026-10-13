@@ -46,6 +46,15 @@ private struct BackgroundLayer: View {
                 if item.isVideo, let url = item.local?.url {
                     LoopingVideoView(url: url)
                         .frame(width: geo.size.width, height: geo.size.height)
+                } else if let workshopItem = item.playableWorkshopItem {
+                    // 工坊壁纸实时渲染；首帧出来之前保留模糊封面
+                    WorkshopPlayerView(item: workshopItem) { state in
+                        if state == .ready {
+                            withAnimation(.easeInOut(duration: 0.4)) { isFullLoaded = true }
+                        }
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .opacity(isFullLoaded ? 1 : 0)
                 } else if let full = item.fullSource {
                     KFImage(source: full)
                         .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))

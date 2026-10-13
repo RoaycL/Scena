@@ -100,9 +100,9 @@ struct LiveWallpaperStatus: View {
     @ObservedObject var controller: LiveWallpaperController
 
     var body: some View {
-        if let url = controller.currentURL {
+        if let content = controller.current {
             Menu {
-                Text(url.deletingPathExtension().lastPathComponent)
+                Text(content.title)
                 Divider()
                 Button(controller.isPaused ? "继续播放" : "暂停") { controller.togglePause() }
                 Button("停止动态壁纸", role: .destructive) { controller.stop() }
@@ -111,9 +111,11 @@ struct LiveWallpaperStatus: View {
                     Circle()
                         .fill(controller.isPaused ? Color.orange : Color.green)
                         .frame(width: 7, height: 7)
-                    Text(controller.isPaused ? "动态壁纸已暂停" : "动态壁纸")
-                        .font(.system(size: 12, weight: .semibold))
+                    Text("LIVE")
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1)
                         .foregroundStyle(.white.opacity(0.85))
+                        .fixedSize()
                 }
             }
             .menuStyle(.borderlessButton)
@@ -122,7 +124,7 @@ struct LiveWallpaperStatus: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(.ultraThinMaterial, in: Capsule())
-            .help("动态壁纸正在桌面播放")
+            .help(controller.isPaused ? "动态壁纸已暂停" : "动态壁纸正在桌面播放：\(content.title)")
         }
     }
 }

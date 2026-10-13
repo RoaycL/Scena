@@ -11,6 +11,7 @@ import Kingfisher
 
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
+    @EnvironmentObject private var workshop: WorkshopViewModel
     @AppStorage(DownloadLocation.storageKey) private var downloadPath: String = DownloadLocation.defaultPath
     @State private var selectedTab = 0
     @StateObject private var updateManager = UpdateManager()
@@ -18,6 +19,7 @@ struct SettingsView: View {
     private let tabs: [(String, String)] = [
         ("常规", "gearshape.fill"),
         ("账户", "person.crop.circle.fill"),
+        ("创意工坊", "square.stack.3d.up.fill"),
         ("关于", "info.circle.fill")
     ]
     
@@ -61,7 +63,8 @@ struct SettingsView: View {
                     switch selectedTab {
                     case 0: generalContent
                     case 1: accountContent
-                    case 2: aboutContent
+                    case 2: workshopContent
+                    case 3: aboutContent
                     default: EmptyView()
                     }
                 }
@@ -215,6 +218,121 @@ struct SettingsView: View {
         }
     }
     
+    // MARK: - 创意工坊
+
+    private var workshopContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            settingsSectionHeader(icon: "magnifyingglass", title: "在线浏览", color: .blue)
+
+            settingsCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    settingsField(label: "Steam Web API Key", systemImage: "lock.fill") {
+                        SecureField("输入您的 Steam Web API Key", text: $workshop.apiKey)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                    }
+                    HStack(spacing: 8) {
+                        Button("申请 API Key") { workshop.openAPIKeyPage() }
+                            .controlSize(.small)
+                        if workshop.hasAPIKey {
+                            Label("已配置", systemImage: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    Text("用于通过 Steam 官方接口浏览、搜索 Wallpaper Engine 创意工坊。粘贴工坊链接查看单个壁纸不需要 Key。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            settingsSectionHeader(icon: "arrow.down.circle.fill", title: "下载（steamcmd）", color: .green)
+
+            settingsCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: workshop.steamCMDPath == nil ? "xmark.circle.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(workshop.steamCMDPath == nil ? .orange : .green)
+                        Text(workshop.steamCMDPath?.path ?? "未找到 steamcmd")
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if workshop.steamCMDPath == nil {
+                        HStack(spacing: 6) {
+                            Text("用 Homebrew 安装：")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Text("brew install --cask steamcmd")
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    settingsField(label: "Steam 用户名", systemImage: "person.fill") {
+                        TextField("登录 steamcmd 使用的账号名", text: $workshop.steamUsername)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                    }
+
+                    Button("在终端登录 steamcmd") { workshop.loginSteamCMD() }
+                        .controlSize(.small)
+                        .disabled(workshop.steamCMDPath == nil || workshop.steamUsername.isEmpty)
+
+                    Text("账号需要已购买 Wallpaper Engine。首次需要在终端里输入密码和 Steam 令牌完成登录（App 不会读取或保存你的密码），之后 steamcmd 会缓存登录状态，在 App 内即可一键下载。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            settingsSectionHeader(icon: "folder.fill", title: "本地壁纸库", color: .purple)
+
+            settingsCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(workshop.libraryRoots, id: \.self) { url in
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
+                            Text(url.path)
+                                .font(.system(size: 12, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            if url == WorkshopLibrary.steamContentFolder {
+                                Text("Steam 默认")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Button {
+                                    workshop.removeLibraryFolder(url)
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .foregroundStyle(.red.opacity(0.8))
+                                }
+                                .buttonStyle(.plain)
+                                .help("从库中移除（不会删除文件）")
+                            }
+                        }
+                    }
+                    Button("添加文件夹…") { workshop.addLibraryFolder() }
+                        .controlSize(.small)
+                        .padding(.top, 4)
+                    Text("可以添加单个壁纸文件夹，或从 Windows 电脑拷贝的整个 steamapps/workshop/content/431960 目录。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Text("壁纸渲染使用开源项目 webwallgl（MIT 许可）。创意工坊内容版权归各自作者所有，仅供个人使用。")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - 关于
     
     private var aboutContent: some View {

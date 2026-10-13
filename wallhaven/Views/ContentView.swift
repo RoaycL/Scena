@@ -13,12 +13,14 @@ enum MainTab: String, CaseIterable, Identifiable {
     case home = "首页"
     case favorites = "收藏"
     case local = "本地"
+    case workshop = "工坊"
 
     var id: String { rawValue }
 }
 
 struct ContentView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
+    @EnvironmentObject private var workshop: WorkshopViewModel
     @StateObject private var localViewModel = LocalMediaViewModel()
     @StateObject private var immersive = ImmersiveWindowController()
     @ObservedObject private var toastCenter = ToastCenter.shared
@@ -27,6 +29,8 @@ struct ContentView: View {
     @State private var currentTab: MainTab = .home
     @State private var favoriteSelectionID: String?
     @State private var localSelectionID: String?
+    @State private var workshopSelectionID: String?
+    @State private var isWorkshopFilterPresented = false
     /// 背景只在有新选中项时更新：搜索重置、列表清空期间保持上一张，不会跳到随机图
     @State private var backgroundItem: GalleryItem?
     @State private var prefetcher: ImagePrefetcher?
@@ -50,6 +54,8 @@ struct ContentView: View {
             return wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .local:
             return localViewModel.items.map { GalleryItem(origin: .local($0)) }
+        case .workshop:
+            return workshop.items.map { GalleryItem(origin: .workshop($0)) }
         }
     }
 
@@ -58,6 +64,7 @@ struct ContentView: View {
         case .home: viewModel.selectedWallpaper.map { GalleryItem(origin: .remote($0)).id }
         case .favorites: favoriteSelectionID
         case .local: localSelectionID
+        case .workshop: workshopSelectionID
         }
     }
 
@@ -73,6 +80,7 @@ struct ContentView: View {
         case .home: viewModel.selectedWallpaper = item.remote
         case .favorites: favoriteSelectionID = item.id
         case .local: localSelectionID = item.id
+        case .workshop: workshopSelectionID = item.id
         }
     }
 
@@ -93,6 +101,9 @@ struct ContentView: View {
         select(item)
         if currentTab == .home, let wallpaper = item.remote {
             viewModel.loadMoreIfNeeded(current: wallpaper)
+        }
+        if let workshopItem = item.workshop {
+            workshop.loadMoreIfNeeded(current: workshopItem)
         }
     }
 
@@ -116,6 +127,7 @@ struct ContentView: View {
         switch item.origin {
         case .remote(let wallpaper): viewModel.downloadAndApply(wallpaper)
         case .local(let local): localViewModel.applyWallpaper(local)
+        case .workshop(let workshopItem): workshop.apply(workshopItem)
         }
     }
 
@@ -147,6 +159,7 @@ struct ContentView: View {
         case .character("1"): switchTab(.home)
         case .character("2"): switchTab(.favorites)
         case .character("3"): switchTab(.local)
+        case .character("4"): switchTab(.workshop)
         default:
             return false
         }
@@ -199,11 +212,20 @@ struct ContentView: View {
             immersive.keyHandler = handleKey
             viewModel.search(reset: true)
             localViewModel.loadMedia()
+            workshop.refreshLibrary()
         }
         .onChange(of: currentTab) {
             if currentTab == .local { localViewModel.loadMedia() }
+            if currentTab == .workshop { workshop.refreshLibrary() }
             ensureValidSelection()
         }
+        .onChange(of: workshop.mode) {
+            if workshop.mode == .online, workshop.onlineItems.isEmpty { workshop.search(reset: true) }
+        }
+        .onChange(of: workshop.sort) { workshop.search(reset: true) }
+        .onChange(of: workshop.typeFilter) { workshop.search(reset: true) }
+        .onChange(of: workshop.includeQuestionable) { workshop.search(reset: true) }
+        .onChange(of: isWorkshopFilterPresented) { _, presented in immersive.setHold("workshopFilter", active: presented) }
         .onChange(of: currentItems.map(\.id), initial: true) {
             ensureValidSelection()
         }
@@ -286,6 +308,8 @@ struct ContentView: View {
                     Button { switchTab(tab) } label: {
                         Text(tab.rawValue)
                             .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                            .fixedSize()
                             .foregroundStyle(currentTab == tab ? .white : .white.opacity(0.6))
                             .padding(.horizontal, 16)
                             .padding(.vertical, 7)
@@ -319,6 +343,23 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .help("导入图片或视频（视频可设为动态壁纸）")
+            case .workshop:
+                WorkshopModePicker()
+                if workshop.mode == .online {
+                    workshopSearchField
+                    workshopFilterButton
+                } else {
+                    Button { workshop.addLibraryFolder() } label: {
+                        Label("添加文件夹", systemImage: "folder.badge.plus")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("添加 Wallpaper Engine 壁纸文件夹或工坊目录")
+                }
             }
 
             SettingsLink {
@@ -368,6 +409,56 @@ struct ContentView: View {
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+    }
+
+    private var workshopSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+            TextField("搜索工坊或粘贴链接", text: $workshop.query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .focused($isSearchFocused)
+                .frame(width: isSearchFocused ? 170 : 120)
+                .onSubmit {
+                    workshop.search(reset: true)
+                    isSearchFocused = false
+                }
+            if !workshop.query.isEmpty {
+                Button {
+                    workshop.query = ""
+                    workshop.search(reset: true)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+    }
+
+    private var workshopFilterButton: some View {
+        // 工坊页顶栏元素较多，筛选按钮只显示图标
+        Button { isWorkshopFilterPresented.toggle() } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 34, height: 34)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help("筛选与排序：\(workshop.sort.label) · \(workshop.typeFilter.label)")
+        .popover(isPresented: $isWorkshopFilterPresented, arrowEdge: .bottom) {
+            WorkshopFilterPanel()
+                .environmentObject(workshop)
+        }
     }
 
     private var filterButton: some View {
@@ -452,7 +543,8 @@ struct ContentView: View {
     @ViewBuilder
     private func gallery(in size: CGSize) -> some View {
         let items = currentItems
-        let isLoading = currentTab == .home && viewModel.isLoading
+        let isLoading = (currentTab == .home && viewModel.isLoading)
+            || (currentTab == .workshop && workshop.mode == .online && workshop.isLoading)
 
         if items.isEmpty && !isLoading {
             emptyState
@@ -477,6 +569,9 @@ struct ContentView: View {
                     onItemAppear: { item in
                         if currentTab == .home, let wallpaper = item.remote {
                             viewModel.loadMoreIfNeeded(current: wallpaper)
+                        }
+                        if let workshopItem = item.workshop {
+                            workshop.loadMoreIfNeeded(current: workshopItem)
                         }
                     },
                     contextMenu: { contextMenu(for: $0) }
@@ -507,10 +602,39 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
                 Button("导入图片或视频") { localViewModel.importFiles() }.buttonStyle(.bordered)
+            case .workshop:
+                workshopEmptyState
             }
         }
         .foregroundStyle(.white.opacity(0.85))
         .environment(\.colorScheme, .dark)
+    }
+
+    @ViewBuilder
+    private var workshopEmptyState: some View {
+        Image(systemName: "square.stack.3d.up").font(.system(size: 34, weight: .light))
+        if workshop.mode == .library {
+            Text("还没有 Wallpaper Engine 壁纸")
+            Text("添加从 Steam 下载的壁纸文件夹，或切换到「在线」浏览创意工坊")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+            HStack {
+                Button("添加文件夹") { workshop.addLibraryFolder() }.buttonStyle(.bordered)
+                Button("在线浏览") { workshop.mode = .online }.buttonStyle(.bordered)
+            }
+        } else if !workshop.hasAPIKey {
+            Text("浏览创意工坊需要 Steam Web API Key")
+            Text("在设置 →「创意工坊」中填写（可在 Steam 官网免费申请）")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+            HStack {
+                Button("申请 API Key") { workshop.openAPIKeyPage() }.buttonStyle(.bordered)
+                SettingsLink { Text("打开设置") }.buttonStyle(.bordered)
+            }
+        } else {
+            Text("没有找到符合条件的壁纸")
+            Button("调整筛选") { isWorkshopFilterPresented = true }.buttonStyle(.bordered)
+        }
     }
 
     @ViewBuilder
@@ -551,7 +675,67 @@ struct ContentView: View {
                 }
                 CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
             }
+
+        case .workshop(let workshopItem):
+            workshopInfoPanel(workshopItem)
         }
+    }
+
+    @ViewBuilder
+    private func workshopInfoPanel(_ item: WorkshopItem) -> some View {
+        let isLive = item.localFolder.map { liveController.currentURL?.standardizedFileURL == $0.standardizedFileURL } ?? false
+        let isDownloading = workshop.downloading.contains(item.id)
+        InfoPanel(
+            eyebrow: isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(item.type.label)",
+            title: item.title,
+            meta: workshopMeta(item),
+            tags: item.tags
+        ) {
+            if !item.type.isPlayable {
+                Text("Windows 程序，macOS 无法运行")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else if item.isDownloaded {
+                PrimaryActionButton(title: "设为动态壁纸") { workshop.apply(item) }
+            } else if isDownloading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text("下载中…").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                    Button("取消") { workshop.cancelDownload(item) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+            } else {
+                PrimaryActionButton(title: "下载并应用", systemImage: "arrow.down") { workshop.apply(item) }
+            }
+
+            if let folder = item.localFolder {
+                CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                }
+            }
+            if item.workshopPageURL != nil {
+                CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开（可订阅）") { workshop.openInSteam(item) }
+            }
+            if item.isDownloaded {
+                CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { workshop.delete(item) }
+            }
+        }
+    }
+
+    private func workshopMeta(_ item: WorkshopItem) -> [String] {
+        var meta: [String] = []
+        if item.fileSize > 0 {
+            meta.append(ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file))
+        }
+        if item.subscriptions > 0 { meta.append("\(item.subscriptions) 订阅") }
+        if let rating = item.contentRating { meta.append(rating) }
+        meta.append(item.isDownloaded ? "已下载" : "未下载")
+        return meta
     }
 
     private func remoteMeta(_ wallpaper: WallhavenWallpaper) -> [String] {
@@ -578,6 +762,23 @@ struct ContentView: View {
             Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([local.url]) }
             Divider()
             Button("移到废纸篓", role: .destructive) { deleteLocal(local) }
+        case .workshop(let workshopItem):
+            if workshopItem.type.isPlayable {
+                Button(workshopItem.isDownloaded ? "设为动态壁纸" : "下载并应用") { workshop.apply(workshopItem) }
+            }
+            if !workshopItem.isDownloaded, workshopItem.type.isPlayable {
+                Button("仅下载") { workshop.download(workshopItem) }
+            }
+            if let folder = workshopItem.localFolder {
+                Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
+            }
+            if workshopItem.workshopPageURL != nil {
+                Button("在 Steam 中打开") { workshop.openInSteam(workshopItem) }
+            }
+            if workshopItem.isDownloaded {
+                Divider()
+                Button("移到废纸篓", role: .destructive) { workshop.delete(workshopItem) }
+            }
         }
     }
 }

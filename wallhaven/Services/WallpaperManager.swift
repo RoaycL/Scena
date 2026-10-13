@@ -11,7 +11,7 @@ enum WallpaperManager {
     /// 图片 → 设为系统壁纸（所有显示器）；视频 → 启动动态壁纸
     static func applyWallpaper(from fileURL: URL) throws {
         if MediaType.isVideo(fileURL) {
-            try LiveWallpaperController.shared.start(fileURL)
+            try LiveWallpaperController.shared.start(video: fileURL)
             return
         }
 
