@@ -248,6 +248,13 @@ final class WorkshopViewModel: ObservableObject {
             if let localItem = local[item.id] {
                 item.localFolder = localItem.localFolder
                 item.entryFile = localItem.entryFile
+                // 已下载时优先用本地自带的预览图（线上接口查不到详情的受限条目没有预览图），
+                // 线上缺失的类型、标签、分级也用本地 project.json 补上
+                if let localPreview = localItem.previewURL { item.previewURL = localPreview }
+                if item.type == .unknown { item.type = localItem.type }
+                if item.tags.isEmpty { item.tags = localItem.tags }
+                if item.contentRating == nil { item.contentRating = localItem.contentRating }
+                if item.fileSize == 0 { item.fileSize = localItem.fileSize }
             } else {
                 item.localFolder = nil
             }
