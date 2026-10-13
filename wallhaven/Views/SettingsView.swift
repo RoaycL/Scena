@@ -385,7 +385,7 @@ struct SettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18))
             
             VStack(spacing: 6) {
-                Text("Wallhaven")
+                Text("Scena")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                 
                 if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
@@ -399,7 +399,7 @@ struct SettingsView: View {
                 }
             }
             
-            Text("非官方 Wallhaven macOS 客户端")
+            Text("图片、视频与创意工坊壁纸")
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
             

@@ -235,7 +235,7 @@ struct StatusMenuContent: View {
         SettingsLink { Text("偏好设置…") }
             .keyboardShortcut(",")
         Divider()
-        Button("退出 wallhaven") { NSApp.terminate(nil) }
+        Button("退出 Scena") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 

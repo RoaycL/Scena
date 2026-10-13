@@ -70,7 +70,7 @@ struct wallhavenApp: App {
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
 
     var body: some Scene {
-        WindowGroup(id: MainWindow.id) {
+        WindowGroup("Scena", id: MainWindow.id) {
             ContentView()
                 .environmentObject(viewModel)
                 .environmentObject(workshop)

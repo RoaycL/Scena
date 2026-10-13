@@ -28,7 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		84ACC96A2F92266200CE2095 /* wallhaven.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wallhaven.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		84ACC96A2F92266200CE2095 /* wallhaven.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Scena.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		84ACC9792F92266300CE2095 /* wallhavenTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wallhavenTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		84ACC9832F92266300CE2095 /* wallhavenUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = wallhavenUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -437,7 +437,9 @@
 				);
 				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.roayc.wallhaven;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Scena;
+				SWIFT_MODULE_NAME = wallhaven;
+				INFOPLIST_KEY_CFBundleDisplayName = Scena;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -479,7 +481,9 @@
 				);
 				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.roayc.wallhaven;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Scena;
+				SWIFT_MODULE_NAME = wallhaven;
+				INFOPLIST_KEY_CFBundleDisplayName = Scena;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -507,7 +511,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/wallhaven.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/wallhaven";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scena.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scena";
 			};
 			name = Debug;
 		};
@@ -528,7 +532,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/wallhaven.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/wallhaven";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scena.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scena";
 			};
 			name = Release;
 		};

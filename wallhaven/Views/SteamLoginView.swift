@@ -41,7 +41,7 @@ struct SteamLoginView: View {
                 }
             }
 
-            Text("在 Steam 官方页面中登录。wallhaven 不会读取或保存你的密码，只使用登录后的会话同步创意工坊订阅。")
+            Text("在 Steam 官方页面中登录。Scena 不会读取或保存你的密码，只使用登录后的会话同步创意工坊订阅。")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

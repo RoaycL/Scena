@@ -145,7 +145,7 @@ struct WorkshopFilterPanel: View {
     var maxHeight: CGFloat = 600
 
     var body: some View {
-        GlassPanel(width: 420, maxHeight: maxHeight) {
+        GlassPanel(width: 360, maxHeight: maxHeight) {
             HStack {
                 Text("筛选")
                     .font(.system(size: 15, weight: .bold))
