@@ -11,10 +11,7 @@ import Kingfisher
 
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
-    @AppStorage("downloadPath") private var downloadPath: String = {
-        let defaultPath = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Wallhaven").path ?? ""
-        return defaultPath
-    }()
+    @AppStorage(DownloadLocation.storageKey) private var downloadPath: String = DownloadLocation.defaultPath
     @State private var selectedTab = 0
     @StateObject private var updateManager = UpdateManager()
     

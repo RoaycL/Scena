@@ -19,11 +19,9 @@ struct LocalMediaItem: Identifiable, Sendable {
 final class LocalMediaViewModel: ObservableObject {
     @Published private(set) var items: [LocalMediaItem] = []
     @Published var errorMessage: String?
-    @AppStorage("downloadPath") private var downloadPath: String = {
-        return FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Wallhaven").path ?? ""
-    }()
-    
+
     private var directoryURL: URL? {
+        let downloadPath = DownloadLocation.currentPath
         guard !downloadPath.isEmpty else { return nil }
         return URL(fileURLWithPath: downloadPath, isDirectory: true)
     }

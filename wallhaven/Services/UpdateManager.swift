@@ -42,7 +42,7 @@ class UpdateManager: ObservableObject {
             }
             
             let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
-            let latestVer = release.tag_name.replacingOccurrences(of: "v", with: "")
+            let latestVer = release.tag_name.hasPrefix("v") ? String(release.tag_name.dropFirst()) : release.tag_name
             
             let currentVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
             

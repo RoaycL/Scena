@@ -5,18 +5,28 @@
 //  Created by RoaycL on 2026/4/17.
 //
 
-import SwiftUI
+import Foundation
 
-struct DownloadService {
-    @AppStorage("downloadPath") private var downloadPath: String = {
-        return FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Wallhaven").path ?? ""
+enum DownloadLocation {
+    static let storageKey = "downloadPath"
+
+    static let defaultPath: String = {
+        FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Wallhaven").path ?? ""
     }()
 
+    /// 当前下载目录（读取 UserDefaults，每次调用都拿到最新设置）
+    static var currentPath: String {
+        let stored = UserDefaults.standard.string(forKey: storageKey) ?? ""
+        return stored.isEmpty ? defaultPath : stored
+    }
+}
+
+struct DownloadService {
     private let session = URLSession(configuration: .default)
     private let fm = FileManager.default
 
     func download(_ wallpaper: WallhavenWallpaper) async throws -> URL {
-        let destinationFolder = URL(fileURLWithPath: downloadPath, isDirectory: true)
+        let destinationFolder = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true)
         if !fm.fileExists(atPath: destinationFolder.path) {
             try fm.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
         }
@@ -28,15 +38,18 @@ struct DownloadService {
         }
 
         let (tempURL, response) = try await session.download(from: wallpaper.path)
+        defer { try? fm.removeItem(at: tempURL) }
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             throw WallperError.network("下载失败。")
         }
-        
-        // 使用 Data 写入可以避免跨卷/跨沙盒 `moveItem` 的权限问题
-        let data = try Data(contentsOf: tempURL)
-        try data.write(to: destination, options: .atomic)
-        try? fm.removeItem(at: tempURL)
-        
+
+        // 优先移动临时文件（不占内存）；跨卷失败时退回到流式复制
+        do {
+            try fm.moveItem(at: tempURL, to: destination)
+        } catch {
+            try fm.copyItem(at: tempURL, to: destination)
+        }
+
         return destination
     }
 }
