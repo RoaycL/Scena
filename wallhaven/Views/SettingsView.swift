@@ -12,6 +12,8 @@ import Kingfisher
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
+    @ObservedObject private var steamAccount = SteamAccountSession.shared
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(DownloadLocation.storageKey) private var downloadPath: String = DownloadLocation.defaultPath
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
     @State private var selectedTab = 0
@@ -295,6 +297,61 @@ struct SettingsView: View {
                         .disabled(workshop.steamCMDPath == nil || workshop.steamUsername.isEmpty)
 
                     Text("账号需要已购买 Wallpaper Engine。首次需要在终端里输入密码和 Steam 令牌完成登录（App 不会读取或保存你的密码），之后 steamcmd 会缓存登录状态，在 App 内即可一键下载。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            settingsSectionHeader(icon: "arrow.triangle.2.circlepath", title: "Steam 订阅同步", color: .teal)
+
+            settingsCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        Image(systemName: steamAccount.isLoggedIn ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                            .font(.system(size: 22))
+                            .foregroundStyle(steamAccount.isLoggedIn ? .green : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(steamAccount.isLoggedIn ? (steamAccount.personaName ?? "已登录") : "未登录")
+                                .font(.system(size: 13, weight: .semibold))
+                            if let id = steamAccount.steamID {
+                                Text(id)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if steamAccount.isLoggedIn {
+                            Button("退出登录") { workshop.logoutSteam() }
+                                .controlSize(.small)
+                        } else {
+                            Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                        }
+                    }
+
+                    if steamAccount.isLoggedIn {
+                        Toggle("在 Mac 上下载时同时订阅（Windows 自动获取）", isOn: $workshop.subscribeOnDownload)
+                            .font(.system(size: 12))
+                        Toggle("自动下载在其他设备上新订阅的壁纸", isOn: $workshop.autoDownloadSubscriptions)
+                            .font(.system(size: 12))
+
+                        HStack(spacing: 8) {
+                            Button("立即同步") { workshop.syncSubscriptions(force: true) }
+                                .controlSize(.small)
+                                .disabled(workshop.isSyncing)
+                            if workshop.isSyncing {
+                                ProgressView().controlSize(.small)
+                            } else if let last = workshop.lastSyncAt {
+                                Text("上次同步 \(last.formatted(date: .omitted, time: .shortened)) · \(workshop.subscribedIDs.count) 个订阅")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    Text("在 Steam 官方登录页中登录，App 只使用登录后的会话读取和修改订阅，不会读取或保存密码。同步只在启动、打开工坊页（10 分钟内不重复）或手动点击时进行，请求会限速。")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)

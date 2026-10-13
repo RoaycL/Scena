@@ -90,6 +90,10 @@ struct WallhavenCommands: Commands {
                 .disabled(actions?.canOpenInBrowser != true)
         }
 
+        CommandMenu("播放列表") {
+            PlaylistCommands()
+        }
+
         CommandMenu("动态壁纸") {
             if let content = liveController.current {
                 Text(content.title)
@@ -104,6 +108,46 @@ struct WallhavenCommands: Commands {
     }
 }
 
+/// 播放列表菜单项（顶部菜单栏和状态栏共用）
+struct PlaylistCommands: View {
+    @ObservedObject private var manager = PlaylistManager.shared
+    @Environment(\.openWindow) private var openWindow
+    var showsManageShortcut = true
+
+    var body: some View {
+        if showsManageShortcut {
+            Button("管理播放列表…") { openWindow(id: PlaylistsWindow.id) }
+                .keyboardShortcut("p", modifiers: [.command, .option])
+        } else {
+            Button("管理播放列表…") { openWindow(id: PlaylistsWindow.id) }
+        }
+
+        if let active = manager.activePlaylist {
+            Divider()
+            Text("正在播放：\(active.name)")
+            Button("下一张") { manager.next() }
+            Button("上一张") { manager.previous() }
+            Button("停止播放列表") { manager.stop() }
+        }
+
+        if !manager.playlists.isEmpty {
+            Divider()
+            ForEach(manager.playlists) { playlist in
+                Button {
+                    manager.play(playlist.id)
+                } label: {
+                    if manager.activeID == playlist.id {
+                        Label(playlist.name, systemImage: "checkmark")
+                    } else {
+                        Text("播放「\(playlist.name)」")
+                    }
+                }
+                .disabled(playlist.entries.isEmpty)
+            }
+        }
+    }
+}
+
 /// 状态栏图标的菜单
 struct StatusMenuContent: View {
     @ObservedObject var liveController: LiveWallpaperController
@@ -111,6 +155,9 @@ struct StatusMenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        PlaylistCommands(showsManageShortcut: false)
+        Divider()
+
         if let content = liveController.current {
             Text("动态壁纸：\(content.title)")
             Button(liveController.isPaused ? "继续播放" : "暂停") { liveController.togglePause() }

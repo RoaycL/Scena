@@ -375,6 +375,7 @@ final class WallpaperViewModel: ObservableObject {
     }
 
     func downloadAndApply(_ wallpaper: WallhavenWallpaper) {
+        PlaylistManager.shared.userDidApplyManually()
         Task {
             do {
                 ToastCenter.shared.show("正在下载并设为壁纸…", style: .progress)

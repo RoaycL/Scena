@@ -311,9 +311,30 @@ private struct WorkshopDetailPanel: View {
                 .help("回车")
             }
 
+            if workshop.isLoggedIn, item.workshopPageURL != nil {
+                let subscribed = workshop.isSubscribed(item)
+                Button { workshop.toggleSubscription(item) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: subscribed ? "checkmark.circle.fill" : "plus.circle")
+                        Text(subscribed ? "已订阅" : "订阅")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(subscribed ? .green : .white.opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(.white.opacity(0.1), in: Capsule())
+                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help(subscribed ? "已在 Steam 订阅，Windows 上的 Wallpaper Engine 会同步；点击取消订阅" : "订阅到 Steam 账号，Windows 上的 Wallpaper Engine 会自动下载")
+            }
+
             HStack(spacing: 8) {
                 if !item.isDownloaded, item.type.isPlayable, !isDownloading {
                     CircleIconButton(systemImage: "arrow.down.to.line", help: "仅下载") { workshop.download(item) }
+                }
+                if item.isDownloaded {
+                    AddToPlaylistButton(item: GalleryItem(origin: .workshop(item)))
                 }
                 if item.workshopPageURL != nil {
                     CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开（可订阅）") { workshop.openInSteam(item) }
@@ -322,7 +343,21 @@ private struct WorkshopDetailPanel: View {
                     CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
                         NSWorkspace.shared.activateFileViewerSelecting([folder])
                     }
-                    CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { workshop.delete(item) }
+                    if workshop.isSubscribed(item) {
+                        Menu {
+                            Button("移到废纸篓") { workshop.delete(item) }
+                            Button("移到废纸篓并取消订阅", role: .destructive) { workshop.delete(item, unsubscribe: true) }
+                        } label: {
+                            CircleIconLabel(systemImage: "trash", tint: .red.opacity(0.9))
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("删除")
+                    } else {
+                        CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { workshop.delete(item) }
+                    }
                 }
             }
         }

@@ -102,6 +102,7 @@ final class LocalMediaViewModel: ObservableObject {
     }
 
     func applyWallpaper(_ item: LocalMediaItem) {
+        PlaylistManager.shared.userDidApplyManually()
         do {
             try WallpaperManager.applyWallpaper(from: item.url)
             toast.show(item.isVideo ? "动态壁纸已启用" : "壁纸已应用", style: .success)

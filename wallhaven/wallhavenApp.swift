@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 不需要窗口标签页，去掉「显示」菜单里的 Show Tab Bar
         NSWindow.allowsAutomaticWindowTabbing = false
         LiveWallpaperController.shared.restore()
+        PlaylistManager.shared.restore()
     }
 
     // 关闭主窗口后继续运行，动态壁纸不中断
@@ -49,6 +50,17 @@ struct wallhavenApp: App {
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
         }
+
+        Window("播放列表", id: PlaylistsWindow.id) {
+            PlaylistsView()
+        }
+        .defaultSize(width: 760, height: 520)
+
+        Window("登录 Steam", id: SteamLoginWindow.id) {
+            SteamLoginView()
+        }
+        .defaultSize(width: 520, height: 680)
+        .windowResizability(.contentMinSize)
 
         // 状态栏图标（可在设置中关闭）
         MenuBarExtra(isInserted: $showStatusItem) {

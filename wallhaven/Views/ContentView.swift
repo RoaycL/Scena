@@ -21,6 +21,7 @@ enum MainTab: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var localViewModel = LocalMediaViewModel()
     @StateObject private var immersive = ImmersiveWindowController()
     @ObservedObject private var toastCenter = ToastCenter.shared
@@ -280,15 +281,21 @@ struct ContentView: View {
             viewModel.search(reset: true)
             localViewModel.loadMedia()
             workshop.refreshLibrary()
+            // 已登录 Steam 时同步订阅（10 分钟内不重复）
+            workshop.syncSubscriptions()
         }
         .onChange(of: currentTab) {
             if currentTab == .local { localViewModel.loadMedia() }
-            if currentTab == .workshop { workshop.refreshLibrary() }
+            if currentTab == .workshop {
+                workshop.refreshLibrary()
+                workshop.syncSubscriptions()
+            }
             closeFilterPanels()
             ensureValidSelection()
         }
         .onChange(of: workshop.mode) {
             if workshop.mode == .online, workshop.onlineItems.isEmpty { workshop.search(reset: true) }
+            if workshop.mode == .subscribed { workshop.syncSubscriptions() }
         }
         .onChange(of: workshop.filters) { workshop.filtersDidChange() }
         .onChange(of: isWorkshopFilterPresented) { _, presented in immersive.setHold("workshopFilter", active: presented) }
@@ -441,6 +448,20 @@ struct ContentView: View {
                 WorkshopModePicker()
                 workshopSearchField
                 workshopFilterButton
+                if workshop.mode == .subscribed, workshop.isLoggedIn {
+                    Button { workshop.syncSubscriptions(force: true) } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .rotationEffect(.degrees(workshop.isSyncing ? 360 : 0))
+                            .animation(workshop.isSyncing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: workshop.isSyncing)
+                            .frame(width: 34, height: 34)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(workshop.isSyncing)
+                    .help("与 Steam 同步订阅")
+                }
                 if workshop.mode == .library {
                     Button { workshop.addLibraryFolder() } label: {
                         Image(systemName: "folder.badge.plus")
@@ -724,7 +745,18 @@ struct ContentView: View {
     @ViewBuilder
     private var workshopEmptyState: some View {
         Image(systemName: "square.stack.3d.up").font(.system(size: 34, weight: .light))
-        if workshop.mode == .library && workshop.libraryItems.isEmpty {
+        if workshop.mode == .subscribed && !workshop.isLoggedIn {
+            Text("登录 Steam 账号，同步创意工坊订阅")
+            Text("Windows 上订阅的壁纸会自动下载到 Mac；在 Mac 上下载的壁纸也会同步订阅")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+            Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }.buttonStyle(.bordered)
+        } else if workshop.mode == .subscribed && workshop.isSyncing {
+            Text("正在同步订阅…")
+        } else if workshop.mode == .subscribed && workshop.subscribedItems.isEmpty {
+            Text("这个账号还没有订阅 Wallpaper Engine 壁纸")
+            Button("在线浏览") { workshop.mode = .online }.buttonStyle(.bordered)
+        } else if workshop.mode == .library && workshop.libraryItems.isEmpty {
             Text("还没有 Wallpaper Engine 壁纸")
             Text("添加从 Steam 下载的壁纸文件夹，或切换到「在线」浏览创意工坊")
                 .font(.caption)
@@ -763,6 +795,7 @@ struct ContentView: View {
                 PrimaryActionButton(title: "设为壁纸") { viewModel.downloadAndApply(wallpaper) }
                 FavoriteMenuButton(wallpaper: wallpaper)
                 CircleIconButton(systemImage: "arrow.down", help: "下载 (D)") { viewModel.downloadImage(wallpaper) }
+                AddToPlaylistButton(item: item)
                 CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
             }
 
@@ -780,6 +813,7 @@ struct ContentView: View {
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
                     NSWorkspace.shared.activateFileViewerSelecting([local.url])
                 }
+                AddToPlaylistButton(item: item)
                 CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
             }
 
@@ -806,10 +840,12 @@ struct ContentView: View {
             Button("设为壁纸") { viewModel.downloadAndApply(wallpaper) }
             Button(viewModel.isFavorite(wallpaper.id) ? "取消收藏" : "添加收藏") { viewModel.toggleFavorite(wallpaper) }
             Button("下载") { viewModel.downloadImage(wallpaper) }
+            AddToPlaylistMenu(item: item)
             Divider()
             Button("在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
         case .local(let local):
             Button(local.isVideo ? "设为动态壁纸" : "设为壁纸") { localViewModel.applyWallpaper(local) }
+            AddToPlaylistMenu(item: item)
             Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([local.url]) }
             Divider()
             Button("移到废纸篓", role: .destructive) { deleteLocal(local) }
@@ -820,6 +856,10 @@ struct ContentView: View {
             if !workshopItem.isDownloaded, workshopItem.type.isPlayable {
                 Button("仅下载") { workshop.download(workshopItem) }
             }
+            AddToPlaylistMenu(item: item)
+            if workshop.isLoggedIn, workshopItem.workshopPageURL != nil {
+                Button(workshop.isSubscribed(workshopItem) ? "取消订阅" : "订阅") { workshop.toggleSubscription(workshopItem) }
+            }
             if let folder = workshopItem.localFolder {
                 Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
             }
@@ -829,6 +869,9 @@ struct ContentView: View {
             if workshopItem.isDownloaded {
                 Divider()
                 Button("移到废纸篓", role: .destructive) { workshop.delete(workshopItem) }
+                if workshop.isSubscribed(workshopItem) {
+                    Button("移到废纸篓并取消订阅", role: .destructive) { workshop.delete(workshopItem, unsubscribe: true) }
+                }
             }
         }
     }

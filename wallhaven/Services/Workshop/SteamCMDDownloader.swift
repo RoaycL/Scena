@@ -56,29 +56,46 @@ final class SteamCMDDownloader {
 
     func isDownloading(_ id: String) -> Bool { running[id] != nil }
 
-    /// 下载并返回条目文件夹
+    nonisolated struct BatchResult: Sendable {
+        var downloaded: [String: URL] = [:]
+        var failed: [String: String] = [:]
+    }
+
+    /// 下载单个条目并返回文件夹
     func download(id: String, username: String) async throws -> URL {
+        let result = try await download(ids: [id], username: username)
+        if let url = result.downloaded[id] { return url }
+        throw SteamCMDError.failed(result.failed[id] ?? "steamcmd 未返回下载结果")
+    }
+
+    /// 一次登录下载多个条目（减少登录次数，也更快）
+    func download(ids: [String], username: String) async throws -> BatchResult {
         guard let steamcmd = Self.locate() else { throw SteamCMDError.notInstalled }
         guard Self.isValidUsername(username) else { throw SteamCMDError.missingUsername }
-        guard id.allSatisfy(\.isNumber) else { throw SteamCMDError.failed("无效的工坊 ID") }
+        let ids = ids.filter { $0.allSatisfy(\.isNumber) }
+        guard !ids.isEmpty else { throw SteamCMDError.failed("无效的工坊 ID") }
 
         let process = Process()
         process.executableURL = steamcmd
-        process.arguments = [
-            "+@ShutdownOnFailedCommand", "1",
+        var arguments = [
+            "+@ShutdownOnFailedCommand", "0",
             "+@NoPromptForPassword", "1",
             "+@sSteamCmdForcePlatformType", "windows",
             "+login", username,
-            "+workshop_download_item", WorkshopConstants.appID, id, "validate",
-            "+quit",
         ]
+        for id in ids {
+            arguments += ["+workshop_download_item", WorkshopConstants.appID, id, "validate"]
+        }
+        arguments.append("+quit")
+        process.arguments = arguments
+
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
         process.standardInput = FileHandle.nullDevice
 
-        running[id] = process
-        defer { running[id] = nil }
+        for id in ids { running[id] = process }
+        defer { for id in ids { running[id] = nil } }
 
         let output: String = try await withCheckedThrowingContinuation { continuation in
             // 持续读取输出，避免管道写满导致 steamcmd 阻塞
@@ -98,7 +115,7 @@ final class SteamCMDDownloader {
             }
         }
 
-        return try Self.parse(output: output, id: id)
+        return try Self.parse(output: output, ids: ids)
     }
 
     func cancel(_ id: String) {
@@ -133,11 +150,18 @@ final class SteamCMDDownloader {
         NSWorkspace.shared.open(url)
     }
 
-    nonisolated private static func parse(output: String, id: String) throws -> URL {
+    nonisolated private static func parse(output: String, ids: [String]) throws -> BatchResult {
+        var result = BatchResult()
         // 成功：Success. Downloaded item 123 to "/path/to/123" (456 bytes)
-        if let match = output.firstMatch(of: /Success\. Downloaded item \d+ to "([^"]+)"/) {
-            return URL(fileURLWithPath: String(match.1), isDirectory: true)
+        for match in output.matches(of: /Success\. Downloaded item (\d+) to "([^"]+)"/) {
+            result.downloaded[String(match.1)] = URL(fileURLWithPath: String(match.2), isDirectory: true)
         }
+        // 失败：ERROR! Download item 123 failed (Access Denied).
+        for match in output.matches(of: /Download item (\d+) failed \(([^)]*)\)/) {
+            result.failed[String(match.1)] = String(match.2)
+        }
+        if !result.downloaded.isEmpty { return result }
+
         let loginErrors = ["Cached credentials not found", "Login Failure", "Invalid Password", "Two-factor", "need two-factor"]
         if loginErrors.contains(where: output.contains) {
             throw SteamCMDError.notLoggedIn
@@ -145,8 +169,11 @@ final class SteamCMDDownloader {
         if output.contains("Access Denied") || output.contains("No subscription") {
             throw SteamCMDError.accessDenied
         }
-        let lastError = output.split(whereSeparator: \.isNewline).last { $0.contains("ERROR") || $0.contains("Failure") }
-        throw SteamCMDError.failed(lastError.map(String.init) ?? "steamcmd 未返回下载结果")
+        if result.failed.isEmpty {
+            let lastError = output.split(whereSeparator: \.isNewline).last { $0.contains("ERROR") || $0.contains("Failure") }
+            for id in ids { result.failed[id] = lastError.map(String.init) ?? "steamcmd 未返回下载结果" }
+        }
+        return result
     }
 }
 
