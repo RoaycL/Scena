@@ -15,56 +15,80 @@ struct PlaylistsView: View {
     @ObservedObject private var manager = PlaylistManager.shared
     @State private var selectedID: UUID?
     @State private var selectedEntries = Set<String>()
+    /// 嵌入主窗口的「播放列表」页签时为 true：不使用 NavigationSplitView，
+    /// 否则它会把侧栏按钮放进窗口标题栏，盖住主窗口的页签
+    var embedded = false
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedID) {
-                ForEach(manager.playlists) { playlist in
-                    HStack(spacing: 8) {
-                        Image(systemName: manager.activeID == playlist.id ? "play.circle.fill" : "music.note.list")
-                            .foregroundStyle(manager.activeID == playlist.id ? Color.green : Color.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(playlist.name).lineLimit(1)
-                            Text("\(playlist.entries.count) 张")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .tag(playlist.id)
-                    .contextMenu {
-                        Button(manager.activeID == playlist.id ? "停止" : "播放") { togglePlay(playlist) }
-                        Divider()
-                        Button("删除", role: .destructive) { manager.delete(playlist.id) }
-                    }
+        Group {
+            if embedded {
+                HStack(spacing: 0) {
+                    sidebar
+                        .frame(width: 220)
+                    Divider()
+                    detailContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
-            .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Button {
-                        selectedID = manager.create().id
-                    } label: {
-                        Label("新建播放列表", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    Spacer()
-                }
-                .padding(10)
-            }
-        } detail: {
-            if let playlist = manager.playlists.first(where: { $0.id == selectedID }) {
-                detail(for: playlist)
             } else {
-                ContentUnavailableView(
-                    "选择或新建一个播放列表",
-                    systemImage: "music.note.list",
-                    description: Text("在任意壁纸上右键 →「添加到播放列表」")
-                )
+                NavigationSplitView {
+                    sidebar
+                        .navigationSplitViewColumnWidth(min: 180, ideal: 210)
+                } detail: {
+                    detailContent
+                }
+                .frame(minWidth: 680, minHeight: 440)
             }
         }
-        .frame(minWidth: 680, minHeight: 440)
         .onAppear {
             if selectedID == nil { selectedID = manager.activeID ?? manager.playlists.first?.id }
+        }
+    }
+
+    private var sidebar: some View {
+        List(selection: $selectedID) {
+            ForEach(manager.playlists) { playlist in
+                HStack(spacing: 8) {
+                    Image(systemName: manager.activeID == playlist.id ? "play.circle.fill" : "music.note.list")
+                        .foregroundStyle(manager.activeID == playlist.id ? Color.green : Color.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(playlist.name).lineLimit(1)
+                        Text("\(playlist.entries.count) 张")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tag(playlist.id)
+                .contextMenu {
+                    Button(manager.activeID == playlist.id ? "停止" : "播放") { togglePlay(playlist) }
+                    Divider()
+                    Button("删除", role: .destructive) { manager.delete(playlist.id) }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                Button {
+                    selectedID = manager.create().id
+                } label: {
+                    Label("新建播放列表", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+            }
+            .padding(10)
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if let playlist = manager.playlists.first(where: { $0.id == selectedID }) {
+            detail(for: playlist)
+        } else {
+            ContentUnavailableView(
+                "选择或新建一个播放列表",
+                systemImage: "music.note.list",
+                description: Text("在任意壁纸上右键 →「添加到播放列表」")
+            )
         }
     }
 

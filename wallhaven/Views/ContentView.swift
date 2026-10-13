@@ -9,13 +9,27 @@ import AppKit
 import Kingfisher
 import SwiftUI
 
+/// 顶部页签：按用途组织，两个来源（Wallhaven / 创意工坊）在每个页签里一致
 enum MainTab: String, CaseIterable, Identifiable {
-    case home = "首页"
-    case favorites = "收藏"
-    case local = "本地"
-    case workshop = "工坊"
+    case discover = "发现"
+    case collections = "收藏"
+    case library = "资料库"
+    case playlists = "播放列表"
 
     var id: String { rawValue }
+}
+
+/// 「发现」「收藏」页签里的来源切换
+enum ContentSource: String, CaseIterable, Identifiable {
+    case wallhaven = "Wallhaven"
+    case workshop = "创意工坊"
+
+    var id: String { rawValue }
+}
+
+/// 页签 + 来源决定实际显示的画廊页面
+private enum GalleryPage: Equatable {
+    case home, favorites, workshop, library, playlists
 }
 
 struct ContentView: View {
@@ -27,9 +41,14 @@ struct ContentView: View {
     @ObservedObject private var toastCenter = ToastCenter.shared
     @ObservedObject private var liveController = LiveWallpaperController.shared
 
-    @State private var currentTab: MainTab = .home
+    @State private var currentTab: MainTab = .discover
+    @AppStorage("ui.discoverSource") private var discoverSource: ContentSource = .wallhaven
+    @AppStorage("ui.collectionSource") private var collectionSource: ContentSource = .wallhaven
     @State private var favoriteSelectionID: String?
     @State private var localSelectionID: String?
+    @State private var libraryKind: LibraryKind = .all
+    @State private var libraryQuery = ""
+    @State private var libraryColumns = 4
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
     @State private var workshopSelectionID: String?
@@ -49,43 +68,70 @@ struct ContentView: View {
 
     // MARK: - Data
 
-    private func items(for tab: MainTab) -> [GalleryItem] {
-        switch tab {
+    private var page: GalleryPage {
+        switch currentTab {
+        case .discover: discoverSource == .wallhaven ? .home : .workshop
+        case .collections: collectionSource == .wallhaven ? .favorites : .workshop
+        case .library: .library
+        case .playlists: .playlists
+        }
+    }
+
+    /// 工坊网格的数据随页签切换：发现 = 在线，收藏 = 已订阅
+    private func syncWorkshopMode() {
+        guard page == .workshop else { return }
+        let mode: WorkshopViewModel.Mode = currentTab == .discover ? .online : .subscribed
+        if workshop.mode != mode { workshop.mode = mode }
+    }
+
+    /// 资料库：已下载的 wallhaven 壁纸、导入的图片和视频、已下载的工坊壁纸
+    private var libraryItems: [GalleryItem] {
+        let local = localViewModel.items.map { GalleryItem(origin: .local($0)) }
+        let workshopItems = workshop.libraryItems.map { GalleryItem(origin: .workshop($0)) }
+        return (local + workshopItems).filter { libraryKind.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+    }
+
+    private func items(for page: GalleryPage) -> [GalleryItem] {
+        switch page {
         case .home:
             return viewModel.wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .favorites:
             let wallpapers = viewModel.selectedFolderID.map(viewModel.wallpapersInFolder) ?? viewModel.favoriteWallpapers
             return wallpapers.map { GalleryItem(origin: .remote($0)) }
-        case .local:
-            return localViewModel.items.map { GalleryItem(origin: .local($0)) }
         case .workshop:
             return workshop.items.map { GalleryItem(origin: .workshop($0)) }
+        case .library:
+            return libraryItems
+        case .playlists:
+            return []
         }
     }
 
-    private func selectedID(for tab: MainTab) -> String? {
-        switch tab {
+    private func selectedID(for page: GalleryPage) -> String? {
+        switch page {
         case .home: viewModel.selectedWallpaper.map { GalleryItem(origin: .remote($0)).id }
         case .favorites: favoriteSelectionID
-        case .local: localSelectionID
         case .workshop: workshopSelectionID
+        case .library: localSelectionID
+        case .playlists: nil
         }
     }
 
-    private var currentItems: [GalleryItem] { items(for: currentTab) }
+    private var currentItems: [GalleryItem] { items(for: page) }
 
     private var selectedItem: GalleryItem? {
-        guard let id = selectedID(for: currentTab) else { return nil }
+        guard let id = selectedID(for: page) else { return nil }
         return currentItems.first { $0.id == id }
     }
 
     private func select(_ item: GalleryItem) {
         selectionWithoutScrollingID = nil
-        switch currentTab {
+        switch page {
         case .home: viewModel.selectedWallpaper = item.remote
         case .favorites: favoriteSelectionID = item.id
-        case .local: localSelectionID = item.id
         case .workshop: workshopSelectionID = item.id
+        case .library: localSelectionID = item.id
+        case .playlists: break
         }
     }
 
@@ -104,10 +150,10 @@ struct ContentView: View {
         let newIndex = max(0, min(items.count - 1, index + offset))
         let item = items[newIndex]
         select(item)
-        if currentTab == .home, let wallpaper = item.remote {
+        if page == .home, let wallpaper = item.remote {
             viewModel.loadMoreIfNeeded(current: wallpaper)
         }
-        if let workshopItem = item.workshop {
+        if page == .workshop, let workshopItem = item.workshop {
             workshop.loadMoreIfNeeded(current: workshopItem)
         }
     }
@@ -137,19 +183,25 @@ struct ContentView: View {
     }
 
     private func deleteLocal(_ item: LocalMediaItem) {
-        let wasSelected = localSelectionID == GalleryItem(origin: .local(item)).id
-        let deletedIndex = localViewModel.items.firstIndex { $0.id == item.id }
-        localViewModel.delete(item: item)
-        // 删除失败时保留选中项；删除非选中项也不改变选择和滚动位置。
-        guard wasSelected, let deletedIndex,
-              !localViewModel.items.contains(where: { $0.id == item.id }) else { return }
-        let remaining = localViewModel.items
+        deleteFromLibrary(GalleryItem(origin: .local(item)), unsubscribe: false)
+    }
+
+    /// 从资料库删除（移到废纸篓）：删除选中项后选中原位置的邻项，保留当前视口
+    private func deleteFromLibrary(_ item: GalleryItem, unsubscribe: Bool) {
+        let before = libraryItems
+        let wasSelected = localSelectionID == item.id
+        let deletedIndex = before.firstIndex { $0.id == item.id }
+        switch item.origin {
+        case .local(let local): localViewModel.delete(item: local)
+        case .workshop(let workshopItem): workshop.delete(workshopItem, unsubscribe: unsubscribe)
+        case .remote: return
+        }
+        guard wasSelected, let deletedIndex else { return }
+        let remaining = before.filter { $0.id != item.id }
         if remaining.isEmpty {
             localSelectionID = nil
         } else {
-            // 优先选中原位置的下一项，删除最后一项时选中前一项。
-            let neighbor = remaining[min(deletedIndex, remaining.count - 1)]
-            let neighborID = GalleryItem(origin: .local(neighbor)).id
+            let neighborID = remaining[min(deletedIndex, remaining.count - 1)].id
             selectionWithoutScrollingID = neighborID
             localSelectionID = neighborID
         }
@@ -162,12 +214,12 @@ struct ContentView: View {
         case .right:
             moveSelection(by: 1)
         case .up:
-            // 工坊网格按行移动
-            guard currentTab == .workshop else { return false }
-            moveSelection(by: -workshopColumns)
+            // 网格页面按行移动
+            guard let columns = gridColumns else { return false }
+            moveSelection(by: -columns)
         case .down:
-            guard currentTab == .workshop else { return false }
-            moveSelection(by: workshopColumns)
+            guard let columns = gridColumns else { return false }
+            moveSelection(by: columns)
         case .enter:
             guard let item = selectedItem else { return false }
             apply(item)
@@ -178,16 +230,28 @@ struct ContentView: View {
             guard let wallpaper = selectedItem?.remote else { return false }
             viewModel.toggleFavorite(wallpaper)
         case .character("/"):
-            guard currentTab == .home else { return false }
+            guard hasSearch else { return false }
             isSearchFocused = true
-        case .character("1"): switchTab(.home)
-        case .character("2"): switchTab(.favorites)
-        case .character("3"): switchTab(.local)
-        case .character("4"): switchTab(.workshop)
+        case .character("1"): switchTab(.discover)
+        case .character("2"): switchTab(.collections)
+        case .character("3"): switchTab(.library)
+        case .character("4"): switchTab(.playlists)
         default:
             return false
         }
         return true
+    }
+
+    private var gridColumns: Int? {
+        switch page {
+        case .workshop: workshopColumns
+        case .library: libraryColumns
+        default: nil
+        }
+    }
+
+    private var hasSearch: Bool {
+        page == .home || page == .workshop || page == .library
     }
 
     /// 提供给顶部菜单栏的操作
@@ -205,7 +269,7 @@ struct ContentView: View {
             canFavorite: item?.remote != nil,
             isFavorite: item?.remote.map { viewModel.isFavorite($0.id) } ?? false,
             canOpenInBrowser: item?.remote != nil || item?.workshop?.workshopPageURL != nil,
-            hasSearch: currentTab == .home || currentTab == .workshop,
+            hasSearch: hasSearch,
             isChromeHidden: immersive.isChromeHidden,
             apply: { if let item = selectedItem { apply(item) } },
             download: {
@@ -229,12 +293,11 @@ struct ContentView: View {
                 }
             },
             importLocal: {
-                switchTab(.local)
+                switchTab(.library)
                 localViewModel.importFiles()
             },
             addWorkshopFolder: {
-                switchTab(.workshop)
-                workshop.mode = .library
+                switchTab(.library)
                 workshop.addLibraryFolder()
             }
         )
@@ -244,8 +307,10 @@ struct ContentView: View {
         guard let tab = MainWindow.requestedTab else { return }
         MainWindow.requestedTab = nil
         switchTab(tab)
-        if tab == .local { localViewModel.loadMedia() }
-        if tab == .workshop { workshop.mode = .library; workshop.refreshLibrary() }
+        if tab == .library {
+            localViewModel.loadMedia()
+            workshop.refreshLibrary()
+        }
     }
 
     private func switchTab(_ tab: MainTab) {
@@ -261,8 +326,8 @@ struct ContentView: View {
                 ImmersiveBackground(item: backgroundItem, showsPreviewCard: immersive.isChromeHidden)
                     .frame(width: size.width, height: size.height)
 
-                // 工坊网格界面整体压暗，保证缩略图和文字清晰
-                if currentTab == .workshop {
+                // 网格类页面整体压暗，保证缩略图和文字清晰
+                if page == .workshop || page == .library || page == .playlists {
                     Color.black.opacity(immersive.isChromeHidden ? 0 : 0.35)
                         .allowsHitTesting(false)
                 }
@@ -303,6 +368,7 @@ struct ContentView: View {
             MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
             handleMenuNavigation()
+            syncWorkshopMode()
             viewModel.search(reset: true)
             localViewModel.loadMedia()
             workshop.refreshLibrary()
@@ -312,10 +378,14 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: MainWindow.navigationNotification)) { _ in
             handleMenuNavigation()
         }
-        .onChange(of: currentTab) {
+        .onChange(of: page) {
             selectionWithoutScrollingID = nil
-            if currentTab == .local { localViewModel.loadMedia() }
-            if currentTab == .workshop {
+            syncWorkshopMode()
+            if page == .library {
+                localViewModel.loadMedia()
+                workshop.refreshLibrary()
+            }
+            if page == .workshop {
                 workshop.refreshLibrary()
                 workshop.syncSubscriptions()
             }
@@ -452,30 +522,32 @@ struct ContentView: View {
             .padding(4)
             .background(.ultraThinMaterial, in: Capsule())
 
+            // 「发现」「收藏」里切换 Wallhaven / 创意工坊；资料库切换类型
+            if currentTab == .discover {
+                sourcePicker($discoverSource)
+            } else if currentTab == .collections {
+                sourcePicker($collectionSource)
+            } else if currentTab == .library {
+                libraryKindPicker
+            }
+
             Spacer(minLength: 12)
 
             LiveWallpaperStatus(controller: liveController)
             WorkshopDownloadsButton()
 
-            switch currentTab {
+            switch page {
             case .home:
                 searchField
                 filterButton
             case .favorites:
                 folderMenu
-            case .local:
-                Button { localViewModel.importFiles() } label: {
-                    Label("导入", systemImage: "square.and.arrow.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("导入图片或视频（视频可设为动态壁纸）")
+            case .library:
+                librarySearchField
+                libraryAddMenu
+            case .playlists:
+                EmptyView()
             case .workshop:
-                WorkshopModePicker()
                 workshopSearchField
                 workshopFilterButton
                 if workshop.mode == .subscribed, workshop.isLoggedIn {
@@ -491,17 +563,6 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .disabled(workshop.isSyncing)
                     .help("与 Steam 同步订阅")
-                }
-                if workshop.mode == .library {
-                    Button { workshop.addLibraryFolder() } label: {
-                        Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .frame(width: 34, height: 34)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("添加 Wallpaper Engine 壁纸文件夹或工坊目录")
                 }
             }
 
@@ -519,6 +580,86 @@ struct ContentView: View {
         .padding(.trailing, 16)
         .environment(\.colorScheme, .dark)
         .onHover { immersive.setHold("topbar", active: $0) }
+    }
+
+    private func sourcePicker(_ selection: Binding<ContentSource>) -> some View {
+        segmented(ContentSource.allCases, selection: selection)
+    }
+
+    private var libraryKindPicker: some View {
+        segmented(LibraryKind.allCases, selection: $libraryKind)
+    }
+
+    /// 与页签同风格的小号分段控件
+    private func segmented<Option: Identifiable & RawRepresentable & Hashable>(
+        _ options: [Option],
+        selection: Binding<Option>
+    ) -> some View where Option.RawValue == String {
+        HStack(spacing: 2) {
+            ForEach(options) { option in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { selection.wrappedValue = option }
+                } label: {
+                    Text(option.rawValue)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(selection.wrappedValue == option ? .white : .white.opacity(0.6))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(selection.wrappedValue == option ? .white.opacity(0.2) : .clear))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private var librarySearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+            TextField("搜索资料库", text: $libraryQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .focused($isSearchFocused)
+                .frame(width: isSearchFocused ? 170 : 120)
+                .onSubmit { isSearchFocused = false }
+            if !libraryQuery.isEmpty {
+                Button { libraryQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+    }
+
+    private var libraryAddMenu: some View {
+        Menu {
+            Button("导入图片或视频…") { localViewModel.importFiles() }
+            Button("添加 Wallpaper Engine 文件夹…") { workshop.addLibraryFolder() }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 34, height: 34)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("添加到资料库")
     }
 
     private var searchField: some View {
@@ -694,13 +835,37 @@ struct ContentView: View {
     @ViewBuilder
     private func gallery(in size: CGSize) -> some View {
         let items = currentItems
-        let isLoading = (currentTab == .home && viewModel.isLoading)
-            || (currentTab == .workshop && workshop.mode == .online && workshop.isLoading)
+        let isLoading = (page == .home && viewModel.isLoading)
+            || (page == .workshop && workshop.mode == .online && workshop.isLoading)
 
-        if items.isEmpty && !isLoading {
+        if page == .playlists {
+            PlaylistsView(embedded: true)
+                .scrollContentBackground(.hidden)
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
+                .environment(\.colorScheme, .dark)
+                .padding(.top, 58)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .onHover { immersive.setHold("playlists", active: $0) }
+        } else if items.isEmpty && !isLoading {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if currentTab == .workshop {
+        } else if page == .library {
+            LibraryGridView(
+                liveController: liveController,
+                items: items,
+                selectedID: selectedItem?.id,
+                size: size,
+                columnCount: $libraryColumns,
+                onSelect: { select($0) },
+                onApply: { apply($0) },
+                onDelete: { deleteFromLibrary($0, unsubscribe: $1) },
+                onHover: { reason, active in immersive.setHold(reason, active: active) },
+                contextMenu: { contextMenu(for: $0) }
+            )
+        } else if page == .workshop {
             WorkshopGridView(
                 liveController: liveController,
                 items: workshop.items,
@@ -730,7 +895,7 @@ struct ContentView: View {
                     thumbHeight: max(72, min(130, size.height * 0.13)),
                     onSelect: { select($0) },
                     onItemAppear: { item in
-                        if currentTab == .home, let wallpaper = item.remote {
+                        if page == .home, let wallpaper = item.remote {
                             viewModel.loadMoreIfNeeded(current: wallpaper)
                         }
                         if let workshopItem = item.workshop {
@@ -749,7 +914,7 @@ struct ContentView: View {
     @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 12) {
-            switch currentTab {
+            switch page {
             case .home:
                 Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34, weight: .light))
                 Text("未找到符合当前筛选条件的壁纸")
@@ -757,16 +922,35 @@ struct ContentView: View {
             case .favorites:
                 Image(systemName: "heart").font(.system(size: 34, weight: .light))
                 Text(viewModel.selectedFolderID == nil ? "还没有收藏，按 L 或点击心形即可收藏" : "该收藏夹中暂无壁纸")
-                Button("去浏览") { switchTab(.home) }.buttonStyle(.bordered)
-            case .local:
+                Button("去发现") {
+                    discoverSource = .wallhaven
+                    switchTab(.discover)
+                }
+                .buttonStyle(.bordered)
+            case .library:
                 Image(systemName: "photo.stack").font(.system(size: 34, weight: .light))
-                Text("本地还没有壁纸")
-                Text("下载的壁纸会出现在这里，也可以导入视频作为动态壁纸")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.6))
-                Button("导入图片或视频") { localViewModel.importFiles() }.buttonStyle(.bordered)
+                if libraryKind != .all || !libraryQuery.isEmpty {
+                    Text("没有符合条件的壁纸")
+                    Button("显示全部") {
+                        libraryKind = .all
+                        libraryQuery = ""
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    Text("资料库还是空的")
+                    Text("下载的壁纸、导入的图片和视频、已下载的创意工坊壁纸都会出现在这里")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.6))
+                    HStack {
+                        Button("导入图片或视频") { localViewModel.importFiles() }.buttonStyle(.bordered)
+                        Button("添加工坊文件夹") { workshop.addLibraryFolder() }.buttonStyle(.bordered)
+                        Button("去发现") { switchTab(.discover) }.buttonStyle(.bordered)
+                    }
+                }
             case .workshop:
                 workshopEmptyState
+            case .playlists:
+                EmptyView()
             }
         }
         .foregroundStyle(.white.opacity(0.85))
@@ -786,16 +970,11 @@ struct ContentView: View {
             Text("正在同步订阅…")
         } else if workshop.mode == .subscribed && workshop.subscribedItems.isEmpty {
             Text("这个账号还没有订阅 Wallpaper Engine 壁纸")
-            Button("在线浏览") { workshop.mode = .online }.buttonStyle(.bordered)
-        } else if workshop.mode == .library && workshop.libraryItems.isEmpty {
-            Text("还没有 Wallpaper Engine 壁纸")
-            Text("添加从 Steam 下载的壁纸文件夹，或切换到「在线」浏览创意工坊")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.6))
-            HStack {
-                Button("添加文件夹") { workshop.addLibraryFolder() }.buttonStyle(.bordered)
-                Button("在线浏览") { workshop.mode = .online }.buttonStyle(.bordered)
+            Button("去发现") {
+                discoverSource = .workshop
+                switchTab(.discover)
             }
+            .buttonStyle(.bordered)
         } else {
             Text("没有找到符合条件的壁纸")
             HStack {
@@ -813,13 +992,14 @@ struct ContentView: View {
         case .remote(let wallpaper):
             let tags = viewModel.tagsByID[wallpaper.id] ?? []
             InfoPanel(
-                eyebrow: "\(currentTab == .favorites ? "FAVORITES" : "FEATURED") · #\(wallpaper.id)",
+                eyebrow: "\(page == .favorites ? "FAVORITES" : "FEATURED") · #\(wallpaper.id)",
                 title: (tags.first ?? wallpaper.category).capitalized,
                 meta: remoteMeta(wallpaper),
                 colors: wallpaper.colors,
                 tags: Array(tags.dropFirst()),
                 onTag: { tag in
-                    switchTab(.home)
+                    discoverSource = .wallhaven
+                    switchTab(.discover)
                     viewModel.searchTag(tag)
                 }
             ) {

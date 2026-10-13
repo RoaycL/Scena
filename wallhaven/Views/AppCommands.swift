@@ -163,12 +163,12 @@ struct StatusMenuContent: View {
         Button("导入本地图片或视频…") {
             NSApp.activate()
             LocalMediaViewModel().importFiles()
-            showMainWindow(tab: .local)
+            showMainWindow(tab: .library)
         }
         Button("添加工坊壁纸文件夹…") {
             NSApp.activate()
             workshop.addLibraryFolder()
-            showMainWindow(tab: .workshop)
+            showMainWindow(tab: .library)
         }
         Divider()
 
