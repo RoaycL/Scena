@@ -112,6 +112,8 @@ final class WorkshopViewModel: ObservableObject {
             }
         }
     }
+    /// 用户点了「重试」的条目：即使本地文件看起来完整也交给 Steam 重新校验
+    private var forcedValidation: Set<String> = []
     private let api = SteamWorkshopAPI()
     private let toast = ToastCenter.shared
     private var cursor: String?
@@ -494,7 +496,10 @@ final class WorkshopViewModel: ObservableObject {
         for item in items {
             if let index = jobs.firstIndex(where: { $0.id == item.id }) {
                 if automatic { continue } // 同步不能自动恢复用户暂停、停止或失败的任务。
-                if [.paused, .failed, .cancelled].contains(jobs[index].state) { downloadReceipts[item.id] = nil }
+                if [.failed, .cancelled].contains(jobs[index].state) {
+                    downloadReceipts[item.id] = nil
+                    forcedValidation.insert(item.id)
+                }
                 if jobs[index].state != .downloading { jobs[index].state = .queued }
                 jobs[index].error = nil
                 jobs[index].applyWhenDone = applyWhenDone || jobs[index].applyWhenDone
@@ -524,12 +529,27 @@ final class WorkshopViewModel: ObservableObject {
             .appendingPathComponent(WorkshopConstants.appID, isDirectory: true)
     }
 
-    /// 只跳过有成功记录且文件清单未改变的排队任务；暂停、失败任务始终交给 Steam 校验。
+    /// 排队 / 暂停的任务如果本地已经完整，直接标记完成，不再让 steamcmd 重新校验、重写整个文件夹。
+    /// 完整的判断：
+    ///  - 有下载成功记录（receipt）且文件清单没变；或者
+    ///  - 没有记录的旧壁纸：project.json 指向的入口文件存在且非空，并且 steamcmd 临时目录里没有它（没在下载中）。
+    ///    确认后补一份记录，之后按记录判断
+    /// 用户点「重试」的条目（forcedValidation）总是交给 Steam 校验。
     private func completeJobsAlreadyOnDisk() {
         let roots = libraryRoots
+        let staging = Self.stagingFolder
+        let fm = FileManager.default
         downloadJobs = downloadJobs.map { job in
-            guard job.state == .queued, let receipt = downloadReceipts[job.id],
-                  roots.contains(where: { receipt.matches(folder: $0.appendingPathComponent(job.id)) }) else { return job }
+            guard [.queued, .paused].contains(job.state), !forcedValidation.contains(job.id) else { return job }
+            let isComplete = roots.contains { root in
+                let folder = root.appendingPathComponent(job.id)
+                if let receipt = downloadReceipts[job.id] { return receipt.matches(folder: folder) }
+                guard !fm.fileExists(atPath: staging.appendingPathComponent(job.id).path),
+                      let receipt = WorkshopDownloadReceipt.capture(folder: folder) else { return false }
+                downloadReceipts[job.id] = receipt
+                return true
+            }
+            guard isComplete else { return job }
             var completed = job
             completed.state = .completed
             completed.error = nil
@@ -604,6 +624,7 @@ final class WorkshopViewModel: ObservableObject {
             }?.id
             downloadJobs = WorkshopDownloadQueue.settle(downloadJobs, batch: Set(batch),
                 downloaded: Set(result.downloaded.keys), failures: result.failed, interrupted: batchInterrupted)
+            forcedValidation.subtract(result.downloaded.keys)
             if !batchInterrupted {
                 let failed = downloadJobs.filter { batch.contains($0.id) && $0.state == .failed }
                 if let first = failed.first {
@@ -645,7 +666,11 @@ final class WorkshopViewModel: ObservableObject {
     func resumeDownload(_ id: String) {
         guard let index = downloadJobs.firstIndex(where: { $0.id == id }),
               [.paused, .failed, .cancelled].contains(downloadJobs[index].state) else { return }
-        downloadReceipts[id] = nil
+        // 失败 / 停止后重试：强制重新校验；暂停后恢复：本地已完整就直接完成
+        if downloadJobs[index].state != .paused {
+            downloadReceipts[id] = nil
+            forcedValidation.insert(id)
+        }
         downloadJobs[index].state = .queued
         downloadJobs[index].error = nil
         processDownloadQueue()
@@ -667,7 +692,6 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func resumeAllDownloads() {
-        for job in downloadJobs where job.state == .paused { downloadReceipts[job.id] = nil }
         downloadJobs = downloadJobs.map {
             var job = $0
             if job.state == .paused { job.state = .queued; job.error = nil }
