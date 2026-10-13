@@ -25,25 +25,17 @@ struct PlaylistsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if let playlist = selectedPlaylist {
-                detail(for: playlist)
-            } else {
-                ContentUnavailableView {
-                    Label("创建你的播放列表", systemImage: "photo.stack")
-                } description: {
-                    Text("将喜欢的壁纸收在一起，按设定的间隔轮换播放。")
-                } actions: {
-                    Button("新建播放列表…", action: createPlaylist)
-                        .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        HStack(alignment: .top, spacing: 0) {
+            if !manager.playlists.isEmpty {
+                sidebar
+                Divider()
+                    .padding(.trailing, 24)
             }
+            content
         }
         .padding(24)
         .frame(width: embedded ? panelWidth : nil, height: embedded ? maximumHeight : nil)
-        .frame(minWidth: embedded ? nil : 720, minHeight: embedded ? nil : 520)
+        .frame(minWidth: embedded ? nil : 900, minHeight: embedded ? nil : 560)
         .onChange(of: selectedID) {
             selectedEntries.removeAll()
             resetPreview()
@@ -54,6 +46,7 @@ struct PlaylistsView: View {
                 self.selectedID = manager.activeID ?? new.first?.id
                 return
             }
+            if selectedID == nil { selectedID = new.first?.id }
             let entries = selectedPlaylist?.entries ?? []
             selectedEntries.formIntersection(Set(entries.map(\.id)))
             if let previewEntryID, !entries.contains(where: { $0.id == previewEntryID }) {
@@ -75,36 +68,106 @@ struct PlaylistsView: View {
         }
     }
 
+    // MARK: - Sidebar
+
+    /// 左侧列出所有播放列表：封面、名称、张数、播放状态，单击查看、双击播放
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("播放列表").font(.headline)
+                Spacer()
+                Text("\(manager.playlists.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(manager.playlists) { playlist in
+                        PlaylistSidebarRow(
+                            playlist: playlist,
+                            isSelected: playlist.id == selectedID,
+                            isActive: playlist.id == manager.activeID,
+                            isPaused: manager.isPaused
+                        )
+                        .onTapGesture(count: 2) { manager.play(playlist.id) }
+                        .onTapGesture { selectedID = playlist.id }
+                        // 把下方队列里的壁纸拖到其他列表上：复制过去
+                        .dropDestination(for: String.self) { ids, _ in
+                            copyEntries(ids, to: playlist)
+                        }
+                        .contextMenu {
+                            if manager.activeID == playlist.id {
+                                Button(manager.isPaused ? "继续播放" : "暂停播放") { manager.setPlaybackPaused(!manager.isPaused) }
+                                Button("停止播放") { manager.stop() }
+                            } else {
+                                Button("播放") { manager.play(playlist.id) }
+                                    .disabled(playlist.entries.isEmpty)
+                            }
+                            Divider()
+                            Button("重命名…") { rename(playlist) }
+                            Button("删除列表", role: .destructive) { manager.delete(playlist.id) }
+                        }
+                    }
+                }
+            }
+
+            Divider().padding(.vertical, 8)
+            Button(action: createPlaylist) {
+                Label("新建播放列表", systemImage: "plus")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 8)
+        }
+        .frame(width: 236)
+        .padding(.trailing, 16)
+    }
+
+    private func copyEntries(_ ids: [String], to target: Playlist) -> Bool {
+        guard let source = selectedPlaylist, source.id != target.id else { return false }
+        let entries = source.entries.filter { ids.contains($0.id) || (ids.count == 1 && selectedEntries.contains(ids[0]) && selectedEntries.contains($0.id)) }
+        guard !entries.isEmpty else { return false }
+        manager.add(entries, to: target.id)
+        ToastCenter.shared.show("已添加 \(entries.count) 张到「\(target.name)」", style: .success)
+        return true
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        VStack(spacing: 0) {
+            header
+            if let playlist = selectedPlaylist {
+                detail(for: playlist)
+            } else {
+                ContentUnavailableView {
+                    Label("创建你的播放列表", systemImage: "photo.stack")
+                } description: {
+                    Text("将喜欢的壁纸收在一起，按设定的间隔轮换播放。")
+                } actions: {
+                    Button("新建播放列表…", action: createPlaylist)
+                        .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(selectedPlaylist?.name ?? "播放列表")
                     .font(.system(size: 23, weight: .semibold))
                     .lineLimit(1)
-                Text(selectedPlaylist.map { "\($0.entries.count) 张壁纸" } ?? "我的壁纸合集")
+                Text(selectedPlaylist.map { "\($0.entries.count) 张壁纸 · 拖到左侧其他列表可复制" } ?? "我的壁纸合集")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Menu {
-                ForEach(manager.playlists) { playlist in
-                    Button {
-                        selectedID = playlist.id
-                    } label: {
-                        if selectedID == playlist.id {
-                            Label(playlist.name, systemImage: "checkmark")
-                        } else {
-                            Text(playlist.name)
-                        }
-                    }
-                }
-                if !manager.playlists.isEmpty { Divider() }
-                Button("新建播放列表…", action: createPlaylist)
-            } label: {
-                Label("切换列表", systemImage: "list.bullet")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
             Menu {
                 Button("新建播放列表…", action: createPlaylist)
                 if let playlist = selectedPlaylist {
@@ -362,6 +425,10 @@ struct PlaylistsView: View {
     }
 
     private func thumbnailSource(for entry: PlaylistEntry) -> Source? {
+        Self.thumbnailSource(for: entry)
+    }
+
+    static func thumbnailSource(for entry: PlaylistEntry) -> Source? {
         if entry.kind == .local, let path = entry.path {
             let url = URL(fileURLWithPath: path)
             if MediaType.isVideo(url) { return .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1)) }
@@ -399,6 +466,89 @@ struct PlaylistsView: View {
 }
 
 /// 复用画廊的高清图片、视频和工坊渲染；预览不设置桌面壁纸。
+/// 侧栏里的一行：2×2 拼图封面 + 名称 + 张数 / 间隔 + 播放状态
+private struct PlaylistSidebarRow: View {
+    let playlist: Playlist
+    let isSelected: Bool
+    let isActive: Bool
+    let isPaused: Bool
+    @State private var isHovered = false
+
+    private var intervalLabel: String {
+        Playlist.intervals.first { $0.seconds == playlist.interval }?.label ?? ""
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            PlaylistCover(entries: Array(playlist.entries.prefix(4)))
+                .frame(width: 68, height: 42)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(playlist.name)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
+                Text("\(playlist.entries.count) 张 · \(intervalLabel)\(playlist.shuffle ? " · 随机" : "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if isActive {
+                Image(systemName: isPaused ? "pause.circle.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isPaused ? Color.secondary : Color.accentColor)
+                    .help(isPaused ? "已暂停" : "正在播放")
+            }
+        }
+        .padding(6)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.22) : (isHovered ? Color.primary.opacity(0.06) : .clear))
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .help("单击查看 · 双击播放")
+    }
+}
+
+/// 列表封面：最多 4 张壁纸拼成 2×2，不足时用第一张铺满
+private struct PlaylistCover: View {
+    let entries: [PlaylistEntry]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            Group {
+                if entries.count >= 4 {
+                    VStack(spacing: 1) {
+                        HStack(spacing: 1) { tile(entries[0]); tile(entries[1]) }
+                        HStack(spacing: 1) { tile(entries[2]); tile(entries[3]) }
+                    }
+                } else if let first = entries.first {
+                    tile(first)
+                } else {
+                    ZStack {
+                        Color.secondary.opacity(0.15)
+                        Image(systemName: "photo.stack").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(width: size.width, height: size.height)
+        }
+    }
+
+    private func tile(_ entry: PlaylistEntry) -> some View {
+        KFImage(source: PlaylistsView.thumbnailSource(for: entry))
+            .setProcessor(GIFPosterFrameProcessor(maxPixelSize: 200))
+            .cancelOnDisappear(true)
+            .placeholder { Color.secondary.opacity(0.15) }
+            .resizable()
+            .scaledToFill()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+    }
+}
+
 private struct PlaylistLargePreview: View {
     let entry: PlaylistEntry
     @State private var item: GalleryItem?
