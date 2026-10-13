@@ -160,4 +160,21 @@ struct wallhavenTests {
         #expect(restored[2].error == "失败")
     }
 
+    @Test func wallhavenFileNamesAreRecognizedBySixCharacterID() {
+        #expect(LocalMediaViewModel.isWallhavenFileName(URL(fileURLWithPath: "/w/l8vp7y.jpg")))
+        #expect(LocalMediaViewModel.isWallhavenFileName(URL(fileURLWithPath: "/w/zyxvqy.png")))
+        #expect(!LocalMediaViewModel.isWallhavenFileName(URL(fileURLWithPath: "/w/DynamicWallpaper_7.mp4")))
+        #expect(!LocalMediaViewModel.isWallhavenFileName(URL(fileURLWithPath: "/w/IMG001.jpg")))
+        #expect(!LocalMediaViewModel.isWallhavenFileName(URL(fileURLWithPath: "/w/abc12.jpg")))
+    }
+
+    @Test func librarySourceFilterSeparatesOrigins() {
+        let wallhaven = GalleryItem(origin: .local(LocalMediaItem(url: URL(fileURLWithPath: "/w/l8vp7y.jpg"), creationDate: .now, fileSize: 1, source: .wallhaven)))
+        let imported = GalleryItem(origin: .local(LocalMediaItem(url: URL(fileURLWithPath: "/w/Imported/a.mp4"), creationDate: .now, fileSize: 1, source: .imported)))
+        let workshop = GalleryItem(origin: .workshop(WorkshopItem(id: "1", title: "W", type: .scene, tags: [])))
+        #expect(LibrarySource.wallhaven.matches(wallhaven) && !LibrarySource.wallhaven.matches(imported))
+        #expect(LibrarySource.imported.matches(imported) && !LibrarySource.imported.matches(workshop))
+        #expect(LibrarySource.workshop.matches(workshop) && !LibrarySource.workshop.matches(wallhaven))
+        #expect([wallhaven, imported, workshop].allSatisfy(LibrarySource.all.matches))
+    }
 }

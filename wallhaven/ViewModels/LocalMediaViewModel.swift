@@ -10,10 +10,19 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// 本地文件的来源
+enum LocalMediaSource: Hashable, Sendable {
+    /// 从 wallhaven 下载（文件名是 6 位壁纸 ID，如 l8vp7y.jpg）
+    case wallhaven
+    /// 用户导入的图片 / 视频
+    case imported
+}
+
 struct LocalMediaItem: Identifiable, Hashable, Sendable {
     let url: URL
     let creationDate: Date
     let fileSize: Int
+    let source: LocalMediaSource
 
     // 用文件路径作为稳定 ID，重新加载后选中状态不会丢失
     var id: URL { url }
@@ -39,8 +48,18 @@ final class LocalMediaViewModel: ObservableObject {
         return URL(fileURLWithPath: downloadPath, isDirectory: true)
     }
 
+    /// 导入的文件单独放在 Imported 子文件夹，和 wallhaven 下载的区分开
+    private var importedURL: URL? {
+        directoryURL?.appendingPathComponent("Imported", isDirectory: true)
+    }
+
+    /// wallhaven 壁纸 ID：6 位小写字母或数字
+    nonisolated static func isWallhavenFileName(_ url: URL) -> Bool {
+        url.deletingPathExtension().lastPathComponent.wholeMatch(of: /[a-z0-9]{6}/) != nil
+    }
+
     func loadMedia() {
-        guard let directoryURL else { return }
+        guard let directoryURL, let importedURL else { return }
 
         let fm = FileManager.default
         if !fm.fileExists(atPath: directoryURL.path) {
@@ -48,27 +67,28 @@ final class LocalMediaViewModel: ObservableObject {
             return
         }
 
-        do {
-            let keys: [URLResourceKey] = [.creationDateKey, .fileSizeKey]
-            let urls = try fm.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: keys, options: .skipsHiddenFiles)
-            var loadedItems: [LocalMediaItem] = []
+        let keys: [URLResourceKey] = [.creationDateKey, .fileSizeKey]
+        var loadedItems: [LocalMediaItem] = []
+        // 根目录：wallhaven 下载的壁纸，以及旧版本导入的文件（按文件名区分）；Imported/：导入的文件
+        for (folder, isImportFolder) in [(directoryURL, false), (importedURL, true)] {
+            guard let urls = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: .skipsHiddenFiles) else { continue }
             for url in urls where MediaType.isSupported(url) {
-                let attrs = try url.resourceValues(forKeys: Set(keys))
+                let attrs = try? url.resourceValues(forKeys: Set(keys))
+                let isWallhaven = !isImportFolder && Self.isWallhavenFileName(url)
                 loadedItems.append(LocalMediaItem(
                     url: url,
-                    creationDate: attrs.creationDate ?? .distantPast,
-                    fileSize: attrs.fileSize ?? 0
+                    creationDate: attrs?.creationDate ?? .distantPast,
+                    fileSize: attrs?.fileSize ?? 0,
+                    source: isWallhaven ? .wallhaven : .imported
                 ))
             }
-            items = loadedItems.sorted { $0.creationDate > $1.creationDate }
-        } catch {
-            toast.show(error.localizedDescription, style: .error)
         }
+        items = loadedItems.sorted { $0.creationDate > $1.creationDate }
     }
 
     /// 从 Finder 导入图片或视频（复制到下载目录）
     func importFiles() {
-        guard let directoryURL else { return }
+        guard let directoryURL = importedURL else { return }
         do {
             try StorageManager.shared.ensureAvailable()
         } catch {

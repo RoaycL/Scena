@@ -46,7 +46,7 @@ struct ContentView: View {
     @AppStorage("ui.collectionSource") private var collectionSource: ContentSource = .wallhaven
     @State private var favoriteSelectionID: String?
     @State private var localSelectionID: String?
-    @State private var libraryKind: LibraryKind = .all
+    @State private var librarySource: LibrarySource = .all
     @State private var libraryQuery = ""
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
@@ -87,7 +87,7 @@ struct ContentView: View {
     private var libraryItems: [GalleryItem] {
         let local = localViewModel.items.map { GalleryItem(origin: .local($0)) }
         let workshopItems = workshop.libraryItems.map { GalleryItem(origin: .workshop($0)) }
-        return (local + workshopItems).filter { libraryKind.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+        return (local + workshopItems).filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
     }
 
     private func items(for page: GalleryPage) -> [GalleryItem] {
@@ -533,7 +533,7 @@ struct ContentView: View {
             } else if currentTab == .collections {
                 sourcePicker($collectionSource)
             } else if currentTab == .library {
-                libraryKindPicker
+                librarySourcePicker
             }
 
             Spacer(minLength: 12)
@@ -591,8 +591,8 @@ struct ContentView: View {
         segmented(ContentSource.allCases, selection: selection)
     }
 
-    private var libraryKindPicker: some View {
-        segmented(LibraryKind.allCases, selection: $libraryKind)
+    private var librarySourcePicker: some View {
+        segmented(LibrarySource.allCases, selection: $librarySource)
     }
 
     /// 与页签同风格的小号分段控件
@@ -922,10 +922,10 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
             case .library:
                 Image(systemName: "photo.stack").font(.system(size: 34, weight: .light))
-                if libraryKind != .all || !libraryQuery.isEmpty {
+                if librarySource != .all || !libraryQuery.isEmpty {
                     Text("没有符合条件的壁纸")
                     Button("显示全部") {
-                        libraryKind = .all
+                        librarySource = .all
                         libraryQuery = ""
                     }
                     .buttonStyle(.bordered)

@@ -8,20 +8,20 @@
 
 import SwiftUI
 
-/// 资料库的类型筛选
-enum LibraryKind: String, CaseIterable, Identifiable {
+/// 资料库的来源筛选
+enum LibrarySource: String, CaseIterable, Identifiable {
     case all = "全部"
-    case image = "图片"
-    case video = "视频"
-    case workshop = "工坊"
+    case wallhaven = "Wallhaven"
+    case imported = "本地导入"
+    case workshop = "创意工坊"
 
     var id: String { rawValue }
 
     func matches(_ item: GalleryItem) -> Bool {
         switch self {
         case .all: true
-        case .image: item.local.map { !$0.isVideo } ?? false
-        case .video: item.local?.isVideo ?? false
+        case .wallhaven: item.local?.source == .wallhaven
+        case .imported: item.local?.source == .imported
         case .workshop: item.workshop != nil
         }
     }
@@ -39,7 +39,7 @@ extension GalleryItem {
     var libraryKindLabel: String {
         switch origin {
         case .remote: "wallhaven"
-        case .local(let item): item.isVideo ? "视频" : "图片"
+        case .local(let item): "\(item.source == .wallhaven ? "Wallhaven" : "本地导入") · \(item.isVideo ? "视频" : "图片")"
         case .workshop(let item): "工坊 · \(item.type.label)"
         }
     }
