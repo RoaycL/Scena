@@ -235,6 +235,47 @@ private struct AccountSettings: View {
         }
     }
 
+    /// steamcmd 登录状态 + 操作
+    @ViewBuilder
+    private var steamCMDStatusRow: some View {
+        let status = workshop.steamCMDStatus
+        let (icon, color, title, detail): (String, Color, String, String?) = switch status {
+        case .notInstalled: ("exclamationmark.triangle.fill", .orange, "未安装 steamcmd", nil)
+        case .noUsername: ("person.crop.circle.badge.questionmark", .secondary, "请填写 Steam 用户名", nil)
+        case .notLoggedIn: ("circle.dashed", .secondary, "未登录", "在终端登录一次后即可在 App 内下载")
+        case .cached: ("checkmark.circle", .green, "已登录", "已缓存登录凭据，可点击「验证」确认仍然有效")
+        case .verified: ("checkmark.circle.fill", .green, "已登录", "最近一次下载或验证成功")
+        case .expired: ("xmark.octagon.fill", .red, "登录已失效", "请在终端重新登录")
+        case .verifying: ("hourglass", .secondary, "正在验证…", nil)
+        }
+        HStack(spacing: 10) {
+            if status == .verifying {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundStyle(color)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                if let detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if status == .cached || status == .verified || status == .expired {
+                Button("验证") { workshop.verifySteamCMDLogin() }
+                    .help("用缓存的凭据登录一次，确认是否仍然有效")
+            }
+            if status != .notInstalled && status != .noUsername && status != .verifying {
+                Button(status == .notLoggedIn || status == .expired ? "在终端登录" : "重新登录") { workshop.loginSteamCMD() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(status == .notLoggedIn || status == .expired ? .accentColor : .gray)
+            }
+        }
+        .onAppear { workshop.refreshSteamCMDStatus() }
+    }
+
     private var steamCMDSection: some View {
         Section {
             LabeledContent("steamcmd") {
@@ -257,11 +298,7 @@ private struct AccountSettings: View {
                 }
             }
             TextField("Steam 用户名", text: $workshop.steamUsername, prompt: Text("登录 steamcmd 使用的账号名"))
-            HStack {
-                Spacer()
-                Button("在终端登录 steamcmd") { workshop.loginSteamCMD() }
-                    .disabled(workshop.steamCMDPath == nil || workshop.steamUsername.isEmpty)
-            }
+            steamCMDStatusRow
         } header: {
             Label("Steam 下载（steamcmd）", systemImage: "arrow.down.circle")
         } footer: {
@@ -399,9 +436,9 @@ private struct WorkshopSettings: View {
                     Button("添加文件夹…") { workshop.addLibraryFolder() }
                 }
             } header: {
-                Text("本地壁纸库")
+                Text("壁纸库扫描位置")
             } footer: {
-                SettingsFootnote("可以添加单个壁纸文件夹，或从 Windows 电脑拷贝的 steamapps/workshop/content/431960 目录。")
+                SettingsFootnote("「存储位置」是 App 下载创意工坊壁纸的地方，跟随 设置 → 存储 变化。另外两类只读取、不会被移动：Steam 默认目录，以及你额外添加的文件夹（例如从 Windows 电脑拷贝的 steamapps/workshop/content/431960）。")
             }
         }
         .formStyle(.grouped)
@@ -567,9 +604,14 @@ private struct AboutSettings: View {
                 .padding(.vertical, 4)
             }
 
-            Section("更新") {
+            Section {
                 HStack {
-                    if updateManager.updateAvailable {
+                    if updateManager.isReadyToInstall {
+                        Label("v\(updateManager.latestVersion) 已下载，重启即可完成更新", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    } else if updateManager.isDownloading {
+                        Text("正在下载 v\(updateManager.latestVersion)…").foregroundStyle(.secondary)
+                    } else if updateManager.updateAvailable {
                         Label("发现新版本 v\(updateManager.latestVersion)", systemImage: "arrow.down.circle.fill")
                             .foregroundStyle(.green)
                     } else if let error = updateManager.errorMessage {
@@ -581,8 +623,11 @@ private struct AboutSettings: View {
                     if updateManager.isChecking || updateManager.isDownloading {
                         ProgressView().controlSize(.small)
                     }
-                    if updateManager.updateAvailable {
-                        Button("立即更新并重启") { updateManager.downloadAndInstall() }
+                    if updateManager.isReadyToInstall {
+                        Button("立即重启") { updateManager.restartToUpdate() }
+                            .buttonStyle(.borderedProminent)
+                    } else if updateManager.updateAvailable {
+                        Button(updateManager.isDevelopmentBuild ? "打开发布页面" : "下载并安装") { updateManager.installUpdate() }
                             .buttonStyle(.borderedProminent)
                             .disabled(updateManager.isDownloading)
                     } else {
@@ -597,9 +642,14 @@ private struct AboutSettings: View {
                         .lineLimit(6)
                 }
                 Toggle("自动检查更新", isOn: $updateManager.checksAutomatically)
+                Toggle("自动下载更新", isOn: $updateManager.downloadsAutomatically)
                 Link(destination: UpdateManager.releasesPage) {
                     LabeledContent("GitHub 发布页面") { Image(systemName: "arrow.up.right") }
                 }
+            } header: {
+                Text("更新")
+            } footer: {
+                SettingsFootnote("发现新版本后在后台下载，完成后询问是否重启；选择「稍后」会在退出 Scena 时自动安装。没有新版本时不会提醒。")
             }
 
             Section("链接") {

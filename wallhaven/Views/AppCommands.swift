@@ -165,7 +165,7 @@ struct StatusMenuContent: View {
 
     var body: some View {
         if updates.updateAvailable {
-            Button("更新到 Scena \(updates.latestVersion)…") { updates.downloadAndInstall() }
+            Button(updates.isReadyToInstall ? "重启以更新到 Scena \(updates.latestVersion)" : "更新到 Scena \(updates.latestVersion)…") { updates.installUpdate() }
             Divider()
         }
         Button("素材中心") { showMainWindow() }

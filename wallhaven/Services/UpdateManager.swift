@@ -23,19 +23,27 @@ final class UpdateManager: ObservableObject {
     @Published private(set) var releaseNotes = ""
     @Published private(set) var releaseURL: URL?
     @Published private(set) var isDownloading = false
+    /// 新版本已下载并解压，重启（或退出）即可完成安装
+    @Published private(set) var isReadyToInstall = false
     @Published private(set) var errorMessage: String?
-    /// 手动检查的结果说明（已是最新、尚无发布版本等）
+    /// 检查结果说明（已是最新、尚无发布版本等），只在设置页显示
     @Published private(set) var statusMessage: String?
     @Published var checksAutomatically: Bool {
         didSet { UserDefaults.standard.set(checksAutomatically, forKey: Keys.automatic) }
     }
+    @Published var downloadsAutomatically: Bool {
+        didSet { UserDefaults.standard.set(downloadsAutomatically, forKey: Keys.downloadsAutomatically) }
+    }
 
     private var downloadURL: URL?
+    /// 已解压、等待安装的新版本
+    private var stagedApp: URL?
+    private var isRelaunching = false
 
     private enum Keys {
         static let automatic = "update.checksAutomatically"
+        static let downloadsAutomatically = "update.downloadsAutomatically"
         static let lastCheck = "update.lastCheck"
-        static let skippedVersion = "update.skippedVersion"
     }
 
     var currentVersion: String {
@@ -43,17 +51,24 @@ final class UpdateManager: ObservableObject {
     }
 
     /// 从 Xcode 构建目录运行时不覆盖安装，避免替换开发产物
-    private var isDevelopmentBuild: Bool {
+    var isDevelopmentBuild: Bool {
         Bundle.main.bundlePath.contains("/DerivedData/") || Bundle.main.bundlePath.contains("/Build/Products/")
     }
 
+    /// 能否在 App 内直接下载安装（有 zip 安装包，且不是开发构建）
+    private var canInstallInApp: Bool {
+        downloadURL != nil && !isDevelopmentBuild
+    }
+
     private init() {
-        checksAutomatically = UserDefaults.standard.object(forKey: Keys.automatic) as? Bool ?? true
+        let defaults = UserDefaults.standard
+        checksAutomatically = defaults.object(forKey: Keys.automatic) as? Bool ?? true
+        downloadsAutomatically = defaults.object(forKey: Keys.downloadsAutomatically) as? Bool ?? true
     }
 
     // MARK: - Checking
 
-    /// 启动后自动检查：每天最多一次，发现新版本时弹窗提示（跳过的版本不再提示）
+    /// 启动后自动检查：每天最多一次，没有新版本时不打扰
     func checkAutomaticallyIfNeeded() async {
         guard checksAutomatically else { return }
         let defaults = UserDefaults.standard
@@ -61,13 +76,16 @@ final class UpdateManager: ObservableObject {
         await check(userInitiated: false)
     }
 
-    /// 手动检查（菜单栏、设置页）：总会给出结果
+    /// 手动检查（菜单栏、设置页）：没有新版本只在设置页和轻提示里说明，不弹窗
     func checkForUpdates() async {
         await check(userInitiated: true)
     }
 
     private func check(userInitiated: Bool) async {
-        guard !isChecking else { return }
+        guard !isChecking, !isDownloading, !isReadyToInstall else {
+            if isReadyToInstall { promptToRestart() }
+            return
+        }
         isChecking = true
         errorMessage = nil
         statusMessage = nil
@@ -84,8 +102,8 @@ final class UpdateManager: ObservableObject {
 
             if status == 404 {
                 // 仓库还没有发布任何 Release
-                statusMessage = "还没有发布的版本"
-                if userInitiated { showInfo("还没有发布的版本", detail: "GitHub 上暂时没有 Scena 的发布版本。") }
+                statusMessage = "已是最新版本（\(currentVersion)）"
+                if userInitiated { ToastCenter.shared.show("已是最新版本", style: .success) }
                 return
             }
             guard status == 200 else { throw UpdateError.http(status) }
@@ -102,51 +120,54 @@ final class UpdateManager: ObservableObject {
             updateAvailable = Self.isNewer(version, than: currentVersion)
             guard updateAvailable else {
                 statusMessage = "已是最新版本（\(currentVersion)）"
-                if userInitiated { showInfo("已是最新版本", detail: "当前版本 \(currentVersion) 是最新的。") }
+                if userInitiated { ToastCenter.shared.show("已是最新版本", style: .success) }
                 return
             }
 
-            let skipped = UserDefaults.standard.string(forKey: Keys.skippedVersion)
-            if userInitiated || skipped != version {
+            if downloadsAutomatically && canInstallInApp {
+                // 后台下载，下载完成后再询问是否重启
+                downloadUpdate()
+            } else {
                 promptForUpdate()
             }
         } catch {
-            let message = error.localizedDescription
-            errorMessage = "检查更新失败：\(message)"
-            if userInitiated { showInfo("检查更新失败", detail: message) }
+            errorMessage = "检查更新失败：\(error.localizedDescription)"
+            if userInitiated { ToastCenter.shared.show(errorMessage ?? "检查更新失败", style: .error) }
         }
     }
 
-    // MARK: - Installing
+    // MARK: - Downloading
 
+    /// 没有开启自动下载（或无法在 App 内安装）时的提示
     private func promptForUpdate() {
         let alert = NSAlert()
         alert.messageText = "Scena \(latestVersion) 可以更新了"
         let notes = releaseNotes.isEmpty ? "" : "\n\n" + String(releaseNotes.prefix(800))
         alert.informativeText = "当前版本 \(currentVersion)。\(notes)"
-        alert.addButton(withTitle: "立即更新")
+        alert.addButton(withTitle: canInstallInApp ? "下载并安装" : "打开发布页面")
         alert.addButton(withTitle: "稍后")
-        alert.addButton(withTitle: "跳过此版本")
         NSApp.activate()
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            downloadAndInstall()
-        case .alertThirdButtonReturn:
-            UserDefaults.standard.set(latestVersion, forKey: Keys.skippedVersion)
-        default:
-            break
+        if alert.runModal() == .alertFirstButtonReturn {
+            installUpdate()
         }
     }
 
-    func downloadAndInstall() {
-        // 没有 zip 安装包，或者在开发环境运行：打开发布页面手动下载
-        guard let downloadURL, !isDevelopmentBuild else {
+    /// 设置页 / 菜单里的「更新」按钮：已下载则重启，否则开始下载
+    func installUpdate() {
+        if isReadyToInstall {
+            restartToUpdate()
+        } else if canInstallInApp {
+            downloadUpdate()
+        } else {
             NSWorkspace.shared.open(releaseURL ?? Self.releasesPage)
-            return
         }
+    }
+
+    private func downloadUpdate() {
+        guard let downloadURL, !isDownloading else { return }
         isDownloading = true
         errorMessage = nil
-        ToastCenter.shared.show("正在下载 Scena \(latestVersion)…", style: .progress)
+        statusMessage = "正在下载 Scena \(latestVersion)…"
 
         Task {
             defer { isDownloading = false }
@@ -155,12 +176,26 @@ final class UpdateManager: ObservableObject {
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     throw UpdateError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
                 }
-                let newApp = try await Task.detached { try Self.extractApp(from: tempURL) }.value
-                try installAndRelaunch(newApp)
+                stagedApp = try await Task.detached { try Self.extractApp(from: tempURL) }.value
+                isReadyToInstall = true
+                statusMessage = "Scena \(latestVersion) 已下载，重启即可完成更新"
+                promptToRestart()
             } catch {
-                errorMessage = "更新失败：\(error.localizedDescription)"
-                ToastCenter.shared.show("更新失败：\(error.localizedDescription)", style: .error)
+                statusMessage = nil
+                errorMessage = "下载更新失败：\(error.localizedDescription)"
             }
+        }
+    }
+
+    private func promptToRestart() {
+        let alert = NSAlert()
+        alert.messageText = "Scena \(latestVersion) 已准备就绪"
+        alert.informativeText = "重启 Scena 即可完成更新。选择「稍后」会在下次退出时自动安装。"
+        alert.addButton(withTitle: "立即重启")
+        alert.addButton(withTitle: "稍后")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn {
+            restartToUpdate()
         }
     }
 
@@ -183,8 +218,33 @@ final class UpdateManager: ObservableObject {
         return app
     }
 
-    /// 替换当前 App，旧版本退出后再启动新版本
-    private func installAndRelaunch(_ newApp: URL) throws {
+    // MARK: - Installing
+
+    /// 替换 App 后重启：等当前进程完全退出再打开新版本，避免同时运行两个实例
+    func restartToUpdate() {
+        do {
+            try replaceCurrentApp()
+            let pid = ProcessInfo.processInfo.processIdentifier
+            let relauncher = Process()
+            relauncher.executableURL = URL(fileURLWithPath: "/bin/sh")
+            relauncher.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+            try relauncher.run()
+            isRelaunching = true
+            NSApp.terminate(nil)
+        } catch {
+            errorMessage = "安装更新失败：\(error.localizedDescription)"
+            ToastCenter.shared.show(errorMessage ?? "安装更新失败", style: .error)
+        }
+    }
+
+    /// 退出时安装已下载的更新（选择了「稍后」）
+    func installPendingUpdateOnQuit() {
+        guard !isRelaunching, isReadyToInstall else { return }
+        try? replaceCurrentApp()
+    }
+
+    private func replaceCurrentApp() throws {
+        guard let stagedApp else { throw UpdateError.noApp }
         let fm = FileManager.default
         let current = URL(fileURLWithPath: Bundle.main.bundlePath)
         let backup = current.deletingLastPathComponent().appendingPathComponent(".\(current.lastPathComponent).old")
@@ -192,36 +252,15 @@ final class UpdateManager: ObservableObject {
         try? fm.removeItem(at: backup)
         try fm.moveItem(at: current, to: backup)
         do {
-            try fm.copyItem(at: newApp, to: current)
+            try fm.copyItem(at: stagedApp, to: current)
         } catch {
             try? fm.moveItem(at: backup, to: current)
             throw error
         }
         try? fm.removeItem(at: backup)
-
-        // 等当前进程完全退出后再打开新版本，避免同时运行两个实例
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let relauncher = Process()
-        relauncher.executableURL = URL(fileURLWithPath: "/bin/sh")
-        relauncher.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", current.path]
-        try relauncher.run()
-        NSApp.terminate(nil)
-    }
-
-    // MARK: - Helpers
-
-    private func showInfo(_ title: String, detail: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-        alert.addButton(withTitle: "好")
-        if title == "还没有发布的版本" || errorMessage != nil {
-            alert.addButton(withTitle: "打开发布页面")
-        }
-        NSApp.activate()
-        if alert.runModal() == .alertSecondButtonReturn {
-            NSWorkspace.shared.open(Self.releasesPage)
-        }
+        try? fm.removeItem(at: stagedApp.deletingLastPathComponent())
+        self.stagedApp = nil
+        isReadyToInstall = false
     }
 
     nonisolated static func isNewer(_ latest: String, than current: String) -> Bool {

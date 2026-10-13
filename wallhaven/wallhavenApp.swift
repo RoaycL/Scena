@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         SteamCMDDownloader.shared.terminateAll()
+        UpdateManager.shared.installPendingUpdateOnQuit()
     }
 
     /// 点击 Dock 图标：桌面上的动态壁纸窗口也算「可见窗口」，系统会因此不重新打开主窗口，

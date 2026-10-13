@@ -51,6 +51,66 @@ final class SteamCMDDownloader {
             .map { URL(fileURLWithPath: $0) }
     }
 
+    /// steamcmd 是否缓存了这个账号的登录凭据（只检查有没有，不读取凭据内容）。
+    /// 登录成功后 steamcmd 在 config.vdf 的 ConnectCache 里写入一项，键为「用户名的 CRC32 + 1」
+    nonisolated static func hasCachedCredentials(username: String) -> Bool {
+        guard isValidUsernameValue(username) else { return false }
+        let config = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Steam/config/config.vdf")
+        guard let text = try? String(contentsOf: config, encoding: .utf8),
+              let cacheStart = text.range(of: "\"ConnectCache\"") else { return false }
+        let key = String(format: "%08x", crc32(Array(username.lowercased().utf8))) + "1"
+        // 只在 ConnectCache 这一段里找
+        let section = text[cacheStart.upperBound...].prefix { $0 != "}" }
+        return section.contains("\"\(key)\"")
+    }
+
+    nonisolated private static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1
+            }
+        }
+        return ~crc
+    }
+
+    nonisolated private static func isValidUsernameValue(_ name: String) -> Bool {
+        !name.isEmpty && name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
+    /// 用缓存的凭据实际登录一次（不需要密码），确认凭据是否仍然有效。只在用户点击「验证」时调用
+    func verifyLogin(username: String) async throws -> Bool {
+        guard let steamcmd = Self.locate() else { throw SteamCMDError.notInstalled }
+        guard Self.isValidUsername(username) else { throw SteamCMDError.missingUsername }
+        let process = Process()
+        process.executableURL = steamcmd
+        process.arguments = ["+@ShutdownOnFailedCommand", "1", "+@NoPromptForPassword", "1", "+login", username, "+quit"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.standardInput = FileHandle.nullDevice
+
+        let output: String = try await withCheckedThrowingContinuation { continuation in
+            let buffer = OutputBuffer()
+            pipe.fileHandleForReading.readabilityHandler = { handle in buffer.append(handle.availableData) }
+            process.terminationHandler = { _ in
+                pipe.fileHandleForReading.readabilityHandler = nil
+                buffer.append(pipe.fileHandleForReading.readDataToEndOfFile())
+                continuation.resume(returning: buffer.text)
+            }
+            do {
+                try process.run()
+            } catch {
+                pipe.fileHandleForReading.readabilityHandler = nil
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
+            }
+        }
+        return output.contains("Waiting for user info...OK")
+    }
+
     static func isValidUsername(_ name: String) -> Bool {
         !name.isEmpty && name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
     }

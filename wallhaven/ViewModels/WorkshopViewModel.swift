@@ -8,6 +8,21 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// steamcmd 的登录状态
+enum SteamCMDStatus: Equatable {
+    case notInstalled
+    case noUsername
+    /// 没有缓存的登录凭据
+    case notLoggedIn
+    /// 有缓存的凭据（尚未通过下载或验证确认）
+    case cached
+    /// 最近一次下载或验证成功
+    case verified
+    /// 凭据已失效（下载或验证时提示未登录）
+    case expired
+    case verifying
+}
+
 final class WorkshopViewModel: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case library = "已下载"
@@ -63,9 +78,13 @@ final class WorkshopViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(apiKey, forKey: Keys.apiKey) }
     }
     @Published var steamUsername: String {
-        didSet { UserDefaults.standard.set(steamUsername, forKey: Keys.username) }
+        didSet {
+            UserDefaults.standard.set(steamUsername, forKey: Keys.username)
+            refreshSteamCMDStatus()
+        }
     }
     @Published private(set) var extraFolders: [URL]
+    @Published private(set) var steamCMDStatus: SteamCMDStatus = .notLoggedIn
 
     private enum Keys {
         static let apiKey = "workshop.steamWebAPIKey"
@@ -76,6 +95,9 @@ final class WorkshopViewModel: ObservableObject {
         static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
         static let maxConcurrentDownloads = "workshop.maxConcurrentDownloads"
+        /// 记录凭据失效时对应的用户名，重新登录（凭据变化）前一直显示「已失效」
+        static let steamCMDExpiredUser = "workshop.steamcmdExpiredUser"
+        static let steamCMDExpiredAt = "workshop.steamcmdExpiredAt"
     }
 
     private let api = SteamWorkshopAPI()
@@ -92,6 +114,7 @@ final class WorkshopViewModel: ObservableObject {
     private var batchInterrupted = false
     private var isProcessingQueue = false
     private var storageObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
     private var isShuttingDown = false
 
@@ -126,6 +149,68 @@ final class WorkshopViewModel: ObservableObject {
         }
         storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshLibrary() }
+        }
+        // 在终端登录 steamcmd 后切回 App 时刷新状态
+        activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSteamCMDStatus() }
+        }
+        refreshSteamCMDStatus()
+    }
+
+    // MARK: - steamcmd login status
+
+    /// 只读取本地状态，不登录 Steam
+    func refreshSteamCMDStatus() {
+        guard steamCMDStatus != .verifying else { return }
+        let username = steamUsername.trimmingCharacters(in: .whitespaces)
+        if steamCMDPath == nil {
+            steamCMDStatus = .notInstalled
+        } else if username.isEmpty {
+            steamCMDStatus = .noUsername
+        } else if UserDefaults.standard.string(forKey: Keys.steamCMDExpiredUser) == username.lowercased(), !credentialsChangedSinceExpiry {
+            steamCMDStatus = .expired
+        } else if steamCMDStatus == .verified {
+            return
+        } else {
+            steamCMDStatus = SteamCMDDownloader.hasCachedCredentials(username: username) ? .cached : .notLoggedIn
+        }
+    }
+
+    /// 失效后在终端重新登录会改写凭据文件：文件比失效时间新，就不再显示「已失效」
+    private var credentialsChangedSinceExpiry: Bool {
+        guard let expiredAt = UserDefaults.standard.object(forKey: Keys.steamCMDExpiredAt) as? Date else { return false }
+        let config = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Steam/config/config.vdf")
+        guard let modified = (try? config.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { return false }
+        return modified > expiredAt
+    }
+
+    /// 用缓存的凭据实际登录一次确认是否有效（用户点击「验证」时）
+    func verifySteamCMDLogin() {
+        guard steamCMDStatus != .verifying, !SteamCMDDownloader.shared.isBusy else {
+            toast.show("正在下载，稍后再验证", style: .info)
+            return
+        }
+        steamCMDStatus = .verifying
+        Task {
+            let ok = (try? await SteamCMDDownloader.shared.verifyLogin(username: steamUsername)) ?? false
+            steamCMDStatus = .notLoggedIn
+            setSteamCMDLogin(valid: ok)
+            toast.show(ok ? "steamcmd 登录有效" : "steamcmd 登录已失效，请在终端重新登录", style: ok ? .success : .error)
+        }
+    }
+
+    private func setSteamCMDLogin(valid: Bool) {
+        let username = steamUsername.trimmingCharacters(in: .whitespaces).lowercased()
+        if valid {
+            UserDefaults.standard.removeObject(forKey: Keys.steamCMDExpiredUser)
+            UserDefaults.standard.removeObject(forKey: Keys.steamCMDExpiredAt)
+            steamCMDStatus = .verified
+        } else {
+            UserDefaults.standard.set(username, forKey: Keys.steamCMDExpiredUser)
+            // 稍微往后放一点，避免失败的这次登录本身改写凭据文件导致马上被判定为「已重新登录」
+            UserDefaults.standard.set(Date().addingTimeInterval(5), forKey: Keys.steamCMDExpiredAt)
+            steamCMDStatus = .expired
         }
     }
 
@@ -438,8 +523,10 @@ final class WorkshopViewModel: ObservableObject {
                     }
                 }
             } catch {
+                if case SteamCMDError.notLoggedIn = error { setSteamCMDLogin(valid: false) }
                 result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
             }
+            if !result.downloaded.isEmpty { setSteamCMDLogin(valid: true) }
             for folder in result.downloaded.values {
                 let root = folder.deletingLastPathComponent()
                 if !libraryRoots.contains(where: { Self.pathKey($0) == Self.pathKey(root) }) {
