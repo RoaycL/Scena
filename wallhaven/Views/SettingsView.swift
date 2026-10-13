@@ -443,9 +443,9 @@ private struct AutoPauseSection: View {
 
     var body: some View {
         Section {
-            Toggle("桌面被窗口完全挡住时（看不见就不渲染，推荐）", isOn: $occluded)
-            Toggle("其他 App 在使用时（只在桌面 / 访达处于前台时播放）", isOn: $otherApp)
-            Toggle("其他 App 全屏时（只暂停被盖住的显示器）", isOn: $fullScreen)
+            Toggle("桌面被窗口完全挡住时", isOn: $occluded)
+            Toggle("其他 App 在使用时", isOn: $otherApp)
+            Toggle("其他 App 全屏时", isOn: $fullScreen)
             Toggle("未连接电源时", isOn: $battery)
             Toggle("电脑不活跃时", isOn: $idle)
             if idle {
@@ -555,11 +555,8 @@ private struct WorkshopSettings: View {
             }
 
             Section {
-                Stepper(value: $workshop.maxConcurrentDownloads, in: 1...10) {
-                    LabeledContent("每批下载数量") {
-                        Text("\(workshop.maxConcurrentDownloads) 个")
-                            .monospacedDigit()
-                    }
+                Picker("每批下载数量", selection: $workshop.maxConcurrentDownloads) {
+                    ForEach(1...10, id: \.self) { Text("\($0) 个").tag($0) }
                 }
                 HStack {
                     Text("下载任务")
