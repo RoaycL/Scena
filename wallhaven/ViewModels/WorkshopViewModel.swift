@@ -95,8 +95,9 @@ final class WorkshopViewModel: ObservableObject {
     /// 已下载模式在本地按关键词和筛选条件过滤；在线模式由服务端过滤
     var items: [WorkshopItem] {
         switch mode {
-        case .library: libraryItems.filter { filters.matches($0, query: query) }
-        case .subscribed: subscribedItems.filter { filters.matches($0, query: query) }
+        // 已下载 / 已订阅是「我的内容」，只按关键词搜索，不应用在线浏览的筛选条件
+        case .library: libraryItems.filter { WorkshopFilters.matchesQuery($0, query: query) }
+        case .subscribed: subscribedItems.filter { WorkshopFilters.matchesQuery($0, query: query) }
         case .online: onlineItems
         }
     }
@@ -368,11 +369,24 @@ final class WorkshopViewModel: ObservableObject {
             defer { isSyncing = false }
             guard await account.refreshFromCookies() else { return }
             do {
-                let ids = try await account.subscribedIDs()
-                var details: [WorkshopItem] = []
+                let list = try await account.subscriptions()
+                let ids = list.entries.map(\.id)
+                var fetched: [WorkshopItem] = []
                 for start in stride(from: 0, to: ids.count, by: 100) {
-                    details += try await api.details(ids: Array(ids[start..<min(start + 100, ids.count)]))
+                    fetched += try await api.details(ids: Array(ids[start..<min(start + 100, ids.count)]))
                 }
+                // 公开详情接口查不到的条目（被作者删除、隐藏或受限）用订阅页上的标题和预览图补上，保证不丢
+                let byID = Dictionary(fetched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                let details = list.entries.map { entry in
+                    byID[entry.id] ?? WorkshopItem(
+                        id: entry.id,
+                        title: entry.title ?? "工坊条目 \(entry.id)",
+                        type: .unknown,
+                        previewURL: entry.previewURL,
+                        tags: []
+                    )
+                }
+                let unavailable = list.entries.count - byID.count
                 subscribedIDs = Set(ids)
                 subscribedItems = details
                 lastSyncAt = Date()
@@ -384,8 +398,11 @@ final class WorkshopViewModel: ObservableObject {
                     let missing = details.filter { !localIDs.contains($0.id) && $0.type.isPlayable }.map(\.id)
                     if !missing.isEmpty { enqueueDownloads(missing) }
                 }
-                if force {
-                    toast.show("已同步 \(ids.count) 个订阅", style: .success)
+                if force || unavailable > 0 {
+                    var message = "已同步 \(ids.count) 个订阅"
+                    if unavailable > 0 { message += "（\(unavailable) 个无法获取详情，可能已被作者删除或隐藏）" }
+                    if let total = list.reportedTotal, total > ids.count { message += "，Steam 显示共 \(total) 个" }
+                    toast.show(message, style: unavailable > 0 ? .info : .success)
                 }
             } catch {
                 toast.show("同步订阅失败：\(error.localizedDescription)", style: .error)

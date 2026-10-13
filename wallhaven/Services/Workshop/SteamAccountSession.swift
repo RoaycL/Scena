@@ -111,12 +111,25 @@ final class SteamAccountSession: ObservableObject {
         }
     }
 
-    /// 读取账号订阅的 Wallpaper Engine 条目 ID（按订阅页逐页读取，限速）
-    func subscribedIDs() async throws -> [String] {
+    /// 订阅页上的条目（标题和预览图直接取自页面，公开详情接口查不到的条目也能显示）
+    nonisolated struct SubscriptionEntry: Sendable {
+        let id: String
+        let title: String?
+        let previewURL: URL?
+    }
+
+    struct SubscriptionList {
+        var entries: [SubscriptionEntry] = []
+        /// 页面上显示的订阅总数（"Showing 1-30 of 205 entries"）
+        var reportedTotal: Int?
+    }
+
+    /// 读取账号订阅的 Wallpaper Engine 条目（按订阅页逐页读取，限速）
+    func subscriptions() async throws -> SubscriptionList {
         guard let steamID else { throw SteamSessionError.notLoggedIn }
-        var ids: [String] = []
+        var list = SubscriptionList()
         var seen = Set<String>()
-        for page in 1...100 {
+        for page in 1...200 {
             var components = URLComponents(string: "https://steamcommunity.com/profiles/\(steamID)/myworkshopfiles/")!
             components.queryItems = [
                 .init(name: "appid", value: WorkshopConstants.appID),
@@ -126,17 +139,52 @@ final class SteamAccountSession: ObservableObject {
                 .init(name: "p", value: String(page)),
             ]
             let html = try await getHTML(components.url!)
-            // 订阅页每个条目的容器 id 为 Subscription<ID>，比通用的 filedetails 链接更准确
-            var pageIDs = html.matches(of: /id="Subscription(\d+)"/).map { String($0.1) }
-            if pageIDs.isEmpty {
-                pageIDs = html.matches(of: /sharedfiles\/filedetails\/\?id=(\d+)/).map { String($0.1) }
+            if list.reportedTotal == nil, let match = html.firstMatch(of: /of ([\d,]+) entries/) {
+                list.reportedTotal = Int(match.1.replacingOccurrences(of: ",", with: ""))
             }
-            let fresh = pageIDs.filter { seen.insert($0).inserted }
+
+            let pageEntries = Self.parseSubscriptionPage(html)
+            let fresh = pageEntries.filter { seen.insert($0.id).inserted }
             if fresh.isEmpty { break }
-            ids += fresh
-            if pageIDs.count < 30 { break }
+            list.entries += fresh
+            // 以页面给出的总数为准判断是否读完
+            if let total = list.reportedTotal, list.entries.count >= total { break }
         }
-        return ids
+        return list
+    }
+
+    /// 订阅页每个条目的容器 id 为 Subscription<ID>；按容器切块，从块里取标题和预览图
+    nonisolated private static func parseSubscriptionPage(_ html: String) -> [SubscriptionEntry] {
+        let starts = html.matches(of: /id="Subscription(\d+)"/)
+        if starts.isEmpty {
+            // 兜底：页面结构变化时只取 ID
+            var seen = Set<String>()
+            return html.matches(of: /sharedfiles\/filedetails\/\?id=(\d+)/)
+                .map { String($0.1) }
+                .filter { seen.insert($0).inserted }
+                .map { SubscriptionEntry(id: $0, title: nil, previewURL: nil) }
+        }
+        return starts.enumerated().map { index, match in
+            let blockEnd = index + 1 < starts.count ? starts[index + 1].range.lowerBound : html.endIndex
+            let block = html[match.range.lowerBound..<blockEnd]
+            let title = block.firstMatch(of: /class="workshopItemTitle[^"]*"[^>]*>([^<]+)</)
+                .map { String($0.1).trimmingCharacters(in: .whitespacesAndNewlines) }
+            let preview = block.firstMatch(of: /class="workshopItemPreviewImage[^"]*"[^>]*src="([^"]+)"/)
+                ?? block.firstMatch(of: /src="([^"]+)"[^>]*class="workshopItemPreviewImage/)
+            return SubscriptionEntry(
+                id: String(match.1),
+                title: title.map(Self.decodeEntities),
+                previewURL: preview.flatMap { URL(string: Self.decodeEntities(String($0.1))) }
+            )
+        }
+    }
+
+    nonisolated private static func decodeEntities(_ text: String) -> String {
+        text.replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
     }
 
     func subscribe(_ id: String) async throws {
@@ -189,11 +237,36 @@ final class SteamAccountSession: ObservableObject {
 
         var request = request
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
+        // /profiles/<ID>/ 会重定向到自定义 URL，重定向时手动设置的 Cookie 头需要重新带上
+        let delegate = request.value(forHTTPHeaderField: "Cookie").map(RedirectCookieDelegate.init)
+        let (data, response) = try await session.data(for: request, delegate: delegate)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 429 { throw SteamSessionError.rateLimited }
         if status == 401 || status == 403 { throw SteamSessionError.expired }
         guard (200..<400).contains(status) else { throw SteamSessionError.failed("Steam 请求失败（\(status)）。") }
         return data
+    }
+}
+
+/// 重定向到 steamcommunity.com 时保留登录 Cookie
+nonisolated private final class RedirectCookieDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let cookie: String
+
+    init(_ cookie: String) {
+        self.cookie = cookie
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        var request = request
+        if request.url?.host?.hasSuffix("steamcommunity.com") == true {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
+        completionHandler(request)
     }
 }

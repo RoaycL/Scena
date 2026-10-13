@@ -265,6 +265,14 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
         WorkshopRating.allCases.filter { !ratings.contains($0) }.map(\.rawValue) + ["Application"]
     }
 
+    /// 只按关键词匹配标题和标签（已下载 / 已订阅模式使用）
+    static func matchesQuery(_ item: WorkshopItem, query: String) -> Bool {
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return true }
+        return item.title.localizedCaseInsensitiveContains(keyword)
+            || item.tags.contains { $0.localizedCaseInsensitiveContains(keyword) || WorkshopTags.label(for: $0).contains(keyword) }
+    }
+
     func matches(_ item: WorkshopItem, query: String) -> Bool {
         if let typeTag = type.workshopTag, item.type.rawValue != typeTag.lowercased() { return false }
         let rating = WorkshopRating(rawValue: item.contentRating ?? "") ?? .everyone
