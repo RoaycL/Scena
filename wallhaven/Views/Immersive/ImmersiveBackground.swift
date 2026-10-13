@@ -10,12 +10,14 @@ import SwiftUI
 /// 每张先用已缓存的缩略图模糊放大顶上，原图加载完成后再淡入
 struct ImmersiveBackground: View {
     let item: GalleryItem?
+    /// 在线工坊条目是否显示居中的预览卡片（网格界面隐藏时才显示，平时预览在右侧详情栏）
+    var showsPreviewCard = true
 
     var body: some View {
         ZStack {
             Color.black
             if let item {
-                BackgroundLayer(item: item)
+                BackgroundLayer(item: item, showsPreviewCard: showsPreviewCard)
                     .id(item.id)
                     .transition(.opacity)
             }
@@ -27,6 +29,7 @@ struct ImmersiveBackground: View {
 
 private struct BackgroundLayer: View {
     let item: GalleryItem
+    let showsPreviewCard: Bool
     @State private var isFullLoaded = false
 
     /// 未下载的工坊条目只有一张小尺寸方形预览图（391～1024px），不能直接铺满窗口
@@ -38,7 +41,7 @@ private struct BackgroundLayer: View {
     var body: some View {
         GeometryReader { geo in
             if let workshop = onlinePreviewItem {
-                OnlinePreviewShowcase(item: item, workshop: workshop, size: geo.size)
+                OnlinePreviewShowcase(item: item, workshop: workshop, size: geo.size, showsCard: showsPreviewCard)
             } else {
                 layers(in: geo.size)
             }
@@ -96,6 +99,7 @@ private struct OnlinePreviewShowcase: View {
     let item: GalleryItem
     let workshop: WorkshopItem
     let size: CGSize
+    let showsCard: Bool
 
     var body: some View {
         // 不超过预览图的原始尺寸太多（方图最大 1024px ≈ Retina 下 512pt，适度放大到 560pt 仍清晰）
@@ -138,8 +142,9 @@ private struct OnlinePreviewShowcase: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
             }
-            // 放在右上区域，避开左下角的信息面板和底部缩略图条
-            .position(x: size.width * 0.66, y: size.height * 0.42)
+            .position(x: size.width / 2, y: size.height / 2)
+            .opacity(showsCard ? 1 : 0)
+            .animation(.easeInOut(duration: 0.4), value: showsCard)
         }
         .frame(width: size.width, height: size.height)
         .clipped()
@@ -147,7 +152,7 @@ private struct OnlinePreviewShowcase: View {
 }
 
 /// 用 NSImageView 播放 GIF 预览（加载完成前透明，露出下层的静态图）
-private struct AnimatedPreviewImage: NSViewRepresentable {
+struct AnimatedPreviewImage: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> NSImageView {

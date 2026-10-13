@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var localSelectionID: String?
     @State private var workshopSelectionID: String?
     @State private var isWorkshopFilterPresented = false
+    @State private var workshopColumns = 4
     /// 背景只在有新选中项时更新：搜索重置、列表清空期间保持上一张，不会跳到随机图
     @State private var backgroundItem: GalleryItem?
     @State private var prefetcher: ImagePrefetcher?
@@ -144,6 +145,13 @@ struct ContentView: View {
             moveSelection(by: -1)
         case .right:
             moveSelection(by: 1)
+        case .up:
+            // 工坊网格按行移动
+            guard currentTab == .workshop else { return false }
+            moveSelection(by: -workshopColumns)
+        case .down:
+            guard currentTab == .workshop else { return false }
+            moveSelection(by: workshopColumns)
         case .enter:
             guard let item = selectedItem else { return false }
             apply(item)
@@ -176,8 +184,14 @@ struct ContentView: View {
         GeometryReader { proxy in
             let size = proxy.size
             ZStack(alignment: .top) {
-                ImmersiveBackground(item: backgroundItem)
+                ImmersiveBackground(item: backgroundItem, showsPreviewCard: immersive.isChromeHidden)
                     .frame(width: size.width, height: size.height)
+
+                // 工坊网格界面整体压暗，保证缩略图和文字清晰
+                if currentTab == .workshop {
+                    Color.black.opacity(immersive.isChromeHidden ? 0 : 0.35)
+                        .allowsHitTesting(false)
+                }
 
                 scrims(height: size.height)
                     .opacity(immersive.isChromeHidden ? 0 : 1)
@@ -584,6 +598,17 @@ struct ContentView: View {
         if items.isEmpty && !isLoading {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if currentTab == .workshop {
+            WorkshopGridView(
+                liveController: liveController,
+                items: workshop.items,
+                selectedID: selectedItem?.workshop?.id,
+                size: size,
+                columnCount: $workshopColumns,
+                onSelect: { select(GalleryItem(origin: .workshop($0))) },
+                onHover: { reason, active in immersive.setHold(reason, active: active) },
+                contextMenu: { contextMenu(for: GalleryItem(origin: .workshop($0))) }
+            )
         } else {
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 0)
@@ -707,68 +732,10 @@ struct ContentView: View {
                 CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
             }
 
-        case .workshop(let workshopItem):
-            workshopInfoPanel(workshopItem)
+        case .workshop:
+            // 工坊页使用网格 + 右侧详情栏（WorkshopGridView）
+            EmptyView()
         }
-    }
-
-    @ViewBuilder
-    private func workshopInfoPanel(_ item: WorkshopItem) -> some View {
-        let isLive = item.localFolder.map { liveController.currentURL?.standardizedFileURL == $0.standardizedFileURL } ?? false
-        let isDownloading = workshop.downloading.contains(item.id)
-        InfoPanel(
-            eyebrow: isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(item.type.label)",
-            title: item.title,
-            meta: workshopMeta(item),
-            tags: item.tags,
-            onTag: { workshop.applyTag($0) },
-            tagLabel: WorkshopTags.label(for:)
-        ) {
-            if !item.type.isPlayable {
-                Text("Windows 程序，macOS 无法运行")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-            } else if item.isDownloaded {
-                PrimaryActionButton(title: "设为动态壁纸") { workshop.apply(item) }
-            } else if isDownloading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.white)
-                    Text("下载中…").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                    Button("取消") { workshop.cancelDownload(item) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-            } else {
-                PrimaryActionButton(title: "下载并应用", systemImage: "arrow.down") { workshop.apply(item) }
-            }
-
-            if let folder = item.localFolder {
-                CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
-                    NSWorkspace.shared.activateFileViewerSelecting([folder])
-                }
-            }
-            if item.workshopPageURL != nil {
-                CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开（可订阅）") { workshop.openInSteam(item) }
-            }
-            if item.isDownloaded {
-                CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { workshop.delete(item) }
-            }
-        }
-    }
-
-    private func workshopMeta(_ item: WorkshopItem) -> [String] {
-        var meta: [String] = []
-        if item.fileSize > 0 {
-            meta.append(ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file))
-        }
-        if item.subscriptions > 0 { meta.append("\(item.subscriptions) 订阅") }
-        if let rating = item.contentRating { meta.append(rating) }
-        meta.append(item.isDownloaded ? "已下载" : "未下载")
-        return meta
     }
 
     private func remoteMeta(_ wallpaper: WallhavenWallpaper) -> [String] {

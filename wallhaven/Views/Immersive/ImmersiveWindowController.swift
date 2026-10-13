@@ -13,7 +13,7 @@ import SwiftUI
 ///  - 在横向缩略图条上，把垂直滚轮转换为水平滚动，并支持拖动滚动
 final class ImmersiveWindowController: ObservableObject {
     enum Key {
-        case left, right, space, enter, escape, character(Character)
+        case left, right, up, down, space, enter, escape, character(Character)
     }
 
     @Published private(set) var isChromeHidden = false
@@ -182,6 +182,8 @@ final class ImmersiveWindowController: ObservableObject {
         switch event.keyCode {
         case 123: key = .left
         case 124: key = .right
+        case 126: key = .up
+        case 125: key = .down
         case 49: key = .space
         case 36, 76: key = .enter
         case 53: key = .escape
