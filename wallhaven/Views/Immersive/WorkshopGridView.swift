@@ -21,6 +21,8 @@ struct WorkshopGridView<MenuItems: View>: View {
     let onSelect: (WorkshopItem) -> Void
     let onHover: (String, Bool) -> Void
     @ViewBuilder let contextMenu: (WorkshopItem) -> MenuItems
+    /// 顶部栏占用的高度（顶部栏有二级切换时更高）
+    var topInset: CGFloat = 58
 
     private let spacing: CGFloat = 10
     private let panelWidth: CGFloat = 300
@@ -75,7 +77,7 @@ struct WorkshopGridView<MenuItems: View>: View {
 
             Group {
                 if let selected {
-                    WorkshopDetailPanel(item: selected, isLive: isLive(selected), maxHeight: size.height - 74 - edgePadding)
+                    WorkshopDetailPanel(item: selected, isLive: isLive(selected), maxHeight: size.height - topInset - 16 - edgePadding)
                 } else {
                     Color.clear
                 }
@@ -83,7 +85,7 @@ struct WorkshopGridView<MenuItems: View>: View {
             .frame(width: panelWidth)
             .onHover { onHover("panel", $0) }
         }
-        .padding(.top, 58)
+        .padding(.top, topInset)
         .padding(.horizontal, edgePadding)
         .padding(.bottom, edgePadding)
         .onAppear { columnCount = columns }

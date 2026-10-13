@@ -49,7 +49,6 @@ struct ContentView: View {
     @State private var librarySource: LibrarySource = .all
     @State private var libraryQuery = ""
     @State private var topBarTabsWidth: CGFloat = 0
-    @State private var topBarLeadingWidth: CGFloat = 0
     @State private var topBarTrailingWidth: CGFloat = 0
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
@@ -513,21 +512,29 @@ struct ContentView: View {
 
     // MARK: - Top bar
 
-    /// 顶部栏：窗口够宽时主页签精确居中，来源切换放在左侧；放不下时回退为靠左排列，避免重叠
+    /// 「发现」「收藏」「资料库」页签下有二级切换（来源），顶部栏为两行
+    private var hasSubNavigation: Bool {
+        currentTab != .playlists
+    }
+
+    /// 顶部栏占用的高度，供贴着顶部栏排列的内容使用
+    private var topBarInset: CGFloat {
+        hasSubNavigation ? 92 : 58
+    }
+
+    /// 顶部栏：主页签和下方的二级切换一起居中；窗口太窄放不下时回退为靠左排列，避免与右侧工具重叠
     private func topBar(width: CGFloat) -> some View {
         let leadingInset: CGFloat = 80 // 红绿灯
         let trailingInset: CGFloat = 16
         let gap: CGFloat = 12
         let halfTabs = topBarTabsWidth / 2
         let canCenter = topBarTabsWidth > 0
-            && width / 2 - halfTabs - gap >= leadingInset + topBarLeadingWidth
+            && width / 2 - halfTabs - gap >= leadingInset
             && width / 2 + halfTabs + gap <= width - trailingInset - topBarTrailingWidth
 
-        return ZStack {
-            HStack(spacing: 10) {
-                if !canCenter { mainTabs }
-                topBarLeading
-                    .measureWidth($topBarLeadingWidth)
+        return ZStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 10) {
+                if !canCenter { navigation }
                 Spacer(minLength: 12)
                 topBarTrailing
                     .measureWidth($topBarTrailingWidth)
@@ -535,11 +542,19 @@ struct ContentView: View {
             .padding(.leading, leadingInset)
             .padding(.trailing, trailingInset)
 
-            if canCenter { mainTabs }
+            if canCenter { navigation }
         }
         .animation(.easeInOut(duration: 0.2), value: canCenter)
         .environment(\.colorScheme, .dark)
         .onHover { immersive.setHold("topbar", active: $0) }
+    }
+
+    /// 主页签 + 正下方的二级切换
+    private var navigation: some View {
+        VStack(spacing: 6) {
+            mainTabs
+            subNavigation
+        }
     }
 
     private var mainTabs: some View {
@@ -564,16 +579,46 @@ struct ContentView: View {
         .measureWidth($topBarTabsWidth)
     }
 
-    /// 页签旁的二级切换：「发现」「收藏」切换 Wallhaven / 创意工坊，资料库切换来源
+    /// 二级导航：「发现」「收藏」切换 Wallhaven / 创意工坊，资料库切换来源
     @ViewBuilder
-    private var topBarLeading: some View {
+    private var subNavigation: some View {
         if currentTab == .discover {
-            sourcePicker($discoverSource)
+            subSegmented(ContentSource.allCases, selection: $discoverSource)
         } else if currentTab == .collections {
-            sourcePicker($collectionSource)
+            subSegmented(ContentSource.allCases, selection: $collectionSource)
         } else if currentTab == .library {
-            librarySourcePicker
+            subSegmented(LibrarySource.allCases, selection: $librarySource)
         }
+    }
+
+    /// 二级分段控件：比主页签小一号、颜色更淡，主次分明
+    private func subSegmented<Option: Identifiable & RawRepresentable & Hashable>(
+        _ options: [Option],
+        selection: Binding<Option>
+    ) -> some View where Option.RawValue == String {
+        HStack(spacing: 2) {
+            ForEach(options) { option in
+                let isOn = selection.wrappedValue == option
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { selection.wrappedValue = option }
+                } label: {
+                    Text(option.rawValue)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(isOn ? .white : .white.opacity(0.55))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(isOn ? .white.opacity(0.16) : .clear))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(.black.opacity(0.18), in: Capsule())
+        .background(.ultraThinMaterial.opacity(0.6), in: Capsule())
+        .transition(.opacity)
     }
 
     @ViewBuilder
@@ -622,41 +667,6 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("设置")
         }
-    }
-
-    private func sourcePicker(_ selection: Binding<ContentSource>) -> some View {
-        segmented(ContentSource.allCases, selection: selection)
-    }
-
-    private var librarySourcePicker: some View {
-        segmented(LibrarySource.allCases, selection: $librarySource)
-    }
-
-    /// 与页签同风格的小号分段控件
-    private func segmented<Option: Identifiable & RawRepresentable & Hashable>(
-        _ options: [Option],
-        selection: Binding<Option>
-    ) -> some View where Option.RawValue == String {
-        HStack(spacing: 2) {
-            ForEach(options) { option in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { selection.wrappedValue = option }
-                } label: {
-                    Text(option.rawValue)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                        .fixedSize()
-                        .foregroundStyle(selection.wrappedValue == option ? .white : .white.opacity(0.6))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(selection.wrappedValue == option ? .white.opacity(0.2) : .clear))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(.ultraThinMaterial, in: Capsule())
     }
 
     private var librarySearchField: some View {
@@ -742,7 +752,7 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
-            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索已下载", text: $workshop.query)
+            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅", text: $workshop.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
@@ -903,7 +913,8 @@ struct ContentView: View {
                 columnCount: $workshopColumns,
                 onSelect: { select(GalleryItem(origin: .workshop($0))) },
                 onHover: { reason, active in immersive.setHold(reason, active: active) },
-                contextMenu: { contextMenu(for: GalleryItem(origin: .workshop($0))) }
+                contextMenu: { contextMenu(for: GalleryItem(origin: .workshop($0))) },
+                topInset: topBarInset
             )
         } else {
             VStack(alignment: .leading, spacing: 18) {
