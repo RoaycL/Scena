@@ -122,6 +122,13 @@ private struct WorkshopTile: View {
                     .resizable()
                     .scaledToFill()
             }
+            .overlay {
+                // 悬停时播放 GIF 预览
+                if isHovered, let url = item.previewURL, url.pathExtension.lowercased() == "gif" || !url.isFileURL {
+                    AnimatedPreviewImage(url: url, scalesToFill: true)
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay(alignment: .bottomLeading) {
                 Text(item.title)
                     .font(.system(size: 11, weight: .medium))

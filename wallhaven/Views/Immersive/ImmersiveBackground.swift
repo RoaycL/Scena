@@ -154,11 +154,13 @@ private struct OnlinePreviewShowcase: View {
 /// 用 NSImageView 播放 GIF 预览（加载完成前透明，露出下层的静态图）
 struct AnimatedPreviewImage: NSViewRepresentable {
     let url: URL
+    /// true：裁切填满（网格方块）；false：完整显示
+    var scalesToFill = false
 
     func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
+        let view = scalesToFill ? FillImageView() : NSImageView()
         view.animates = true
-        view.imageScaling = .scaleProportionallyUpOrDown
+        view.imageScaling = scalesToFill ? .scaleAxesIndependently : .scaleProportionallyUpOrDown
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         context.coordinator.load(url, into: view)
@@ -172,6 +174,21 @@ struct AnimatedPreviewImage: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// 用 layer 的 resizeAspectFill 实现「裁切填满」，NSImageView 本身不支持
+    final class FillImageView: NSImageView {
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+            layer?.contentsGravity = .resizeAspectFill
+            layer?.masksToBounds = true
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override var wantsUpdateLayer: Bool { true }
+    }
 
     final class Coordinator {
         var task: Task<Void, Never>?

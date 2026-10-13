@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import ImageIO
 import Kingfisher
 
 /// 画廊中的一项：在线壁纸或本地文件，三个页面共用同一套画廊组件
@@ -70,7 +71,15 @@ struct GalleryItem: Identifiable, Equatable {
     /// 缩略图处理器：在线缩略图本身很小，直接用原图（和背景占位共享缓存）；
     /// 本地文件是原图，需要下采样
     var thumbnailProcessor: ImageProcessor {
-        remote != nil ? DefaultImageProcessor.default : DownsamplingImageProcessor(size: CGSize(width: 480, height: 480))
+        switch origin {
+        case .remote:
+            return DefaultImageProcessor.default
+        case .local:
+            return DownsamplingImageProcessor(size: CGSize(width: 480, height: 480))
+        case .workshop(let item):
+            // 工坊预览多为 GIF，视频类的第一帧常是全黑（淡入），要挑一帧有内容的
+            return GIFPosterFrameProcessor(maxPixelSize: item.previewURL?.isFileURL == true ? 960 : nil)
+        }
     }
 
     /// 全尺寸图片来源（视频不适用）
@@ -100,5 +109,62 @@ enum ImageSizing {
 
     static var backgroundOptions: KingfisherOptionsInfo {
         [.processor(DownsamplingImageProcessor(size: backgroundSize)), .scaleFactor(scale)]
+    }
+}
+
+/// 从 GIF 中挑一帧作为封面：跳过开头的黑帧（视频壁纸的预览通常从黑屏淡入）。
+/// 非 GIF 图片按原样解码；maxPixelSize 不为空时顺带下采样（本地大图）。
+nonisolated struct GIFPosterFrameProcessor: ImageProcessor {
+    let maxPixelSize: Int?
+
+    var identifier: String {
+        "wallhaven.gifPosterFrame.v1" + (maxPixelSize.map { "-\($0)" } ?? "")
+    }
+
+    func process(item: ImageProcessItem, options: KingfisherParsedOptionsInfo) -> KFCrossPlatformImage? {
+        switch item {
+        case .image(let image):
+            return image
+        case .data(let data):
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+            let count = CGImageSourceGetCount(source)
+            // 依次尝试这些帧，取第一张不是接近全黑的
+            let candidates = count > 1 ? [0, count / 8, count / 4, count / 3, count / 2] : [0]
+            var chosen: CGImage?
+            for index in candidates where index < count {
+                guard let frame = makeFrame(source, index: index) else { continue }
+                if chosen == nil { chosen = frame }
+                if Self.averageBrightness(of: frame) > 12 {
+                    chosen = frame
+                    break
+                }
+            }
+            return chosen.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+        }
+    }
+
+    private func makeFrame(_ source: CGImageSource, index: Int) -> CGImage? {
+        guard let maxPixelSize else { return CGImageSourceCreateImageAtIndex(source, index, nil) }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+
+    /// 缩到 8×8 求平均亮度（0～255）
+    private static func averageBrightness(of image: CGImage) -> Int {
+        var pixels = [UInt8](repeating: 0, count: 8 * 8 * 4)
+        guard let context = CGContext(
+            data: &pixels, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 255 }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+        var total = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            total += Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
+        }
+        return total / (64 * 3)
     }
 }
