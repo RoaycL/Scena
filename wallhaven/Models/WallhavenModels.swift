@@ -63,6 +63,9 @@ struct WallhavenWallpaper: Codable, Identifiable, Hashable, Sendable {
     let favorites: Int
     let ratio: String
     let purity: String
+    let colors: [String]
+    let views: Int
+    let fileSize: Int
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -74,6 +77,9 @@ struct WallhavenWallpaper: Codable, Identifiable, Hashable, Sendable {
         case favorites
         case ratio
         case purity
+        case colors
+        case views
+        case fileSize = "file_size"
     }
 
     enum ThumbsCodingKeys: String, CodingKey {
@@ -90,6 +96,10 @@ struct WallhavenWallpaper: Codable, Identifiable, Hashable, Sendable {
         favorites = try container.decode(Int.self, forKey: .favorites)
         ratio = try container.decode(String.self, forKey: .ratio)
         purity = try container.decode(String.self, forKey: .purity)
+        // 旧版本收藏数据中没有这些字段
+        colors = try container.decodeIfPresent([String].self, forKey: .colors) ?? []
+        views = try container.decodeIfPresent(Int.self, forKey: .views) ?? 0
+        fileSize = try container.decodeIfPresent(Int.self, forKey: .fileSize) ?? 0
 
         if let thumbsContainer = try? container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs) {
             thumbURL = try thumbsContainer.decodeIfPresent(URL.self, forKey: .large)
@@ -108,6 +118,9 @@ struct WallhavenWallpaper: Codable, Identifiable, Hashable, Sendable {
         try container.encode(favorites, forKey: .favorites)
         try container.encode(ratio, forKey: .ratio)
         try container.encode(purity, forKey: .purity)
+        try container.encode(colors, forKey: .colors)
+        try container.encode(views, forKey: .views)
+        try container.encode(fileSize, forKey: .fileSize)
 
         var thumbsContainer = container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs)
         try thumbsContainer.encodeIfPresent(thumbURL, forKey: .large)

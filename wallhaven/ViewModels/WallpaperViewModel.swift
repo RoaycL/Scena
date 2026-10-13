@@ -33,6 +33,7 @@ final class WallpaperViewModel: ObservableObject {
     @Published private(set) var statusMessage = "就绪"
     @Published var favoriteFolders: [FavoriteFolder] = []
     @Published var selectedFolderID: UUID? = nil  // nil = 显示全部收藏
+    @Published private(set) var tagsByID: [String: [String]] = [:]
 
     private let client = WallhavenClient()
     private let downloader = DownloadService()
@@ -364,11 +365,11 @@ final class WallpaperViewModel: ObservableObject {
     func downloadImage(_ wallpaper: WallhavenWallpaper) {
         Task {
             do {
-                statusMessage = "下载中…"
+                ToastCenter.shared.show("正在下载…", style: .progress)
                 _ = try await downloader.download(wallpaper)
-                statusMessage = "保存成功"
+                ToastCenter.shared.show("已保存到本地", style: .success)
             } catch {
-                errorMessage = error.localizedDescription
+                ToastCenter.shared.show("下载失败：\(error.localizedDescription)", style: .error)
             }
         }
     }
@@ -376,14 +377,31 @@ final class WallpaperViewModel: ObservableObject {
     func downloadAndApply(_ wallpaper: WallhavenWallpaper) {
         Task {
             do {
-                statusMessage = "下载中…"
+                ToastCenter.shared.show("正在下载并设为壁纸…", style: .progress)
                 let localURL = try await downloader.download(wallpaper)
                 try WallpaperManager.applyWallpaper(from: localURL)
-                statusMessage = "壁纸已应用"
+                ToastCenter.shared.show("壁纸已应用", style: .success)
             } catch {
-                errorMessage = error.localizedDescription
+                ToastCenter.shared.show("设置失败：\(error.localizedDescription)", style: .error)
             }
         }
+    }
+
+    /// 按需加载壁纸标签（详情接口），结果缓存
+    func loadTagsIfNeeded(for wallpaper: WallhavenWallpaper) async {
+        guard tagsByID[wallpaper.id] == nil else { return }
+        do {
+            let tags = try await client.fetchWallpaperDetails(id: wallpaper.id, apiKey: storedAPIKey)
+            tagsByID[wallpaper.id] = tags
+        } catch {
+            // 标签只是锦上添花，失败时静默
+        }
+    }
+
+    /// 点击标签：以该标签为关键词重新搜索
+    func searchTag(_ tag: String) {
+        query = tag
+        search(reset: true)
     }
 
     func openSelectedInBrowser() {

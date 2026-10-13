@@ -6,165 +6,235 @@
 //
 
 import AppKit
-import SwiftUI
 import Kingfisher
+import SwiftUI
 
 enum MainTab: String, CaseIterable, Identifiable {
     case home = "首页"
     case favorites = "收藏"
     case local = "本地"
-    
+
     var id: String { rawValue }
 }
 
 struct ContentView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @StateObject private var localViewModel = LocalMediaViewModel()
+    @StateObject private var immersive = ImmersiveWindowController()
+    @ObservedObject private var toastCenter = ToastCenter.shared
+    @ObservedObject private var liveController = LiveWallpaperController.shared
+
     @State private var currentTab: MainTab = .home
-    @State private var randomFavoriteBackgroundURL: URL?
-    @State private var randomLocalBackgroundURL: URL?
-    @State private var selectedLocalItem: LocalMediaItem?
-    @State private var isSearchExpanded = false
+    @State private var favoriteSelectionID: String?
+    @State private var localSelectionID: String?
+    /// 背景只在有新选中项时更新：搜索重置、列表清空期间保持上一张，不会跳到随机图
+    @State private var backgroundItem: GalleryItem?
+    @State private var prefetcher: ImagePrefetcher?
+    @State private var isFilterPresented = false
     @FocusState private var isSearchFocused: Bool
-    @State private var viewingWallpaper: WallhavenWallpaper?
+
     @State private var isShowingNewFolderAlert = false
     @State private var newFolderName = ""
-    @State private var pendingFolderWallpaper: WallhavenWallpaper?
     @State private var isRenamingFolder = false
     @State private var renamingFolder: FavoriteFolder?
     @State private var renameFolderName = ""
- 
-    private let gridHorizontalPadding: CGFloat = 32
-    private let gridColumnSpacing: CGFloat = 16
-    private let gridRowSpacing: CGFloat = 24
-    private let heroRatio: CGFloat = 0.56
 
-    private func gridColumns(for containerWidth: CGFloat) -> [GridItem] {
-        let available = containerWidth - (gridHorizontalPadding * 2)
-        let minItemWidth: CGFloat = 220
-        let count = max(1, min(5, Int((available + gridColumnSpacing) / (minItemWidth + gridColumnSpacing))))
-        return Array(
-            repeating: GridItem(.flexible(), spacing: gridColumnSpacing),
-            count: count
-        )
-    }
+    // MARK: - Data
 
-    private var filteredWallpapers: [WallhavenWallpaper] {
-        if currentTab == .favorites {
-            if let folderID = viewModel.selectedFolderID {
-                return viewModel.wallpapersInFolder(folderID)
-            }
-            return viewModel.favoriteWallpapers
-        }
-        return viewModel.wallpapers
-    }
-
-    private var emptyStateMessage: String {
-        if currentTab == .favorites {
-            if viewModel.selectedFolderID != nil {
-                return "该收藏夹中暂无壁纸。"
-            }
-            return "暂无收藏。点击任意壁纸上的心形图标即可添加。"
-        }
-        return "未找到符合当前筛选条件的壁纸。"
-    }
-
-    private var activeBackgroundURL: URL? {
-        switch currentTab {
+    private func items(for tab: MainTab) -> [GalleryItem] {
+        switch tab {
         case .home:
-            return viewModel.selectedWallpaper?.path ?? viewModel.wallpapers.randomElement()?.path
+            return viewModel.wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .favorites:
-            let favs = viewModel.favoriteWallpapers
-            if let selected = viewModel.selectedWallpaper, favs.contains(where: { $0.id == selected.id }) {
-                return selected.path
-            }
-            return randomFavoriteBackgroundURL ?? favs.first?.path ?? viewModel.selectedWallpaper?.path
+            let wallpapers = viewModel.selectedFolderID.map(viewModel.wallpapersInFolder) ?? viewModel.favoriteWallpapers
+            return wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .local:
-            if let selected = selectedLocalItem {
-                return selected.url
-            }
-            return randomLocalBackgroundURL ?? localViewModel.items.first?.url ?? viewModel.selectedWallpaper?.path
+            return localViewModel.items.map { GalleryItem(origin: .local($0)) }
         }
     }
+
+    private func selectedID(for tab: MainTab) -> String? {
+        switch tab {
+        case .home: viewModel.selectedWallpaper.map { GalleryItem(origin: .remote($0)).id }
+        case .favorites: favoriteSelectionID
+        case .local: localSelectionID
+        }
+    }
+
+    private var currentItems: [GalleryItem] { items(for: currentTab) }
+
+    private var selectedItem: GalleryItem? {
+        guard let id = selectedID(for: currentTab) else { return nil }
+        return currentItems.first { $0.id == id }
+    }
+
+    private func select(_ item: GalleryItem) {
+        switch currentTab {
+        case .home: viewModel.selectedWallpaper = item.remote
+        case .favorites: favoriteSelectionID = item.id
+        case .local: localSelectionID = item.id
+        }
+    }
+
+    private func ensureValidSelection() {
+        let items = currentItems
+        guard !items.isEmpty else { return }
+        if selectedItem == nil, let first = items.first {
+            select(first)
+        }
+    }
+
+    private func moveSelection(by offset: Int) {
+        let items = currentItems
+        guard !items.isEmpty else { return }
+        let index = selectedItem.flatMap { item in items.firstIndex(of: item) } ?? 0
+        let newIndex = max(0, min(items.count - 1, index + offset))
+        let item = items[newIndex]
+        select(item)
+        if currentTab == .home, let wallpaper = item.remote {
+            viewModel.loadMoreIfNeeded(current: wallpaper)
+        }
+    }
+
+    /// 预加载前后相邻的原图，方便 ←/→ 快速切换
+    private func prefetchNeighbors(of item: GalleryItem) {
+        let items = currentItems
+        guard let index = items.firstIndex(of: item) else { return }
+        let sources = [index + 1, index + 2, index - 1]
+            .filter { items.indices.contains($0) }
+            .compactMap { items[$0].remote == nil ? nil : items[$0].fullSource }
+        guard !sources.isEmpty else { return }
+        prefetcher?.stop()
+        let newPrefetcher = ImagePrefetcher(sources: sources, options: ImageSizing.backgroundOptions)
+        newPrefetcher.start()
+        prefetcher = newPrefetcher
+    }
+
+    // MARK: - Actions
+
+    private func apply(_ item: GalleryItem) {
+        switch item.origin {
+        case .remote(let wallpaper): viewModel.downloadAndApply(wallpaper)
+        case .local(let local): localViewModel.applyWallpaper(local)
+        }
+    }
+
+    private func deleteLocal(_ item: LocalMediaItem) {
+        let wasSelected = localSelectionID == GalleryItem(origin: .local(item)).id
+        localViewModel.delete(item: item)
+        if wasSelected { localSelectionID = nil }
+        ensureValidSelection()
+    }
+
+    private func handleKey(_ key: ImmersiveWindowController.Key) -> Bool {
+        switch key {
+        case .left:
+            moveSelection(by: -1)
+        case .right:
+            moveSelection(by: 1)
+        case .enter:
+            guard let item = selectedItem else { return false }
+            apply(item)
+        case .character("d"):
+            guard let wallpaper = selectedItem?.remote else { return false }
+            viewModel.downloadImage(wallpaper)
+        case .character("l"):
+            guard let wallpaper = selectedItem?.remote else { return false }
+            viewModel.toggleFavorite(wallpaper)
+        case .character("/"):
+            guard currentTab == .home else { return false }
+            isSearchFocused = true
+        case .character("1"): switchTab(.home)
+        case .character("2"): switchTab(.favorites)
+        case .character("3"): switchTab(.local)
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func switchTab(_ tab: MainTab) {
+        withAnimation(.easeInOut(duration: 0.2)) { currentTab = tab }
+    }
+
+    // MARK: - Body
 
     var body: some View {
         GeometryReader { proxy in
-            let fullSize = CGSize(width: proxy.size.width, height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom)
+            let size = proxy.size
             ZStack(alignment: .top) {
-                // 背景图延伸到整个窗口（包括标题栏区域）
-                WallpaperBackgroundView(url: activeBackgroundURL)
-                    .frame(width: fullSize.width, height: fullSize.height)
-                    .clipped()
-                    .transaction { $0.animation = nil }
+                ImmersiveBackground(item: backgroundItem)
+                    .frame(width: size.width, height: size.height)
 
-                VStack(spacing: 0) {
-                    // 顶部留出空间给红绿灯
-                    Color.clear.frame(height: proxy.safeAreaInsets.top)
-                    
-                    detail(in: CGSize(width: proxy.size.width, height: proxy.size.height))
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .overlay(alignment: .top) {
-                            topBar
-                                .padding(.top, 12)
-                                .padding(.leading, 80)
-                                .padding(.trailing, 16)
-                        }
-                        .clipped()
+                scrims(height: size.height)
+                    .opacity(immersive.isChromeHidden ? 0 : 1)
+                    .allowsHitTesting(false)
+
+                gallery(in: size)
+                    .frame(width: size.width, height: size.height)
+                    .opacity(immersive.isChromeHidden ? 0 : 1)
+                    .offset(y: immersive.isChromeHidden ? 24 : 0)
+                    .allowsHitTesting(!immersive.isChromeHidden)
+
+                VStack(spacing: 12) {
+                    topBar
+                        .opacity(immersive.isChromeHidden ? 0 : 1)
+                        .offset(y: immersive.isChromeHidden ? -12 : 0)
+                        .allowsHitTesting(!immersive.isChromeHidden)
+
+                    // 提示条不随界面隐藏
+                    if let toast = toastCenter.current {
+                        ToastView(toast: toast)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .onTapGesture { toastCenter.dismiss() }
+                    }
                 }
+                .padding(.top, 10)
             }
         }
         .ignoresSafeArea()
+        .frame(minWidth: 820, minHeight: 520)
+        .background(WindowAccessor { immersive.attach(to: $0) })
         .onAppear {
+            immersive.keyHandler = handleKey
             viewModel.search(reset: true)
             localViewModel.loadMedia()
         }
         .onChange(of: currentTab) {
-            if currentTab == .local {
-                localViewModel.loadMedia()
-                if let randomItem = localViewModel.items.randomElement() {
-                    randomLocalBackgroundURL = randomItem.url
-                    if selectedLocalItem == nil {
-                        selectedLocalItem = randomItem
-                    }
-                }
-            } else if currentTab == .favorites {
-                let favs = viewModel.wallpapers.filter { viewModel.isFavorite($0.id) }
-                if let randomItem = favs.randomElement() {
-                    randomFavoriteBackgroundURL = randomItem.path
-                }
-            }
+            if currentTab == .local { localViewModel.loadMedia() }
+            ensureValidSelection()
         }
-        .alert("错误", isPresented: Binding(
-            get: { viewModel.errorMessage != nil || localViewModel.errorMessage != nil },
-            set: { _ in
-                viewModel.errorMessage = nil
-                localViewModel.errorMessage = nil
-            }
-        )) {
-            Button("确定", role: .cancel) {}
-        } message: {
-            Text(viewModel.errorMessage ?? localViewModel.errorMessage ?? "")
+        .onChange(of: currentItems.map(\.id), initial: true) {
+            ensureValidSelection()
         }
-        .sheet(item: $viewingWallpaper) { wallpaper in
-            WallpaperDetailView(wallpaper: wallpaper, isFavorite: viewModel.isFavorite(wallpaper.id), onFavorite: {
-                viewModel.toggleFavorite(wallpaper)
-            })
+        .onChange(of: selectedItem, initial: true) { _, item in
+            guard let item else { return }
+            backgroundItem = item
+            prefetchNeighbors(of: item)
         }
+        .task(id: selectedItem?.remote?.id) {
+            // 防抖：快速切换时不会对每一张都请求详情接口（API 有频率限制）
+            guard let wallpaper = selectedItem?.remote else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await viewModel.loadTagsIfNeeded(for: wallpaper)
+        }
+        .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true) }
+        .onChange(of: viewModel.errorMessage) { _, message in
+            guard let message else { return }
+            toastCenter.show(message, style: .error)
+            viewModel.errorMessage = nil
+        }
+        .onChange(of: isSearchFocused) { _, focused in immersive.setHold("search", active: focused) }
+        .onChange(of: isFilterPresented) { _, presented in immersive.setHold("filter", active: presented) }
+        .onChange(of: isShowingNewFolderAlert || isRenamingFolder) { _, shown in immersive.setHold("alert", active: shown) }
         .alert("新建收藏夹", isPresented: $isShowingNewFolderAlert) {
             TextField("收藏夹名称", text: $newFolderName)
-            Button("取消", role: .cancel) {
-                newFolderName = ""
-                pendingFolderWallpaper = nil
-            }
+            Button("取消", role: .cancel) { newFolderName = "" }
             Button("创建") {
                 let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                let folder = viewModel.createFolder(name: trimmed)
-                if let wp = pendingFolderWallpaper {
-                    viewModel.addToFolder(wp, folderID: folder.id)
-                }
+                if !trimmed.isEmpty { _ = viewModel.createFolder(name: trimmed) }
                 newFolderName = ""
-                pendingFolderWallpaper = nil
             }
         } message: {
             Text("请输入新收藏夹的名称")
@@ -188,20 +258,39 @@ struct ContentView: View {
         }
     }
 
+    /// 上下渐变暗角，保证文字在任何壁纸上都可读
+    private func scrims(height: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: 110)
+            Spacer(minLength: 0)
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.35), location: 0.45),
+                    .init(color: .black.opacity(0.75), location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: height * 0.55)
+        }
+    }
+
+    // MARK: - Top bar
+
     private var topBar: some View {
-        ZStack {
-            // ── 中间：导航标签（ZStack 自动居中）
-            HStack(spacing: 8) {
+        HStack(spacing: 10) {
+            HStack(spacing: 2) {
                 ForEach(MainTab.allCases) { tab in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { currentTab = tab }
-                    } label: {
+                    Button { switchTab(tab) } label: {
                         Text(tab.rawValue)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(currentTab == tab ? .white : .white.opacity(0.6))
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(currentTab == tab ? .white.opacity(0.18) : .clear))
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(currentTab == tab ? .white.opacity(0.2) : .clear))
+                            .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -209,877 +298,286 @@ struct ContentView: View {
             .padding(4)
             .background(.ultraThinMaterial, in: Capsule())
 
-            // ── 右侧工具栏（叠加在右边，不影响中间居中）
-            HStack(spacing: 6) {
-                Spacer()
+            Spacer(minLength: 12)
 
-                if currentTab == .home {
-                    HStack(spacing: 4) {
-                        filterChip(title: "常规", isOn: viewModel.includeGeneral, activeColor: .white.opacity(0.18), textColor: .white, action: viewModel.toggleGeneral)
-                        filterChip(title: "动漫", isOn: viewModel.includeAnime,   activeColor: .white.opacity(0.18), textColor: .white, action: viewModel.toggleAnime)
-                        filterChip(title: "人物", isOn: viewModel.includePeople,  activeColor: .white.opacity(0.18), textColor: .white, action: viewModel.togglePeople)
-                    }
-                    .padding(5)
-                    .background(.ultraThinMaterial, in: Capsule())
+            LiveWallpaperStatus(controller: liveController)
 
-                    HStack(spacing: 4) {
-                        filterChip(title: "SFW",     isOn: viewModel.includeSFW,     activeColor: .green.opacity(0.35),  textColor: .green.opacity(0.95),  action: viewModel.toggleSFW)
-                        filterChip(title: "Sketchy", isOn: viewModel.includeSketchy, activeColor: .yellow.opacity(0.25), textColor: .yellow.opacity(0.95), disabled: !viewModel.isAuthenticated, action: viewModel.toggleSketchy)
-                        filterChip(title: "NSFW",    isOn: viewModel.includeNSFW,    activeColor: .red.opacity(0.25),    textColor: .red.opacity(0.9),     disabled: !viewModel.isAuthenticated, action: viewModel.toggleNSFW)
-                    }
-                    .padding(5)
-                    .background(.ultraThinMaterial, in: Capsule())
-
-                    // 排序 + 搜索
-                    HStack(spacing: isSearchExpanded ? 6 : 0) {
-                        Menu {
-                            ForEach(SortOrder.allCases) { option in
-                                Button(option.label) { viewModel.sortOrder = option }
-                            }
-                        } label: {
-                            Text(viewModel.sortOrder.label)
-                                .lineLimit(1)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .frame(width: 55)
-                        .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true) }
-
-                        Divider().frame(height: 14).opacity(0.4)
-
-                        Button {
-                            if isSearchExpanded {
-                                viewModel.search(reset: true)
-                            } else {
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                    isSearchExpanded = true; isSearchFocused = true
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundStyle(.white.opacity(0.8))
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        .buttonStyle(.plain)
-
-                        if isSearchExpanded {
-                            TextField("搜索壁纸", text: $viewModel.query)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 13))
-                                .focused($isSearchFocused)
-                                .frame(width: 100)
-                                .foregroundStyle(.white)
-                                .onSubmit { viewModel.search(reset: true) }
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-
-                            if !viewModel.query.isEmpty {
-                                Button {
-                                    viewModel.query = ""; viewModel.search(reset: true); isSearchFocused = false
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.white.opacity(0.4))
-                                        .font(.system(size: 11))
-                                }
-                                .buttonStyle(.plain)
-                                .transition(.opacity)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .onChange(of: isSearchFocused) { _, focused in
-                        if !focused && viewModel.query.isEmpty && isSearchExpanded {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isSearchExpanded = false }
-                        }
-                    }
-
-                    SettingsLink {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(12)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .help("设置")
-
-                } else if currentTab == .favorites {
-                    Menu {
-                        Button { viewModel.selectedFolderID = nil } label: {
-                            HStack {
-                                Text("全部收藏")
-                                if viewModel.selectedFolderID == nil { Image(systemName: "checkmark") }
-                            }
-                        }
-                        if !viewModel.favoriteFolders.isEmpty { Divider() }
-                        ForEach(viewModel.favoriteFolders) { folder in
-                            Button { viewModel.selectedFolderID = folder.id } label: {
-                                HStack {
-                                    Text("\(folder.name) (\(folder.wallpaperIDs.count))")
-                                    if viewModel.selectedFolderID == folder.id { Image(systemName: "checkmark") }
-                                }
-                            }
-                        }
-                        Divider()
-                        Button {
-                            newFolderName = ""; pendingFolderWallpaper = nil; isShowingNewFolderAlert = true
-                        } label: { Label("新建收藏夹...", systemImage: "plus") }
-
-                        if let folderID = viewModel.selectedFolderID,
-                           let folder = viewModel.favoriteFolders.first(where: { $0.id == folderID }) {
-                            Divider()
-                            Button {
-                                renameFolderName = folder.name; renamingFolder = folder; isRenamingFolder = true
-                            } label: { Label("重命名 \"\(folder.name)\"...", systemImage: "pencil") }
-                            Button(role: .destructive) {
-                                viewModel.deleteFolder(folder)
-                            } label: { Label("删除 \"\(folder.name)\"", systemImage: "trash") }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "folder.fill").font(.system(size: 13, weight: .semibold))
-                            Text(selectedFolderLabel).lineLimit(1).font(.system(size: 12, weight: .semibold))
-                        }
-                        .foregroundStyle(.white.opacity(0.8))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .frame(minWidth: 80, maxWidth: 140)
-                    .padding(.vertical, 12)
-                    .padding(.horizontal, 14)
-                    .background(.ultraThinMaterial, in: Capsule())
+            switch currentTab {
+            case .home:
+                searchField
+                filterButton
+            case .favorites:
+                folderMenu
+            case .local:
+                Button { localViewModel.importFiles() } label: {
+                    Label("导入", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(.ultraThinMaterial, in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .help("导入图片或视频（视频可设为动态壁纸）")
             }
-            .transition(.opacity)
+
+            SettingsLink {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 34, height: 34)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("设置")
         }
+        .padding(.leading, 80) // 红绿灯
+        .padding(.trailing, 16)
+        .environment(\.colorScheme, .dark)
+        .onHover { immersive.setHold("topbar", active: $0) }
     }
 
-    private var selectedFolderLabel: String {
-        if let folderID = viewModel.selectedFolderID,
-           let folder = viewModel.favoriteFolders.first(where: { $0.id == folderID }) {
-            return folder.name
-        }
-        return "全部收藏"
-    }
-
-    private func filterChip(
-        title: String,
-        isOn: Bool,
-        activeColor: Color,
-        textColor: Color,
-        disabled: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(disabled ? .gray.opacity(0.75) : (isOn ? textColor : .white.opacity(0.8)))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule()
-                        .fill(isOn ? activeColor : .black.opacity(0.22))
-                )
-                .overlay(
-                    Capsule()
-                        .stroke(.white.opacity(0.15), lineWidth: 1)
-                )
+                .foregroundStyle(.white.opacity(0.7))
+            TextField("搜索壁纸", text: $viewModel.query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .focused($isSearchFocused)
+                .frame(width: isSearchFocused ? 180 : 120)
+                .onSubmit {
+                    viewModel.search(reset: true)
+                    isSearchFocused = false
+                }
+            if !viewModel.query.isEmpty {
+                Button {
+                    viewModel.query = ""
+                    viewModel.search(reset: true)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+    }
+
+    private var filterButton: some View {
+        Button { isFilterPresented.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease")
+                Text(viewModel.sortOrder.label).lineLimit(1)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(.ultraThinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.55 : 1)
-    }
-
-    private func detail(in containerSize: CGSize) -> some View {
-        return ZStack(alignment: .bottom) {
-            if currentTab == .home {
-                homeView(in: containerSize)
-            } else if currentTab == .local {
-                localView(in: containerSize)
-            } else {
-                favoritesView(in: containerSize)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.none, value: currentTab)
-    }
-
-
-    // MARK: - Home View (沉浸式大图 + 底部横向滚动条)
-    @ViewBuilder
-    private func homeView(in containerSize: CGSize) -> some View {
-        let thumbH: CGFloat    = max(80, min(150, containerSize.height * 0.15))
-        let thumbW: CGFloat    = thumbH * (16.0 / 9.0)
-        let stripH: CGFloat    = thumbH + 28
-        let thumbCorner: CGFloat = 10
-        let cardMaxW: CGFloat  = min(containerSize.width * 0.46, 420)
-
-        ZStack(alignment: .bottom) {
-            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // ── 底部整体区域：信息卡片（上） + 缩略图条（下），共用一个 VStack ──
-            VStack(alignment: .leading, spacing: 0) {
-                Spacer()
-
-                // 信息卡片
-                if let wp = viewModel.selectedWallpaper {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("FEATURED")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .tracking(2.5)
-
-                        Text("#\(wp.id)")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-
-                        HStack(spacing: 8) {
-                            Text(wp.category.capitalized)
-                            Text("·")
-                            Text(wp.resolution)
-                            Text("·")
-                            HStack(spacing: 3) {
-                                Image(systemName: "heart.fill").font(.system(size: 10))
-                                Text("\(wp.favorites)")
-                            }
-                        }
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.65))
-
-                        HStack(spacing: 8) {
-                            Button { viewModel.downloadAndApply(wp) } label: {
-                                HStack(spacing: 5) {
-                                    Text("设为壁纸").font(.system(size: 12, weight: .semibold))
-                                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
-                                }
-                                .foregroundStyle(.black)
-                                .padding(.horizontal, 14).padding(.vertical, 7)
-                                .background(.white, in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-
-                            // 收藏（可选收藏夹菜单）
-                            Menu {
-                                if !viewModel.favoriteFolders.isEmpty {
-                                    ForEach(viewModel.favoriteFolders) { folder in
-                                        let inFolder = viewModel.foldersContaining(wp.id).map(\.id).contains(folder.id)
-                                        Button {
-                                            inFolder
-                                                ? viewModel.removeFromFolder(wp.id, folderID: folder.id)
-                                                : viewModel.addToFolder(wp, folderID: folder.id)
-                                        } label: {
-                                            Label(folder.name,
-                                                  systemImage: inFolder ? "checkmark.circle.fill" : "folder")
-                                        }
-                                    }
-                                    Divider()
-                                }
-                                Button(role: viewModel.isFavorite(wp.id) ? .destructive : nil) {
-                                    viewModel.toggleFavorite(wp)
-                                } label: {
-                                    Label(viewModel.isFavorite(wp.id) ? "取消收藏" : "添加到默认收藏",
-                                          systemImage: viewModel.isFavorite(wp.id) ? "heart.slash" : "heart")
-                                }
-                            } label: {
-                                Image(systemName: viewModel.isFavorite(wp.id) ? "heart.fill" : "heart")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(viewModel.isFavorite(wp.id) ? Color.pink : .white)
-                                    .frame(width: 32, height: 32)
-                                    .background(.white.opacity(0.18), in: Circle())
-                                    .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                            }
-                            .menuStyle(.borderlessButton)
-                            .menuIndicator(.hidden)
-                            .fixedSize()
-
-                            Button { viewModel.downloadImage(wp) } label: {
-                                Image(systemName: "arrow.down.circle")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 32, height: 32)
-                                    .background(.white.opacity(0.18), in: Circle())
-                                    .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(20)
-                    .background(
-                        RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                            .fill(.black.opacity(0.45))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                                    .stroke(.white.opacity(0.12), lineWidth: 1)
-                            )
-                    )
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
-                    .frame(maxWidth: cardMaxW, alignment: .leading)
-                }
-
-                // 缩略图横向滚动条
-                if !viewModel.wallpapers.isEmpty || viewModel.isLoading {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 8) {
-                            ForEach(viewModel.wallpapers) { item in
-                                KFImage(item.thumbURL ?? item.path)
-                                    .placeholder { Color.white.opacity(0.08) }
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: thumbW, height: thumbH)
-                                    .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: thumbCorner, style: .continuous)
-                                            .stroke(
-                                                viewModel.selectedWallpaper?.id == item.id
-                                                    ? Color.white : Color.white.opacity(0.2),
-                                                lineWidth: viewModel.selectedWallpaper?.id == item.id ? 2.5 : 1
-                                            )
-                                    )
-                                    .scaleEffect(viewModel.selectedWallpaper?.id == item.id ? 1.04 : 1.0)
-                                    .animation(.spring(response: 0.3), value: viewModel.selectedWallpaper?.id)
-                                    .onTapGesture {
-                                        withAnimation(.easeInOut(duration: 0.3)) {
-                                            viewModel.selectedWallpaper = item
-                                        }
-                                        viewModel.loadMoreIfNeeded(current: item)
-                                    }
-                                    .contextMenu {
-                                        Button("设为壁纸") { viewModel.downloadAndApply(item) }
-                                        Button(viewModel.isFavorite(item.id) ? "取消收藏" : "添加收藏") {
-                                            viewModel.toggleFavorite(item)
-                                        }
-                                        Button("下载") { viewModel.downloadImage(item) }
-                                        Divider()
-                                        Button("在浏览器中打开") { NSWorkspace.shared.open(item.url) }
-                                    }
-                                    .onAppear { viewModel.loadMoreIfNeeded(current: item) }
-                            }
-                            if viewModel.isLoading {
-                                ProgressView().tint(.white)
-                                    .frame(width: thumbW * 0.4, height: thumbH)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    }
-                    .frame(height: stripH)
-                    // ✅ 给 ScrollView 加同等圆角，边缘半截图保持圆角而非直角裁剪
-                    .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 14)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            ThumbnailScrollMonitor(stripHeight: stripH + 14)
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
+        .help("筛选与排序")
+        .popover(isPresented: $isFilterPresented, arrowEdge: .bottom) {
+            FilterPanel()
+                .environmentObject(viewModel)
         }
     }
 
-
-    // MARK: - Favorites View（与首页相同的沉浸式布局）
-    @ViewBuilder
-    private func favoritesView(in containerSize: CGSize) -> some View {
-        let items      = filteredWallpapers
-        let selected   = viewModel.selectedWallpaper
-        let thumbH: CGFloat    = max(80, min(150, containerSize.height * 0.15))
-        let thumbW: CGFloat    = thumbH * (16.0 / 9.0)
-        let stripH: CGFloat    = thumbH + 28
-        let thumbCorner: CGFloat = 10
-        let cardMaxW: CGFloat  = min(containerSize.width * 0.46, 420)
-
-        ZStack(alignment: .bottom) {
-            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if items.isEmpty, !viewModel.isLoading {
-                // 空状态
-                VStack(spacing: 12) {
-                    Image(systemName: "heart.slash")
-                        .font(.system(size: 32, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text(emptyStateMessage)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.8))
-                    Button("浏览壁纸") { withAnimation { currentTab = .home } }
-                        .buttonStyle(.bordered)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    Spacer()
-
-                    // 信息卡片
-                    if let wp = selected, items.contains(where: { $0.id == wp.id }) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("FAVORITES")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .tracking(2.5)
-
-                            Text("#\(wp.id)")
-                                .font(.system(size: 26, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-
-                            HStack(spacing: 8) {
-                                Text(wp.category.capitalized)
-                                Text("·")
-                                Text(wp.resolution)
-                                Text("·")
-                                HStack(spacing: 3) {
-                                    Image(systemName: "heart.fill").font(.system(size: 10))
-                                    Text("\(wp.favorites)")
-                                }
-                            }
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.65))
-
-                            HStack(spacing: 8) {
-                                Button { viewModel.downloadAndApply(wp) } label: {
-                                    HStack(spacing: 5) {
-                                        Text("设为壁纸").font(.system(size: 12, weight: .semibold))
-                                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
-                                    }
-                                    .foregroundStyle(.black)
-                                    .padding(.horizontal, 14).padding(.vertical, 7)
-                                    .background(.white, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-
-                                Menu {
-                                    if !viewModel.favoriteFolders.isEmpty {
-                                        ForEach(viewModel.favoriteFolders) { folder in
-                                            let inFolder = viewModel.foldersContaining(wp.id).map(\.id).contains(folder.id)
-                                            Button {
-                                                inFolder
-                                                    ? viewModel.removeFromFolder(wp.id, folderID: folder.id)
-                                                    : viewModel.addToFolder(wp, folderID: folder.id)
-                                            } label: {
-                                                Label(folder.name, systemImage: inFolder ? "checkmark.circle.fill" : "folder")
-                                            }
-                                        }
-                                        Divider()
-                                    }
-                                    Button(role: .destructive) { viewModel.toggleFavorite(wp) } label: {
-                                        Label("取消收藏", systemImage: "heart.slash")
-                                    }
-                                } label: {
-                                    Image(systemName: "heart.fill")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(Color.pink)
-                                        .frame(width: 32, height: 32)
-                                        .background(.white.opacity(0.18), in: Circle())
-                                        .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                                }
-                                .menuStyle(.borderlessButton)
-                                .menuIndicator(.hidden)
-                                .fixedSize()
-
-                                Button { viewModel.downloadImage(wp) } label: {
-                                    Image(systemName: "arrow.down.circle")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(.white.opacity(0.18), in: Circle())
-                                        .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(20)
-                        .background(
-                            RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                                .fill(.black.opacity(0.45))
-                                .overlay(RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                                    .stroke(.white.opacity(0.12), lineWidth: 1))
-                        )
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 10)
-                        .frame(maxWidth: cardMaxW, alignment: .leading)
-                    }
-
-                    // 缩略图横向滚动条
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 8) {
-                            ForEach(items) { item in
-                                KFImage(item.thumbURL ?? item.path)
-                                    .placeholder { Color.white.opacity(0.08) }
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: thumbW, height: thumbH)
-                                    .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: thumbCorner, style: .continuous)
-                                            .stroke(
-                                                selected?.id == item.id ? Color.white : Color.white.opacity(0.2),
-                                                lineWidth: selected?.id == item.id ? 2.5 : 1
-                                            )
-                                    )
-                                    .scaleEffect(selected?.id == item.id ? 1.04 : 1.0)
-                                    .animation(.spring(response: 0.3), value: selected?.id)
-                                    .onTapGesture {
-                                        withAnimation(.easeInOut(duration: 0.3)) {
-                                            viewModel.selectedWallpaper = item
-                                            randomFavoriteBackgroundURL = item.path
-                                        }
-                                    }
-                                    .contextMenu {
-                                        Button("设为壁纸") { viewModel.downloadAndApply(item) }
-                                        Button("取消收藏") { viewModel.toggleFavorite(item) }
-                                        Button("下载") { viewModel.downloadImage(item) }
-                                        Divider()
-                                        Button("在浏览器中打开") { NSWorkspace.shared.open(item.url) }
-                                    }
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    }
-                    .frame(height: stripH)
-                    .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 14)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                ThumbnailScrollMonitor(stripHeight: stripH + 14)
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            // 自动选中第一项
-            if viewModel.selectedWallpaper == nil || !items.contains(where: { $0.id == viewModel.selectedWallpaper?.id }) {
-                if let first = items.first {
-                    viewModel.selectedWallpaper = first
-                    randomFavoriteBackgroundURL = first.path
-                }
-            }
-        }
-    }
-
-    // MARK: - Local View（与首页相同的沉浸式布局）
-    @ViewBuilder
-    private func localView(in containerSize: CGSize) -> some View {
-        let thumbH: CGFloat    = max(80, min(150, containerSize.height * 0.15))
-        let thumbW: CGFloat    = thumbH * (16.0 / 9.0)
-        let stripH: CGFloat    = thumbH + 28
-        let thumbCorner: CGFloat = 10
-        let cardMaxW: CGFloat  = min(containerSize.width * 0.46, 420)
-
-        ZStack(alignment: .bottom) {
-            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if localViewModel.items.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "photo.stack")
-                        .font(.system(size: 32, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text("本地没有已下载的壁纸")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    Spacer()
-
-                    // 信息卡片
-                    if let item = selectedLocalItem {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("LOCAL")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .tracking(2.5)
-
-                            Text(item.url.deletingPathExtension().lastPathComponent)
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-
-                            HStack(spacing: 8) {
-                                if let size = try? item.url.resourceValues(forKeys: [.fileSizeKey]).fileSize {
-                                    Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
-                                    Text("·")
-                                }
-                                Text(item.url.pathExtension.uppercased())
-                            }
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.65))
-
-                            HStack(spacing: 8) {
-                                Button { localViewModel.applyWallpaper(item) } label: {
-                                    HStack(spacing: 5) {
-                                        Text("设为壁纸").font(.system(size: 12, weight: .semibold))
-                                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
-                                    }
-                                    .foregroundStyle(.black)
-                                    .padding(.horizontal, 14).padding(.vertical, 7)
-                                    .background(.white, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                                } label: {
-                                    Image(systemName: "folder")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(.white)
-                                        .frame(width: 32, height: 32)
-                                        .background(.white.opacity(0.18), in: Circle())
-                                        .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    localViewModel.delete(item: item)
-                                    selectedLocalItem = localViewModel.items.first
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(.red.opacity(0.85))
-                                        .frame(width: 32, height: 32)
-                                        .background(.white.opacity(0.18), in: Circle())
-                                        .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(20)
-                        .background(
-                            RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                                .fill(.black.opacity(0.45))
-                                .overlay(RoundedRectangle(cornerRadius: thumbCorner + 4, style: .continuous)
-                                    .stroke(.white.opacity(0.12), lineWidth: 1))
-                        )
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 10)
-                        .frame(maxWidth: cardMaxW, alignment: .leading)
-                    }
-
-                    // 缩略图横向滚动条
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 8) {
-                            ForEach(localViewModel.items) { item in
-                                Group {
-                                    if let nsImg = NSImage(contentsOf: item.url) {
-                                        Image(nsImage: nsImg)
-                                            .resizable()
-                                            .scaledToFill()
-                                    } else {
-                                        Color.white.opacity(0.08)
-                                    }
-                                }
-                                .frame(width: thumbW, height: thumbH)
-                                .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: thumbCorner, style: .continuous)
-                                        .stroke(
-                                            selectedLocalItem?.id == item.id ? Color.white : Color.white.opacity(0.2),
-                                            lineWidth: selectedLocalItem?.id == item.id ? 2.5 : 1
-                                        )
-                                )
-                                .scaleEffect(selectedLocalItem?.id == item.id ? 1.04 : 1.0)
-                                .animation(.spring(response: 0.3), value: selectedLocalItem?.id)
-                                .onTapGesture {
-                                    withAnimation(.easeInOut(duration: 0.3)) {
-                                        selectedLocalItem = item
-                                    }
-                                }
-                                .contextMenu {
-                                    Button("设为壁纸") { localViewModel.applyWallpaper(item) }
-                                    Button("在 Finder 中显示") {
-                                        NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                                    }
-                                    Divider()
-                                    Button("删除", role: .destructive) {
-                                        localViewModel.delete(item: item)
-                                        if selectedLocalItem?.id == item.id {
-                                            selectedLocalItem = localViewModel.items.first
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                    }
-                    .frame(height: stripH)
-                    .clipShape(RoundedRectangle(cornerRadius: thumbCorner, style: .continuous))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 14)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                ThumbnailScrollMonitor(stripHeight: stripH + 14)
-                    .frame(width: 0, height: 0)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-}
-
-/// 全局拦截滚轮 + 鼠标拖动事件：
-///  - 在缩略图条区域内，把垂直滚轮转换为水平滚动
-///  - 在缩略图条区域内，左键拖动实现横向拖动滚动
-private struct ThumbnailScrollMonitor: NSViewRepresentable {
-    let stripHeight: CGFloat
-
-    class Coordinator {
-        var monitor: Any?
-        // 拖动状态
-        var mouseDownInStrip = false
-        var isDragScrolling   = false
-        var mouseDownX: CGFloat = 0
-        var scrollOriginX: CGFloat = 0
-
-        deinit { if let m = monitor { NSEvent.removeMonitor(m) } }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSView { NSView() }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        let coord = context.coordinator
-        if let old = coord.monitor { NSEvent.removeMonitor(old); coord.monitor = nil }
-
-        let h = stripHeight
-        coord.monitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
-        ) { [weak coord] event in
-            guard let coord else { return event }
-
-            switch event.type {
-
-            // ── 鼠标滚轮 ───────────────────────────────────
-            case .scrollWheel:
-                guard let window = event.window else { return event }
-                let loc = event.locationInWindow
-                guard loc.y < h else { return event }
-                guard let sv = Self.findHScrollView(in: window.contentView) else { return event }
-
-                let dx = event.scrollingDeltaX
-                let dy = event.scrollingDeltaY
-                let delta: CGFloat = abs(dx) >= abs(dy) ? -dx : dy
-                let mult: CGFloat  = event.hasPreciseScrollingDeltas ? 1.0 : 10.0
-
-                Self.scroll(sv, by: delta * mult)
-                return nil  // 消耗事件
-
-            // ── 鼠标左键按下 ───────────────────────────────
-            case .leftMouseDown:
-                guard let window = event.window else { return event }
-                let loc = event.locationInWindow
-                if loc.y < h {
-                    coord.mouseDownInStrip = true
-                    coord.isDragScrolling  = false
-                    coord.mouseDownX       = loc.x
-                    // 记录当前 scroll 位置作为起点
-                    if let sv = Self.findHScrollView(in: window.contentView) {
-                        coord.scrollOriginX = sv.contentView.bounds.origin.x
-                    }
+    private var folderMenu: some View {
+        Menu {
+            Button { viewModel.selectedFolderID = nil } label: {
+                if viewModel.selectedFolderID == nil {
+                    Label("全部收藏", systemImage: "checkmark")
                 } else {
-                    coord.mouseDownInStrip = false
+                    Text("全部收藏")
                 }
-                return event  // 保留，让 tap 正常触发
-
-            // ── 鼠标左键拖动 ───────────────────────────────
-            case .leftMouseDragged:
-                guard coord.mouseDownInStrip,
-                      let window = event.window else { return event }
-                let loc   = event.locationInWindow
-                let moved = coord.mouseDownX - loc.x   // 向右拖为正
-
-                // 超过 5pt 阈值才切换为拖动滚动模式
-                if !coord.isDragScrolling && abs(moved) < 5 { return event }
-                coord.isDragScrolling = true
-
-                guard let sv = Self.findHScrollView(in: window.contentView) else { return event }
-                let contentW = sv.documentView?.frame.width ?? 0
-                let viewW    = sv.frame.width
-                let maxX     = max(0, contentW - viewW)
-                let newX     = max(0, min(maxX, coord.scrollOriginX + moved))
-
-                sv.contentView.scroll(to: NSPoint(x: newX, y: 0))
-                sv.reflectScrolledClipView(sv.contentView)
-                return nil  // 消耗拖动事件，防止触发其他行为
-
-            // ── 鼠标左键抬起 ───────────────────────────────
-            case .leftMouseUp:
-                coord.mouseDownInStrip = false
-                coord.isDragScrolling  = false
-                return event
-
-            default:
-                return event
             }
-        }
-    }
-
-    private static func scroll(_ sv: NSScrollView, by delta: CGFloat) {
-        let currentX = sv.contentView.bounds.origin.x
-        let contentW = sv.documentView?.frame.width ?? 0
-        let maxX     = max(0, contentW - sv.frame.width)
-        let newX     = max(0, min(maxX, currentX - delta))
-        sv.contentView.scroll(to: NSPoint(x: newX, y: 0))
-        sv.reflectScrolledClipView(sv.contentView)
-    }
-
-    /// 深度遍历，找出内容比面板宽的水平 NSScrollView
-    private static func findHScrollView(in view: NSView?) -> NSScrollView? {
-        guard let view else { return nil }
-        if let sv = view as? NSScrollView,
-           !sv.isHidden,
-           let docW = sv.documentView?.frame.width,
-           docW > sv.frame.width + 20 {
-            return sv
-        }
-        for sub in view.subviews {
-            if let found = findHScrollView(in: sub) { return found }
-        }
-        return nil
-    }
-}
-
-
-
-
-private struct WallpaperBackgroundView: View, Equatable {
-    let url: URL?
-
-    static func == (lhs: WallpaperBackgroundView, rhs: WallpaperBackgroundView) -> Bool {
-        lhs.url == rhs.url
-    }
-
-    var body: some View {
-        if let url {
-            if url.isFileURL, let nsImage = NSImage(contentsOf: url) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                KFImage(url)
-                    .placeholder {
-                        Rectangle().fill(Color.black)
+            if !viewModel.favoriteFolders.isEmpty { Divider() }
+            ForEach(viewModel.favoriteFolders) { folder in
+                Button { viewModel.selectedFolderID = folder.id } label: {
+                    if viewModel.selectedFolderID == folder.id {
+                        Label("\(folder.name) (\(folder.wallpaperIDs.count))", systemImage: "checkmark")
+                    } else {
+                        Text("\(folder.name) (\(folder.wallpaperIDs.count))")
                     }
-                    .onFailure { _ in
-                        // Do nothing, placeholder will stay
-                    }
-                    .resizable()
-                    .scaledToFill()
+                }
             }
+            Divider()
+            Button {
+                newFolderName = ""
+                isShowingNewFolderAlert = true
+            } label: { Label("新建收藏夹…", systemImage: "plus") }
+
+            if let folder = selectedFolder {
+                Divider()
+                Button {
+                    renameFolderName = folder.name
+                    renamingFolder = folder
+                    isRenamingFolder = true
+                } label: { Label("重命名「\(folder.name)」…", systemImage: "pencil") }
+                Button(role: .destructive) {
+                    viewModel.deleteFolder(folder)
+                } label: { Label("删除「\(folder.name)」", systemImage: "trash") }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "folder.fill")
+                Text(selectedFolder?.name ?? "全部收藏").lineLimit(1)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.85))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private var selectedFolder: FavoriteFolder? {
+        guard let id = viewModel.selectedFolderID else { return nil }
+        return viewModel.favoriteFolders.first { $0.id == id }
+    }
+
+    // MARK: - Gallery
+
+    @ViewBuilder
+    private func gallery(in size: CGSize) -> some View {
+        let items = currentItems
+        let isLoading = currentTab == .home && viewModel.isLoading
+
+        if items.isEmpty && !isLoading {
+            emptyState
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            Color.black
+            VStack(alignment: .leading, spacing: 18) {
+                Spacer(minLength: 0)
+
+                if let item = selectedItem {
+                    infoPanel(for: item)
+                        .frame(maxWidth: min(size.width * 0.6, 620), alignment: .leading)
+                        .padding(.horizontal, 32)
+                        .onHover { immersive.setHold("panel", active: $0) }
+                }
+
+                ThumbnailStrip(
+                    items: items,
+                    selectedID: selectedItem?.id,
+                    isLoading: isLoading,
+                    thumbHeight: max(72, min(130, size.height * 0.13)),
+                    onSelect: { select($0) },
+                    onItemAppear: { item in
+                        if currentTab == .home, let wallpaper = item.remote {
+                            viewModel.loadMoreIfNeeded(current: wallpaper)
+                        }
+                    },
+                    contextMenu: { contextMenu(for: $0) }
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .onHover { immersive.setHold("strip", active: $0) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            switch currentTab {
+            case .home:
+                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34, weight: .light))
+                Text("未找到符合当前筛选条件的壁纸")
+                Button("调整筛选") { isFilterPresented = true }.buttonStyle(.bordered)
+            case .favorites:
+                Image(systemName: "heart").font(.system(size: 34, weight: .light))
+                Text(viewModel.selectedFolderID == nil ? "还没有收藏，按 L 或点击心形即可收藏" : "该收藏夹中暂无壁纸")
+                Button("去浏览") { switchTab(.home) }.buttonStyle(.bordered)
+            case .local:
+                Image(systemName: "photo.stack").font(.system(size: 34, weight: .light))
+                Text("本地还没有壁纸")
+                Text("下载的壁纸会出现在这里，也可以导入视频作为动态壁纸")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+                Button("导入图片或视频") { localViewModel.importFiles() }.buttonStyle(.bordered)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.85))
+        .environment(\.colorScheme, .dark)
+    }
+
+    @ViewBuilder
+    private func infoPanel(for item: GalleryItem) -> some View {
+        switch item.origin {
+        case .remote(let wallpaper):
+            let tags = viewModel.tagsByID[wallpaper.id] ?? []
+            InfoPanel(
+                eyebrow: "\(currentTab == .favorites ? "FAVORITES" : "FEATURED") · #\(wallpaper.id)",
+                title: (tags.first ?? wallpaper.category).capitalized,
+                meta: remoteMeta(wallpaper),
+                colors: wallpaper.colors,
+                tags: Array(tags.dropFirst()),
+                onTag: { tag in
+                    switchTab(.home)
+                    viewModel.searchTag(tag)
+                }
+            ) {
+                PrimaryActionButton(title: "设为壁纸") { viewModel.downloadAndApply(wallpaper) }
+                FavoriteMenuButton(wallpaper: wallpaper)
+                CircleIconButton(systemImage: "arrow.down", help: "下载 (D)") { viewModel.downloadImage(wallpaper) }
+                CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
+            }
+
+        case .local(let local):
+            let isLive = liveController.currentURL == local.url
+            InfoPanel(
+                eyebrow: local.isVideo ? (isLive ? "LIVE · 正在桌面播放" : "LIVE WALLPAPER") : "LOCAL",
+                title: local.displayName,
+                meta: [
+                    ByteCountFormatter.string(fromByteCount: Int64(local.fileSize), countStyle: .file),
+                    local.url.pathExtension.uppercased(),
+                ]
+            ) {
+                PrimaryActionButton(title: local.isVideo ? "设为动态壁纸" : "设为壁纸") { localViewModel.applyWallpaper(local) }
+                CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
+                    NSWorkspace.shared.activateFileViewerSelecting([local.url])
+                }
+                CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
+            }
+        }
+    }
+
+    private func remoteMeta(_ wallpaper: WallhavenWallpaper) -> [String] {
+        var meta = [wallpaper.resolution]
+        meta.append("♥ \(wallpaper.favorites)")
+        if wallpaper.views > 0 { meta.append("\(wallpaper.views) 次浏览") }
+        if wallpaper.fileSize > 0 {
+            meta.append(ByteCountFormatter.string(fromByteCount: Int64(wallpaper.fileSize), countStyle: .file))
+        }
+        return meta
+    }
+
+    @ViewBuilder
+    private func contextMenu(for item: GalleryItem) -> some View {
+        switch item.origin {
+        case .remote(let wallpaper):
+            Button("设为壁纸") { viewModel.downloadAndApply(wallpaper) }
+            Button(viewModel.isFavorite(wallpaper.id) ? "取消收藏" : "添加收藏") { viewModel.toggleFavorite(wallpaper) }
+            Button("下载") { viewModel.downloadImage(wallpaper) }
+            Divider()
+            Button("在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
+        case .local(let local):
+            Button(local.isVideo ? "设为动态壁纸" : "设为壁纸") { localViewModel.applyWallpaper(local) }
+            Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([local.url]) }
+            Divider()
+            Button("移到废纸篓", role: .destructive) { deleteLocal(local) }
         }
     }
 }
