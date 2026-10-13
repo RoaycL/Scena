@@ -41,6 +41,9 @@ final class WorkshopViewModel: ObservableObject {
     }
     /// 正在退出的批次也保留在这里，确保恢复操作不会启动第二个进程。
     @Published private(set) var activeDownloads: Set<String> = []
+    /// 下载进度单独发布，避免每秒刷新整个主界面
+    let progress = WorkshopDownloadProgress()
+
     var downloading: Set<String> {
         Set(downloadJobs.filter { $0.state == .queued || $0.state == .downloading }.map(\.id))
     }
@@ -141,6 +144,7 @@ final class WorkshopViewModel: ObservableObject {
            let saved = try? JSONDecoder().decode([WorkshopDownloadJob].self, from: data) {
             downloadJobs = WorkshopDownloadQueue.restored(saved)
         }
+        completeJobsAlreadyOnDisk()
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.isShuttingDown = true
@@ -289,7 +293,7 @@ final class WorkshopViewModel: ObservableObject {
         let scanned = await Task.detached { WorkshopLibrary.scan(roots: roots) }.value
         guard roots == libraryRoots else { return await refreshLibraryAndWait() }
         if libraryGeneration == generation {
-            libraryItems = scanned
+            if libraryItems != scanned { libraryItems = scanned }
             mergeDownloadState()
         }
         return scanned
@@ -345,8 +349,11 @@ final class WorkshopViewModel: ObservableObject {
             }
             return item
         }
-        onlineItems = onlineItems.map(merge)
-        subscribedItems = subscribedItems.map(merge)
+        // 内容没变时不重新赋值：每次发布都会重建主界面，打开中的右键菜单会被关闭
+        let online = onlineItems.map(merge)
+        if online != onlineItems { onlineItems = online }
+        let subscribed = subscribedItems.map(merge)
+        if subscribed != subscribedItems { subscribedItems = subscribed }
     }
 
     /// 移到废纸篓；unsubscribe 为 true 时同时取消 Steam 订阅（Windows 上也会移除）
@@ -477,7 +484,8 @@ final class WorkshopViewModel: ObservableObject {
                 jobs[index].error = nil
                 jobs[index].applyWhenDone = applyWhenDone || jobs[index].applyWhenDone
             } else {
-                jobs.append(WorkshopDownloadJob(id: item.id, title: item.title, state: .queued, applyWhenDone: applyWhenDone))
+                jobs.append(WorkshopDownloadJob(id: item.id, title: item.title, state: .queued, applyWhenDone: applyWhenDone,
+                                                totalBytes: item.fileSize > 0 ? Int64(item.fileSize) : nil))
             }
         }
         downloadJobs = jobs
@@ -493,8 +501,40 @@ final class WorkshopViewModel: ObservableObject {
         refreshLibrary()
     }
 
+    /// steamcmd 下载中的临时目录：<安装目录>/steamapps/workshop/downloads/431960/<id>
+    private static var stagingFolder: URL {
+        let content = StorageManager.shared.workshopContentFolder // …/steamapps/workshop/content/431960
+        return content.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("downloads", isDirectory: true)
+            .appendingPathComponent(WorkshopConstants.appID, isDirectory: true)
+    }
+
+    /// 排队 / 暂停中的任务如果本地已经有完整的壁纸（steamcmd 完成后才会移入 content 目录），直接标记为完成
+    private func completeJobsAlreadyOnDisk() {
+        let fm = FileManager.default
+        let roots = libraryRoots
+        let localIDs = Set(libraryItems.map(\.id))
+        var changed = false
+        let jobs = downloadJobs.map { job -> WorkshopDownloadJob in
+            guard [.queued, .paused, .failed].contains(job.state) else { return job }
+            let onDisk = localIDs.contains(job.id) || roots.contains {
+                fm.fileExists(atPath: $0.appendingPathComponent(job.id).appendingPathComponent("project.json").path)
+            }
+            guard onDisk else { return job }
+            var job = job
+            job.state = .completed
+            job.error = nil
+            job.applyWhenDone = false
+            changed = true
+            return job
+        }
+        if changed { downloadJobs = jobs }
+    }
+
     private func processDownloadQueue() {
         guard !isProcessingQueue, !isShuttingDown else { return }
+        // 已经在本地的条目不再交给 steamcmd（否则会重新校验、重写整个文件夹）
+        completeJobsAlreadyOnDisk()
         // 同时下载数量：这一批标记为「下载中」，其余继续排队
         let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(maxConcurrentDownloads).map(\.id))
         guard !batch.isEmpty else { return }
@@ -506,8 +546,16 @@ final class WorkshopViewModel: ObservableObject {
             if activeDownloads.contains(job.id) { job.state = .downloading }
             return job
         }
+        // 文件大小：优先用任务里记录的，没有时从订阅 / 在线 / 本地条目里找
+        let known = Dictionary((subscribedItems + onlineItems).filter { $0.fileSize > 0 }.map { ($0.id, Int64($0.fileSize)) },
+                               uniquingKeysWith: { a, _ in a })
+        let sizes = Dictionary(batch.compactMap { id in
+            (downloadJobs.first { $0.id == id }?.totalBytes ?? known[id]).map { (id, $0) }
+        }, uniquingKeysWith: { a, _ in a })
+        progress.start(ids: batch, totalBytes: sizes, stagingFolder: Self.stagingFolder)
         Task {
             defer {
+                progress.stop()
                 activeDownloads = []
                 isProcessingQueue = false
                 processDownloadQueue()
@@ -607,6 +655,11 @@ final class WorkshopViewModel: ObservableObject {
             return job
         }
         processDownloadQueue()
+    }
+
+    /// 从列表中移除已完成和已停止的任务
+    func clearFinishedDownloads() {
+        downloadJobs.removeAll { $0.state == .completed || $0.state == .cancelled }
     }
 
     func cancelAllDownloads() {
@@ -778,5 +831,75 @@ nonisolated private final class DownloadProgressRelay: @unchecked Sendable {
     func downloaded(_ id: String) {
         let target = self.target
         Task { @MainActor in target?.markDownloaded(id) }
+    }
+}
+
+/// 当前批次的下载进度。steamcmd 一次只下载一个条目，先写到 downloads 临时目录，完成后再移到 content，
+/// 所以按临时目录的大小估算进度；有临时目录的就是正在下载的条目
+final class WorkshopDownloadProgress: ObservableObject {
+    struct Entry: Equatable {
+        var bytes: Int64
+        var total: Int64?
+
+        var fraction: Double? {
+            guard let total, total > 0 else { return nil }
+            return min(1, Double(bytes) / Double(total))
+        }
+    }
+
+    @Published private(set) var entries: [String: Entry] = [:]
+    /// 当前下载速度（字节 / 秒）
+    @Published private(set) var bytesPerSecond: Int64 = 0
+    /// 本批次中还在等待 steamcmd 处理的条目
+    @Published private(set) var batch: Set<String> = []
+
+    private var task: Task<Void, Never>?
+
+    func start(ids: [String], totalBytes: [String: Int64], stagingFolder: URL) {
+        task?.cancel()
+        batch = Set(ids)
+        entries = [:]
+        bytesPerSecond = 0
+        task = Task { [weak self] in
+            var lastTotal: Int64?
+            while !Task.isCancelled {
+                let sizes = await Task.detached { Self.sizes(of: ids, in: stagingFolder) }.value
+                guard !Task.isCancelled, let self else { return }
+                let next = sizes.reduce(into: [String: Entry]()) { result, pair in
+                    result[pair.key] = Entry(bytes: pair.value, total: totalBytes[pair.key])
+                }
+                if next != self.entries { self.entries = next }
+                let total = sizes.values.reduce(0, +)
+                if let lastTotal { self.bytesPerSecond = max(0, total - lastTotal) }
+                lastTotal = total
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        entries = [:]
+        batch = []
+        bytesPerSecond = 0
+    }
+
+    nonisolated private static func sizes(of ids: [String], in folder: URL) -> [String: Int64] {
+        let fm = FileManager.default
+        var result: [String: Int64] = [:]
+        for id in ids {
+            let url = folder.appendingPathComponent(id, isDirectory: true)
+            guard fm.fileExists(atPath: url.path) else { continue }
+            var total: Int64 = 0
+            if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
+                // 用实际占用的空间：steamcmd 可能预先创建完整大小的文件
+                for case let file as URL in enumerator {
+                    total += Int64((try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize) ?? 0)
+                }
+            }
+            result[id] = total
+        }
+        return result
     }
 }

@@ -193,6 +193,13 @@ struct wallhavenTests {
         #expect(SelectionFallback.neighbor(of: "a", previousIDs: ["a"], currentIDs: []) == nil)
     }
 
+    @Test func oldDownloadJobsDecodeWithoutSize() throws {
+        let old = Data(#"[{"id":"1","title":"A","state":"queued","applyWhenDone":false}]"#.utf8)
+        let jobs = try JSONDecoder().decode([WorkshopDownloadJob].self, from: old)
+        #expect(jobs.first?.totalBytes == nil)
+        #expect(jobs.first?.state == .queued)
+    }
+
     @Test func updateVersionComparisonIsNumeric() {
         #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
         #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))

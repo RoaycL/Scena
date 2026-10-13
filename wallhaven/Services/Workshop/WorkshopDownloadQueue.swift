@@ -22,6 +22,8 @@ nonisolated struct WorkshopDownloadJob: Codable, Identifiable, Sendable {
     var state: DownloadState
     var error: String?
     var applyWhenDone = false
+    /// 工坊详情里的文件大小，用于显示进度（未知时为 nil）
+    var totalBytes: Int64? = nil
 }
 
 /// 每个条目单独结算；中断一个批次不会丢弃其中其他条目的下载意图。
