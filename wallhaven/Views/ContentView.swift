@@ -352,6 +352,9 @@ struct ContentView: View {
 
                 VStack(spacing: 12) {
                     topBar(width: size.width)
+                        // 兜底：即使放不下也只裁掉边缘，不会撑宽父视图、把整个界面推歪露出白边
+                        .frame(width: size.width)
+                        .clipped()
                         .opacity(immersive.isChromeHidden ? 0 : 1)
                         .offset(y: immersive.isChromeHidden ? -12 : 0)
                         .allowsHitTesting(!immersive.isChromeHidden)
@@ -369,7 +372,8 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
-        .frame(minWidth: 820, minHeight: 520)
+        // 最小尺寸要放得下顶部栏最宽的情况（页签 + 来源切换 + 搜索、筛选等工具），否则内容会把整个界面挤歪
+        .frame(minWidth: 1120, minHeight: 640)
         .background(WindowAccessor { immersive.attach(to: $0) })
         .focusedSceneValue(\.galleryActions, commandActions)
         .onAppear {
