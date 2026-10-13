@@ -412,8 +412,14 @@ struct DownloadingOverlay: View {
             VStack(spacing: large ? 10 : 6) {
                 Group {
                     if state == .downloading {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .symbolEffect(.rotate, options: .repeat(.continuous))
+                        if #available(macOS 15.0, *) {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .symbolEffect(.rotate, options: .repeat(.continuous))
+                        } else {
+                            ProgressView()
+                                .controlSize(large ? .regular : .small)
+                                .tint(.white)
+                        }
                     } else {
                         Image(systemName: state == .paused ? "pause.circle" : state == .failed ? "exclamationmark.circle" : state == .cancelled ? "stop.circle" : "clock")
                     }
