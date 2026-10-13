@@ -95,6 +95,7 @@ final class WorkshopViewModel: ObservableObject {
         static let folders = "workshop.libraryFolders"
         static let filters = "workshop.filters"
         static let subscribeOnDownload = "workshop.subscribeOnDownload"
+        static let downloadReceipts = "workshop.downloadReceipts.v1"
         static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
         static let maxConcurrentDownloads = "workshop.maxConcurrentDownloads"
@@ -103,6 +104,13 @@ final class WorkshopViewModel: ObservableObject {
         static let steamCMDExpiredAt = "workshop.steamcmdExpiredAt"
     }
 
+    private var downloadReceipts: [String: WorkshopDownloadReceipt] = [:] {
+        didSet {
+            if let data = try? JSONEncoder().encode(downloadReceipts) {
+                UserDefaults.standard.set(data, forKey: Keys.downloadReceipts)
+            }
+        }
+    }
     private let api = SteamWorkshopAPI()
     private let toast = ToastCenter.shared
     private var cursor: String?
@@ -123,6 +131,10 @@ final class WorkshopViewModel: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: Keys.downloadReceipts),
+           let saved = try? JSONDecoder().decode([String: WorkshopDownloadReceipt].self, from: data) {
+            downloadReceipts = saved
+        }
         apiKey = defaults.string(forKey: Keys.apiKey) ?? ""
         steamUsername = defaults.string(forKey: Keys.username) ?? ""
         filters = defaults.data(forKey: Keys.filters).flatMap { try? JSONDecoder().decode(WorkshopFilters.self, from: $0) } ?? WorkshopFilters()
@@ -480,6 +492,7 @@ final class WorkshopViewModel: ObservableObject {
         for item in items {
             if let index = jobs.firstIndex(where: { $0.id == item.id }) {
                 if automatic { continue } // 同步不能自动恢复用户暂停、停止或失败的任务。
+                if [.paused, .failed, .cancelled].contains(jobs[index].state) { downloadReceipts[item.id] = nil }
                 if jobs[index].state != .downloading { jobs[index].state = .queued }
                 jobs[index].error = nil
                 jobs[index].applyWhenDone = applyWhenDone || jobs[index].applyWhenDone
@@ -509,26 +522,18 @@ final class WorkshopViewModel: ObservableObject {
             .appendingPathComponent(WorkshopConstants.appID, isDirectory: true)
     }
 
-    /// 排队 / 暂停中的任务如果本地已经有完整的壁纸（steamcmd 完成后才会移入 content 目录），直接标记为完成
+    /// 只跳过有成功记录且文件清单未改变的排队任务；暂停、失败任务始终交给 Steam 校验。
     private func completeJobsAlreadyOnDisk() {
-        let fm = FileManager.default
         let roots = libraryRoots
-        let localIDs = Set(libraryItems.map(\.id))
-        var changed = false
-        let jobs = downloadJobs.map { job -> WorkshopDownloadJob in
-            guard [.queued, .paused, .failed].contains(job.state) else { return job }
-            let onDisk = localIDs.contains(job.id) || roots.contains {
-                fm.fileExists(atPath: $0.appendingPathComponent(job.id).appendingPathComponent("project.json").path)
-            }
-            guard onDisk else { return job }
-            var job = job
-            job.state = .completed
-            job.error = nil
-            job.applyWhenDone = false
-            changed = true
-            return job
+        downloadJobs = downloadJobs.map { job in
+            guard job.state == .queued, let receipt = downloadReceipts[job.id],
+                  roots.contains(where: { receipt.matches(folder: $0.appendingPathComponent(job.id)) }) else { return job }
+            var completed = job
+            completed.state = .completed
+            completed.error = nil
+            // 保留应用意图，由本地素材关联完成后处理。
+            return completed
         }
-        if changed { downloadJobs = jobs }
     }
 
     private func processDownloadQueue() {
@@ -537,6 +542,11 @@ final class WorkshopViewModel: ObservableObject {
         completeJobsAlreadyOnDisk()
         // 同时下载数量：这一批标记为「下载中」，其余继续排队
         let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(maxConcurrentDownloads).map(\.id))
+        if let job = downloadJobs.first(where: { $0.state == .completed && $0.applyWhenDone }),
+           let item = libraryItems.first(where: { $0.id == job.id }) {
+            if let index = downloadJobs.firstIndex(where: { $0.id == job.id }) { downloadJobs[index].applyWhenDone = false }
+            apply(item)
+        }
         guard !batch.isEmpty else { return }
         isProcessingQueue = true
         batchInterrupted = false
@@ -575,7 +585,12 @@ final class WorkshopViewModel: ObservableObject {
                 result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
             }
             if !result.downloaded.isEmpty { setSteamCMDLogin(valid: true) }
-            for folder in result.downloaded.values {
+            for (id, folder) in result.downloaded {
+                if let receipt = await Task.detached(priority: .utility, operation: {
+                    WorkshopDownloadReceipt.capture(folder: folder)
+                }).value {
+                    downloadReceipts[id] = receipt
+                }
                 let root = folder.deletingLastPathComponent()
                 if !libraryRoots.contains(where: { Self.pathKey($0) == Self.pathKey(root) }) {
                     setExtraFolders(extraFolders + [root])
@@ -628,6 +643,7 @@ final class WorkshopViewModel: ObservableObject {
     func resumeDownload(_ id: String) {
         guard let index = downloadJobs.firstIndex(where: { $0.id == id }),
               [.paused, .failed, .cancelled].contains(downloadJobs[index].state) else { return }
+        downloadReceipts[id] = nil
         downloadJobs[index].state = .queued
         downloadJobs[index].error = nil
         processDownloadQueue()
@@ -649,6 +665,7 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func resumeAllDownloads() {
+        for job in downloadJobs where job.state == .paused { downloadReceipts[job.id] = nil }
         downloadJobs = downloadJobs.map {
             var job = $0
             if job.state == .paused { job.state = .queued; job.error = nil }

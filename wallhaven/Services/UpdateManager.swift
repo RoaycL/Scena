@@ -247,17 +247,8 @@ final class UpdateManager: ObservableObject {
         guard let stagedApp else { throw UpdateError.noApp }
         let fm = FileManager.default
         let current = URL(fileURLWithPath: Bundle.main.bundlePath)
-        let backup = current.deletingLastPathComponent().appendingPathComponent(".\(current.lastPathComponent).old")
-
-        try? fm.removeItem(at: backup)
-        try fm.moveItem(at: current, to: backup)
-        do {
-            try fm.copyItem(at: stagedApp, to: current)
-        } catch {
-            try? fm.moveItem(at: backup, to: current)
-            throw error
-        }
-        try? fm.removeItem(at: backup)
+        try AppReplacement.replace(staged: stagedApp, current: current,
+                                   bundleID: Bundle.main.bundleIdentifier ?? "com.roayc.wallhaven")
         try? fm.removeItem(at: stagedApp.deletingLastPathComponent())
         self.stagedApp = nil
         isReadyToInstall = false

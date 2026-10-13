@@ -24,6 +24,9 @@ final class ImmersiveWindowController: ObservableObject {
     private weak var window: NSWindow?
     private var monitor: Any?
     private var hideTimer: Timer?
+    private var menuObservers: [NSObjectProtocol] = []
+    /// 子菜单有各自的跟踪周期；只有最后一个菜单关闭后才恢复自动隐藏。
+    private var trackingMenus: Set<ObjectIdentifier> = []
     private let idleDelay: TimeInterval = 2.5
     /// 鼠标悬停在界面元素上、搜索框聚焦、弹出面板打开时不自动隐藏
     private var holdReasons: Set<String> = []
@@ -38,6 +41,7 @@ final class ImmersiveWindowController: ObservableObject {
 
     deinit {
         if let monitor { NSEvent.removeMonitor(monitor) }
+        menuObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     func attach(to window: NSWindow) {
@@ -47,6 +51,7 @@ final class ImmersiveWindowController: ObservableObject {
         // 启动时不要让搜索框抢走焦点，否则快捷键和自动隐藏都会失效
         DispatchQueue.main.async { window.makeFirstResponder(nil) }
         installMonitor()
+        installMenuTracking()
         scheduleHide()
     }
 
@@ -117,9 +122,27 @@ final class ImmersiveWindowController: ObservableObject {
 
     // MARK: - Event monitor
 
+    private func installMenuTracking() {
+        guard menuObservers.isEmpty else { return }
+        menuObservers.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, let menu = notification.object as? NSMenu else { return }
+                self.trackingMenus.insert(ObjectIdentifier(menu))
+                self.setHold("menu", active: true)
+            }
+        })
+        menuObservers.append(NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, let menu = notification.object as? NSMenu else { return }
+                self.trackingMenus.remove(ObjectIdentifier(menu))
+                if self.trackingMenus.isEmpty { self.setHold("menu", active: false) }
+            }
+        })
+    }
+
     private func installMonitor() {
         guard monitor == nil else { return }
-        let mask: NSEvent.EventTypeMask = [.mouseMoved, .scrollWheel, .keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .scrollWheel, .keyDown, .leftMouseDown, .rightMouseDown, .leftMouseDragged, .leftMouseUp]
         monitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             guard let self, let window = self.window, event.window === window else { return event }
             return self.handle(event, in: window)
@@ -127,7 +150,12 @@ final class ImmersiveWindowController: ObservableObject {
     }
 
     private func handle(_ event: NSEvent, in window: NSWindow) -> NSEvent? {
+        // 菜单使用方向键/滚轮浏览时，不能同时切换图片或移动缩略图条。
+        guard trackingMenus.isEmpty else { return event }
         switch event.type {
+        case .rightMouseDown:
+            userDidInteract()
+            return event
         case .mouseMoved:
             userDidInteract()
             return event

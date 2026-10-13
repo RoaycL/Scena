@@ -306,6 +306,7 @@ final class LiveWallpaperController: ObservableObject {
         // 手动暂停优先；自动暂停条件解除后自动继续
         let shouldPlay = !isPaused && !isSystemSuspended && autoPauseReasons.isEmpty
         players.forEach { shouldPlay ? $0.play() : $0.pause() }
+        PlaylistManager.shared.setAutomaticPlaybackPaused(isSystemSuspended || !autoPauseReasons.isEmpty)
     }
 
     /// 桌面窗口不接收鼠标事件，把全局鼠标位置推给场景壁纸（视差 / 鼠标交互效果）
@@ -348,7 +349,8 @@ final class LiveWallpaperController: ObservableObject {
         var written: Set<String> = []
 
         for (index, (window, player)) in zip(windows, players).enumerated() {
-            guard let screen = window.screen, let image = await player.snapshot() else { continue }
+            guard let screen = window.screen, let image = await player.snapshot(),
+                  !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) else { continue }
             let url = folder.appendingPathComponent("frozen-\(index)-\(stamp).png")
             guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
                   (try? data.write(to: url, options: .atomic)) != nil else { continue }
@@ -356,9 +358,14 @@ final class LiveWallpaperController: ObservableObject {
             written.insert(url.lastPathComponent)
         }
 
-        // 只保留这次的定格图片
+        // 保留仍被系统使用的图片（包括禁用屏幕及快照失败的屏幕）。
+        let referenced = Set(NSScreen.screens.compactMap { screen -> String? in
+            guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
+                  url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL else { return nil }
+            return url.lastPathComponent
+        })
         let old = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        for name in old where name.hasPrefix("frozen-") && !written.contains(name) {
+        for name in old where name.hasPrefix("frozen-") && !written.contains(name) && !referenced.contains(name) {
             try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
         }
     }
@@ -379,7 +386,7 @@ final class LiveWallpaperController: ObservableObject {
             guard let posterURL = try? await Self.makePoster(for: content) else { return }
             // 期间可能已切换到别的壁纸
             guard self.current == content else { return }
-            for screen in NSScreen.screens {
+            for screen in NSScreen.screens where !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) {
                 try? NSWorkspace.shared.setDesktopImageURL(posterURL, for: screen, options: [:])
             }
         }

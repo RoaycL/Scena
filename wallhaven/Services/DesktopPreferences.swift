@@ -223,10 +223,21 @@ final class GlobalHotKeys: ObservableObject {
     @Published private(set) var combos: [Action: HotKeyCombo] = [:]
     private var refs: [Action: EventHotKeyRef] = [:]
     private var handler: EventHandlerRef?
+    private let defaults: UserDefaults
+    private let registration: ((HotKeyCombo, Action) -> EventHotKeyRef?)?
+    private let unregister: (EventHotKeyRef) -> Void
+    private let installsNativeHandler: Bool
 
-    private init() {
+    init(defaults: UserDefaults = .standard,
+         registration: ((HotKeyCombo, Action) -> EventHotKeyRef?)? = nil,
+         unregister: @escaping (EventHotKeyRef) -> Void = { UnregisterEventHotKey($0) },
+         installsNativeHandler: Bool = true) {
+        self.defaults = defaults
+        self.registration = registration
+        self.unregister = unregister
+        self.installsNativeHandler = installsNativeHandler
         for action in Action.allCases {
-            if let data = UserDefaults.standard.data(forKey: action.defaultsKey),
+            if let data = defaults.data(forKey: action.defaultsKey),
                let combo = try? JSONDecoder().decode(HotKeyCombo.self, from: data) {
                 combos[action] = combo
             }
@@ -240,31 +251,49 @@ final class GlobalHotKeys: ObservableObject {
     }
 
     func set(_ combo: HotKeyCombo?, for action: Action) {
+        installHandler()
+        if let combo {
+            if let old = combos[action], old.keyCode == combo.keyCode, old.modifiers == combo.modifiers,
+               refs[action] != nil { return }
+            guard !combos.contains(where: { $0.key != action && $0.value.keyCode == combo.keyCode && $0.value.modifiers == combo.modifiers }) else {
+                ToastCenter.shared.show("该快捷键已用于另一个 Scena 操作，原快捷键已保留", style: .error)
+                return
+            }
+            // 先申请新快捷键；失败时不触碰原注册和已保存设置。
+            guard let replacement = makeReference(combo, for: action) else { return }
+            if let old = refs[action] { unregister(old) }
+            refs[action] = replacement
+        } else {
+            if let old = refs.removeValue(forKey: action) { unregister(old) }
+        }
         combos[action] = combo
         if let combo, let data = try? JSONEncoder().encode(combo) {
-            UserDefaults.standard.set(data, forKey: action.defaultsKey)
+            defaults.set(data, forKey: action.defaultsKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: action.defaultsKey)
+            defaults.removeObject(forKey: action.defaultsKey)
         }
-        installHandler()
-        register(action)
     }
 
     private func register(_ action: Action) {
-        if let ref = refs.removeValue(forKey: action) { UnregisterEventHotKey(ref) }
-        guard let combo = combos[action] else { return }
+        guard refs[action] == nil, let combo = combos[action],
+              let ref = makeReference(combo, for: action) else { return }
+        refs[action] = ref
+    }
+
+    private func makeReference(_ combo: HotKeyCombo, for action: Action) -> EventHotKeyRef? {
+        if let registration { return registration(combo, action) }
         var ref: EventHotKeyRef?
-        let id = EventHotKeyID(signature: OSType(0x53434E41), id: action.hotKeyID) // 'SCNA'
+        let id = EventHotKeyID(signature: OSType(0x53434E41), id: action.hotKeyID)
         let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, id, GetApplicationEventTarget(), 0, &ref)
-        if status == noErr, let ref {
-            refs[action] = ref
-        } else {
-            ToastCenter.shared.show("快捷键 \(combo.display) 已被其他 App 占用", style: .error)
+        guard status == noErr, let ref else {
+            ToastCenter.shared.show("无法注册快捷键 \(combo.display)，原快捷键已保留", style: .error)
+            return nil
         }
+        return ref
     }
 
     private func installHandler() {
-        guard handler == nil else { return }
+        guard installsNativeHandler, handler == nil else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             var hotKeyID = EventHotKeyID()

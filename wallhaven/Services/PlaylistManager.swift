@@ -103,6 +103,7 @@ final class PlaylistManager: ObservableObject {
     @Published private(set) var activeID: UUID?
     @Published private(set) var currentEntryID: String?
     @Published private(set) var isPaused = false
+    private var isAutomaticallyPaused = false
     @Published private(set) var nextChangeAt: Date?
 
     var activePlaylist: Playlist? { playlists.first { $0.id == activeID } }
@@ -255,6 +256,13 @@ final class PlaylistManager: ObservableObject {
         }
     }
 
+    /// 自动暂停与手动暂停分开保存，条件解除不能撤销用户的暂停意图。
+    func setAutomaticPlaybackPaused(_ paused: Bool) {
+        guard paused != isAutomaticallyPaused else { return }
+        isAutomaticallyPaused = paused
+        scheduleTimer()
+    }
+
     func next() { isPaused = false; step(by: 1) }
     func previous() { isPaused = false; step(by: -1) }
 
@@ -343,7 +351,7 @@ final class PlaylistManager: ObservableObject {
 
     private func scheduleTimer() {
         timer?.invalidate()
-        guard let playlist = activePlaylist, !isPaused else { nextChangeAt = nil; return }
+        guard let playlist = activePlaylist, !isPaused, !isAutomaticallyPaused else { nextChangeAt = nil; return }
         nextChangeAt = Date().addingTimeInterval(playlist.interval)
         timer = Timer.scheduledTimer(withTimeInterval: playlist.interval, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.next() }
