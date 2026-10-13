@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum DownloadsWindow { static let id = "workshop-downloads" }
@@ -102,8 +103,9 @@ private struct WorkshopDownloadsList: View {
         }
         .padding(16)
         .frame(width: 440, height: 420)
-        // 不透明背景：玻璃材质透出明亮的壁纸时文字看不清
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color.black.opacity(0.28))
+        .background(DownloadsGlassBackground())
+        .environment(\.colorScheme, .dark)
     }
 
     private func row(_ job: WorkshopDownloadJob) -> some View {
@@ -169,4 +171,18 @@ private struct WorkshopDownloadsList: View {
         }
         .controlSize(.small)
     }
+}
+
+/// 窗口和弹出面板共用原生磨砂背景，叠加深色底保证文字可读。
+private struct DownloadsGlassBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .vibrantDark)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

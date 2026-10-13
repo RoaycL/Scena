@@ -12,8 +12,8 @@ import SwiftUI
 enum LibrarySource: String, CaseIterable, Identifiable {
     case all = "全部"
     case wallhaven = "Wallhaven"
-    case imported = "本地导入"
     case workshop = "创意工坊"
+    case imported = "本地导入"
 
     var id: String { rawValue }
 

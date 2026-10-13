@@ -39,6 +39,11 @@ struct PlaylistsView: View {
                 .frame(minWidth: 680, minHeight: 440)
             }
         }
+        .onChange(of: selectedID) { selectedEntries.removeAll() }
+        .onChange(of: manager.playlists) {
+            let entries = manager.playlists.first(where: { $0.id == selectedID })?.entries ?? []
+            selectedEntries.formIntersection(Set(entries.map(\.id)))
+        }
         .onAppear {
             if selectedID == nil { selectedID = manager.activeID ?? manager.playlists.first?.id }
         }
@@ -152,23 +157,39 @@ struct PlaylistsView: View {
                     description: Text("在首页、收藏、本地或工坊里右键壁纸 →「添加到播放列表」")
                 )
             } else {
-                List(selection: $selectedEntries) {
-                    ForEach(playlist.entries) { entry in
-                        entryRow(entry, isCurrent: isActive && manager.currentEntryID == entry.id)
-                            .tag(entry.id)
-                            .contextMenu {
-                                Button("从这里开始播放") { manager.play(playlist.id, startAt: entry.id) }
-                                Divider()
-                                Button("移除", role: .destructive) {
-                                    manager.remove(selectedEntries.contains(entry.id) ? selectedEntries : [entry.id], from: playlist.id)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 240), spacing: 14)], spacing: 14) {
+                        ForEach(playlist.entries) { entry in
+                            entryCard(entry, isCurrent: isActive && manager.currentEntryID == entry.id)
+                                .onTapGesture(count: 2) { manager.play(playlist.id, startAt: entry.id) }
+                                .onTapGesture {
+                                    if NSEvent.modifierFlags.contains(.command) {
+                                        if !selectedEntries.insert(entry.id).inserted { selectedEntries.remove(entry.id) }
+                                    } else {
+                                        selectedEntries = [entry.id]
+                                    }
                                 }
-                            }
+                                .draggable(entry.id)
+                                .dropDestination(for: String.self) { ids, _ in
+                                    guard let id = ids.first, ids.count == 1, id != entry.id,
+                                          let source = playlist.entries.firstIndex(where: { $0.id == id }),
+                                          let target = playlist.entries.firstIndex(where: { $0.id == entry.id }) else { return false }
+                                    manager.move(in: playlist.id, from: IndexSet(integer: source), to: target > source ? target + 1 : target)
+                                    return true
+                                }
+                                .contextMenu {
+                                    Button("从这里开始播放") { manager.play(playlist.id, startAt: entry.id) }
+                                    Divider()
+                                    Button("移除", role: .destructive) {
+                                        manager.remove(selectedEntries.contains(entry.id) ? selectedEntries : [entry.id], from: playlist.id)
+                                    }
+                                }
+                        }
                     }
-                    .onMove { manager.move(in: playlist.id, from: $0, to: $1) }
-                    .onDelete { offsets in
-                        manager.remove(Set(offsets.map { playlist.entries[$0].id }), from: playlist.id)
-                    }
+                    .padding(20)
                 }
+                .focusable()
+                .focusEffectDisabled()
                 .onDeleteCommand {
                     manager.remove(selectedEntries, from: playlist.id)
                     selectedEntries.removeAll()
@@ -177,37 +198,61 @@ struct PlaylistsView: View {
         }
     }
 
-    private func entryRow(_ entry: PlaylistEntry, isCurrent: Bool) -> some View {
-        HStack(spacing: 12) {
-            KFImage(source: entry.thumbnailURL.map { $0.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: $0)) : $0.convertToSource() })
-                .setProcessor(GIFPosterFrameProcessor(maxPixelSize: 240))
-                .placeholder {
-                    Image(systemName: entry.kind == .workshop ? "cube" : "photo")
-                        .foregroundStyle(.secondary)
-                }
-                .resizable()
-                .scaledToFill()
-                .frame(width: 72, height: 42)
-                .background(Color.secondary.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title).lineLimit(1)
-                Text(entry.kindLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    private func entryCard(_ entry: PlaylistEntry, isCurrent: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            GeometryReader { geometry in
+                KFImage(source: thumbnailSource(for: entry))
+                    .setProcessor(GIFPosterFrameProcessor(maxPixelSize: 480))
+                    .cancelOnDisappear(true)
+                    .placeholder {
+                        Image(systemName: entry.kind == .workshop ? "cube" : "photo")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geometry.size.width, height: 112)
+                    .clipped()
+                    .overlay(alignment: .topTrailing) {
+                        if isCurrent {
+                            Label("当前", systemImage: "speaker.wave.2.fill")
+                                .font(.caption.weight(.semibold))
+                                .padding(6)
+                                .background(.regularMaterial, in: Capsule())
+                                .padding(7)
+                        }
+                    }
             }
+            .frame(height: 112)
+            Text(entry.title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+            Text(entry.kindLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+        }
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(selectedEntries.contains(entry.id) ? Color.accentColor : (isCurrent ? .green : .clear), lineWidth: 2)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .help("双击播放 · 拖动排序 · Command 点击多选")
+    }
 
-            Spacer()
-
-            if isCurrent {
-                Label("当前", systemImage: "speaker.wave.2.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption)
-                    .foregroundStyle(.green)
+    private func thumbnailSource(for entry: PlaylistEntry) -> Source? {
+        if entry.kind == .local, let path = entry.path {
+            let url = URL(fileURLWithPath: path)
+            if MediaType.isVideo(url) {
+                return .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1))
             }
         }
-        .padding(.vertical, 2)
+        return entry.thumbnailURL.map { $0.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: $0)) : $0.convertToSource() }
     }
 
     private func togglePlay(_ playlist: Playlist) {

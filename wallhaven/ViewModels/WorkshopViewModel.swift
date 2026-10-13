@@ -68,7 +68,7 @@ final class WorkshopViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(autoDownloadSubscriptions, forKey: Keys.autoDownload) }
     }
 
-    @Published var query = ""
+    @Published var query = "" { didSet { UserDefaults.standard.set(query, forKey: Keys.query) } }
     @Published var filters: WorkshopFilters {
         didSet {
             if let data = try? JSONEncoder().encode(filters) {
@@ -93,6 +93,7 @@ final class WorkshopViewModel: ObservableObject {
         static let apiKey = "workshop.steamWebAPIKey"
         static let username = "workshop.steamUsername"
         static let folders = "workshop.libraryFolders"
+        static let query = "workshop.searchQuery"
         static let filters = "workshop.filters"
         static let subscribeOnDownload = "workshop.subscribeOnDownload"
         static let downloadReceipts = "workshop.downloadReceipts.v1"
@@ -135,6 +136,7 @@ final class WorkshopViewModel: ObservableObject {
            let saved = try? JSONDecoder().decode([String: WorkshopDownloadReceipt].self, from: data) {
             downloadReceipts = saved
         }
+        query = defaults.string(forKey: Keys.query) ?? ""
         apiKey = defaults.string(forKey: Keys.apiKey) ?? ""
         steamUsername = defaults.string(forKey: Keys.username) ?? ""
         filters = defaults.data(forKey: Keys.filters).flatMap { try? JSONDecoder().decode(WorkshopFilters.self, from: $0) } ?? WorkshopFilters()

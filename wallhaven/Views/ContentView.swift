@@ -8,6 +8,7 @@
 import AppKit
 import Kingfisher
 import SwiftUI
+import Combine
 
 /// 顶部页签：按用途组织，两个来源（Wallhaven / 创意工坊）在每个页签里一致
 enum MainTab: String, CaseIterable, Identifiable {
@@ -38,6 +39,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @StateObject private var localViewModel = LocalMediaViewModel()
     @StateObject private var immersive = ImmersiveWindowController()
+    @State private var galleryTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     @ObservedObject private var toastCenter = ToastCenter.shared
     @ObservedObject private var liveController = LiveWallpaperController.shared
 
@@ -89,7 +91,7 @@ struct ContentView: View {
     private var libraryItems: [GalleryItem] {
         let local = localViewModel.items.map { GalleryItem(origin: .local($0)) }
         let workshopItems = workshop.libraryItems.map { GalleryItem(origin: .workshop($0)) }
-        return (local + workshopItems).filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+        return (local.filter { $0.local?.source == .wallhaven } + workshopItems + local.filter { $0.local?.source == .imported }).filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
     }
 
     private func items(for page: GalleryPage) -> [GalleryItem] {
@@ -390,6 +392,12 @@ struct ContentView: View {
             workshop.refreshLibrary()
             // 已登录 Steam 时同步订阅（10 分钟内不重复）
             workshop.syncSubscriptions()
+        }
+        .onReceive(galleryTimer) { _ in
+            guard !isWorkshopGrid, page != .playlists, immersive.canAdvanceGallery,
+                  currentItems.count > 1 else { return }
+            let index = selectedItem.flatMap { currentItems.firstIndex(of: $0) } ?? -1
+            select(currentItems[(index + 1) % currentItems.count])
         }
         .onReceive(NotificationCenter.default.publisher(for: MainWindow.navigationNotification)) { _ in
             handleMenuNavigation()

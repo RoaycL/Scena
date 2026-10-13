@@ -11,14 +11,14 @@ import SwiftUI
 
 @MainActor
 final class WallpaperViewModel: ObservableObject {
-    @Published var query = "nature"
-    @Published var sortOrder: SortOrder = .favorites
-    @Published var includeGeneral = true
-    @Published var includeAnime = true
-    @Published var includePeople = true
-    @Published var includeSFW = true
-    @Published var includeSketchy = false
-    @Published var includeNSFW = false
+    @Published var query = "" { didSet { saveDiscoveryPreferences() } }
+    @Published var sortOrder: SortOrder = .favorites { didSet { saveDiscoveryPreferences() } }
+    @Published var includeGeneral = true { didSet { saveDiscoveryPreferences() } }
+    @Published var includeAnime = true { didSet { saveDiscoveryPreferences() } }
+    @Published var includePeople = true { didSet { saveDiscoveryPreferences() } }
+    @Published var includeSFW = true { didSet { saveDiscoveryPreferences() } }
+    @Published var includeSketchy = false { didSet { saveDiscoveryPreferences() } }
+    @Published var includeNSFW = false { didSet { saveDiscoveryPreferences() } }
     @Published var apiKeyInput = ""
     @Published var usernameInput = ""
     @Published private(set) var isAuthenticated = false
@@ -35,6 +35,10 @@ final class WallpaperViewModel: ObservableObject {
     @Published var selectedFolderID: UUID? = nil  // nil = 显示全部收藏
     @Published private(set) var tagsByID: [String: [String]] = [:]
 
+    private let discoveryDefaults: UserDefaults
+    private var isRestoringDiscovery = false
+    private static let discoveryKey = "wallper.discovery.preferences.v1"
+
     private let client = WallhavenClient()
     private let downloader = DownloadService()
     private let favoritesKey = "wallper.favorites.ids"
@@ -48,10 +52,32 @@ final class WallpaperViewModel: ObservableObject {
     private var storedAPIKey: String?
     private var storedUsername: String?
 
-    init() {
+    init(discoveryDefaults: UserDefaults = .standard) {
+        self.discoveryDefaults = discoveryDefaults
+        isRestoringDiscovery = true
+        if let saved = discoveryDefaults.dictionary(forKey: Self.discoveryKey) {
+            query = saved["query"] as? String ?? ""
+            sortOrder = (saved["sortOrder"] as? String).flatMap(SortOrder.init(rawValue:)) ?? .favorites
+            includeGeneral = saved["general"] as? Bool ?? true
+            includeAnime = saved["anime"] as? Bool ?? true
+            includePeople = saved["people"] as? Bool ?? true
+            includeSFW = saved["sfw"] as? Bool ?? true
+            includeSketchy = saved["sketchy"] as? Bool ?? false
+            includeNSFW = saved["nsfw"] as? Bool ?? false
+        }
+        isRestoringDiscovery = false
         loadFavorites()
         loadFolders()
         loadAuth()
+    }
+
+    private func saveDiscoveryPreferences() {
+        guard !isRestoringDiscovery else { return }
+        discoveryDefaults.set([
+            "query": query, "sortOrder": sortOrder.rawValue,
+            "general": includeGeneral, "anime": includeAnime, "people": includePeople,
+            "sfw": includeSFW, "sketchy": includeSketchy, "nsfw": includeNSFW
+        ], forKey: Self.discoveryKey)
     }
 
     func search(reset: Bool) {

@@ -8,7 +8,7 @@ import Combine
 import SwiftUI
 
 /// 主窗口的沉浸式行为：
-///  - 鼠标静止一段时间后自动隐藏界面、红绿灯和光标，鼠标一动立即恢复
+///  - 保持界面可见，支持手动隐藏界面、红绿灯和光标
 ///  - 键盘快捷键
 ///  - 在横向缩略图条上，把垂直滚轮转换为水平滚动，并支持拖动滚动
 final class ImmersiveWindowController: ObservableObject {
@@ -23,11 +23,9 @@ final class ImmersiveWindowController: ObservableObject {
 
     private weak var window: NSWindow?
     private var monitor: Any?
-    private var hideTimer: Timer?
     private var menuObservers: [NSObjectProtocol] = []
     /// 子菜单有各自的跟踪周期；只有最后一个菜单关闭后才恢复自动隐藏。
     private var trackingMenus: Set<ObjectIdentifier> = []
-    private let idleDelay: TimeInterval = 2.5
     /// 鼠标悬停在界面元素上、搜索框聚焦、弹出面板打开时不自动隐藏
     private var holdReasons: Set<String> = []
     /// 用户按空格手动隐藏后，只有再按空格（或 Esc）才恢复，移动鼠标不恢复
@@ -48,21 +46,18 @@ final class ImmersiveWindowController: ObservableObject {
         guard self.window !== window else { return }
         self.window = window
         window.acceptsMouseMovedEvents = true
-        // 启动时不要让搜索框抢走焦点，否则快捷键和自动隐藏都会失效
+        // 启动时不要让搜索框抢走焦点，保证快捷键和自动预览可用
         DispatchQueue.main.async { window.makeFirstResponder(nil) }
         installMonitor()
         installMenuTracking()
-        scheduleHide()
     }
 
     func setHold(_ reason: String, active: Bool) {
         if active {
             holdReasons.insert(reason)
-            hideTimer?.invalidate()
             if !isManuallyHidden { setChromeHidden(false) }
         } else {
             holdReasons.remove(reason)
-            scheduleHide()
         }
     }
 
@@ -70,10 +65,8 @@ final class ImmersiveWindowController: ObservableObject {
         if isChromeHidden {
             isManuallyHidden = false
             setChromeHidden(false)
-            scheduleHide()
         } else {
             isManuallyHidden = true
-            hideTimer?.invalidate()
             setChromeHidden(true)
         }
     }
@@ -81,26 +74,19 @@ final class ImmersiveWindowController: ObservableObject {
     func showChrome() {
         isManuallyHidden = false
         setChromeHidden(false)
-        scheduleHide()
     }
 
-    // MARK: - Auto hide
+    // MARK: - Manual visibility
 
     private func userDidInteract() {
         guard !isManuallyHidden else { return }
         if isChromeHidden { setChromeHidden(false) }
-        scheduleHide()
     }
 
-    private func scheduleHide() {
-        hideTimer?.invalidate()
-        guard holdReasons.isEmpty, !isManuallyHidden else { return }
-        hideTimer = Timer.scheduledTimer(withTimeInterval: idleDelay, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.holdReasons.isEmpty, self.window?.isKeyWindow == true else { return }
-                self.setChromeHidden(true)
-            }
-        }
+    /// 编辑和菜单跟踪期间保持当前预览；关闭或隐藏窗口时不再轮播。
+    var canAdvanceGallery: Bool {
+        holdReasons.isDisjoint(with: ["search", "filter", "workshopFilter", "alert", "menu"])
+            && !isManuallyHidden && window?.isVisible == true && !NSApp.isHidden
     }
 
     private func setChromeHidden(_ hidden: Bool) {
