@@ -68,9 +68,28 @@ final class LiveWallpaperController: ObservableObject {
     private var generation = 0
     /// 系统原因（锁屏、睡眠）导致的暂停，与用户手动暂停分开记录
     private var isSystemSuspended = false
+    /// 设置里的自动暂停条件（其他 App 在使用、全屏、电池、不活跃）
+    @Published private(set) var autoPauseReasons: Set<AutoPauseMonitor.Reason> = []
+    private let autoPause = AutoPauseMonitor()
+    /// 影响窗口布局的设置，变化时重建窗口
+    private var layoutSignature = LiveWallpaperController.currentLayoutSignature
 
     private init() {
         observeSystemEvents()
+        autoPause.onChange = { [weak self] reasons in
+            self?.autoPauseReasons = reasons
+            self?.updatePlayback()
+        }
+        autoPause.start()
+    }
+
+    private static var currentLayoutSignature: String {
+        [
+            String(DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)),
+            String(DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)),
+            DesktopSettings.backgroundNSColor.hexString,
+            DesktopSettings.disabledDisplayIDs.sorted().joined(separator: ","),
+        ].joined(separator: "|")
     }
 
     /// App 启动时恢复上次的动态壁纸
@@ -182,12 +201,20 @@ final class LiveWallpaperController: ObservableObject {
             return
         }
 
-        for screen in NSScreen.screens {
+        let disabled = DesktopSettings.disabledDisplayIDs
+        // 盖住桌面图标：窗口放到图标层之上（仍然不接收鼠标事件）
+        let level = DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)
+            ? Int(CGWindowLevelForKey(.desktopIconWindow)) + 1
+            : Int(CGWindowLevelForKey(.desktopWindow))
+        let keepAspect = DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)
+        let background = DesktopSettings.backgroundNSColor
+        for screen in NSScreen.screens where !disabled.contains(screen.displayUUID) {
             guard let player = makePlayer(for: content) else { continue }
+            (player as? LoopingVideoNSView)?.setFit(keepAspectRatio: keepAspect, background: background)
             // 多屏只让主屏输出声音，避免重复播放与叠加音量。
             player.setVolume(screen == NSScreen.screens.first ? volume : 0)
             let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
+            window.level = NSWindow.Level(rawValue: level)
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
             window.ignoresMouseEvents = true
             window.isOpaque = false
@@ -276,7 +303,8 @@ final class LiveWallpaperController: ObservableObject {
     }
 
     private func updatePlayback() {
-        let shouldPlay = !isPaused && !isSystemSuspended
+        // 手动暂停优先；自动暂停条件解除后自动继续
+        let shouldPlay = !isPaused && !isSystemSuspended && autoPauseReasons.isEmpty
         players.forEach { shouldPlay ? $0.play() : $0.pause() }
     }
 
@@ -346,6 +374,7 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 把封面设为系统静态壁纸：App 退出后桌面仍保持一致的画面
     private func setStaticPoster(for content: LiveContent) {
+        guard DesktopSettings.bool(DesktopSettings.syncStaticWallpaper, default: true) else { return }
         Task {
             guard let posterURL = try? await Self.makePoster(for: content) else { return }
             // 期间可能已切换到别的壁纸
@@ -442,6 +471,16 @@ final class LiveWallpaperController: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, self.isActive else { return }
                 self.rebuildWindows()
+            }
+        })
+
+        observers.append(center.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let signature = Self.currentLayoutSignature
+                guard signature != self.layoutSignature else { return }
+                self.layoutSignature = signature
+                if self.isActive { self.rebuildWindows() }
             }
         })
 

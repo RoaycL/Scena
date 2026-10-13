@@ -5,6 +5,7 @@
 //  Created by RoaycL on 2026/4/17.
 //
 
+import AppKit
 import Foundation
 import Darwin
 import Testing
@@ -198,6 +199,12 @@ struct wallhavenTests {
         let jobs = try JSONDecoder().decode([WorkshopDownloadJob].self, from: old)
         #expect(jobs.first?.totalBytes == nil)
         #expect(jobs.first?.state == .queued)
+    }
+
+    @Test func backgroundColorHexRoundTrips() {
+        #expect(NSColor(hex: "#1A2B3C")?.hexString == "#1A2B3C")
+        #expect(NSColor(hex: "000000")?.hexString == "#000000")
+        #expect(NSColor(hex: "#12345") == nil)
     }
 
     @Test func updateVersionComparisonIsNumeric() {

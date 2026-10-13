@@ -94,16 +94,26 @@ private func formatBytes(_ value: Int64) -> String {
 
 private struct GeneralSettings: View {
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
+    @AppStorage(DesktopSettings.showDockIcon) private var showDockIcon = true
+    @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
     var body: some View {
         Form {
             Section {
+                Toggle("开机时自动启动", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+                Toggle("在 Dock 中显示图标", isOn: $showDockIcon)
+                    // 菜单栏图标和 Dock 图标至少保留一个，否则找不到 App
+                    .disabled(!showStatusItem && showDockIcon)
+                    .onChange(of: showDockIcon) { DockIcon.apply() }
                 Toggle("在菜单栏显示图标", isOn: $showStatusItem)
+                    .disabled(!showDockIcon && showStatusItem)
             } header: {
-                Text("菜单栏")
+                Text("启动与图标")
             } footer: {
-                SettingsFootnote("通过菜单栏图标可以控制动态壁纸和播放列表、随机换一张壁纸。")
+                SettingsFootnote("开机启动后会恢复上次的动态壁纸和播放列表。菜单栏图标和 Dock 图标至少保留一个。")
             }
+
+            GlobalHotKeySection()
 
             Section {
                 LabeledContent("关闭主窗口") { Text("继续在后台运行，动态壁纸不中断").foregroundStyle(.secondary) }
@@ -112,7 +122,7 @@ private struct GeneralSettings: View {
                 Text("窗口")
             }
 
-            Section("快捷键") {
+            Section("窗口内快捷键") {
                 shortcut("切换上一张 / 下一张", "← →")
                 shortcut("设为壁纸", "↩")
                 shortcut("隐藏 / 显示界面", "空格")
@@ -123,6 +133,15 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try LaunchAtLogin.setEnabled(enabled)
+        } catch {
+            ToastCenter.shared.show("设置开机启动失败：\(error.localizedDescription)", style: .error)
+        }
+        launchAtLogin = LaunchAtLogin.isEnabled
     }
 
     private func shortcut(_ title: String, _ keys: String) -> some View {
@@ -353,14 +372,159 @@ private struct LiveWallpaperSettings: View {
                 SettingsFootnote("声音只在主显示器播放。帧率只影响场景和网页类工坊壁纸，视频按原始帧率播放。")
             }
 
-            Section {
-                LabeledContent("锁屏、睡眠、显示器关闭") { Text("自动暂停").foregroundStyle(.secondary) }
-                LabeledContent("退出 App") { Text("定格为当前画面").foregroundStyle(.secondary) }
-            } header: {
-                Text("节能")
-            }
+            LiveDisplaySection()
+            AutoPauseSection(live: live)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// 动态壁纸的显示方式
+private struct LiveDisplaySection: View {
+    @AppStorage(DesktopSettings.coverDesktopIcons) private var coverIcons = false
+    @AppStorage(DesktopSettings.syncStaticWallpaper) private var syncStatic = true
+    @AppStorage(DesktopSettings.keepAspectRatio) private var keepAspect = false
+    @AppStorage(DesktopSettings.backgroundColor) private var backgroundHex = "#000000"
+    @State private var screens = NSScreen.screens
+    @State private var disabled = DesktopSettings.disabledDisplayIDs
+
+    var body: some View {
+        Section {
+            Toggle("隐藏桌面图标", isOn: $coverIcons)
+            Toggle("切换动态壁纸时同步更新桌面图片", isOn: $syncStatic)
+            Toggle("保持视频原始长宽比", isOn: $keepAspect)
+            if keepAspect {
+                ColorPicker("空白区域颜色", selection: Binding(
+                    get: { Color(nsColor: NSColor(hex: backgroundHex) ?? .black) },
+                    set: { backgroundHex = NSColor($0).hexString }
+                ), supportsOpacity: false)
+            }
+        } header: {
+            Text("显示")
+        } footer: {
+            SettingsFootnote("隐藏桌面图标只在播放动态壁纸时生效，图标仍可点击。同步桌面图片后，锁屏、调度中心和退出 App 后都显示同一画面。长宽比只影响视频类壁纸。")
+        }
+
+        Section {
+            ForEach(screens, id: \.displayUUID) { screen in
+                Toggle(isOn: Binding(
+                    get: { !disabled.contains(screen.displayUUID) },
+                    set: { setEnabled($0, screen.displayUUID) }
+                )) {
+                    HStack {
+                        Text(screen.localizedName)
+                        if screen == NSScreen.main { Text("主显示器").font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+        } header: {
+            Text("在这些显示器上播放")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screens = NSScreen.screens
+        }
+    }
+
+    private func setEnabled(_ enabled: Bool, _ id: String) {
+        if enabled { disabled.remove(id) } else { disabled.insert(id) }
+        UserDefaults.standard.set(Array(disabled), forKey: DesktopSettings.disabledDisplays)
+    }
+}
+
+/// 自动暂停条件
+private struct AutoPauseSection: View {
+    @ObservedObject var live: LiveWallpaperController
+    @AppStorage(DesktopSettings.pauseWhenOtherAppActive) private var otherApp = false
+    @AppStorage(DesktopSettings.pauseWhenFullScreen) private var fullScreen = true
+    @AppStorage(DesktopSettings.pauseOnBattery) private var battery = false
+    @AppStorage(DesktopSettings.pauseWhenIdle) private var idle = false
+    @AppStorage(DesktopSettings.idleMinutes) private var idleMinutes = 10
+
+    var body: some View {
+        Section {
+            Toggle("其他 App 在使用时（只在桌面 / 访达处于前台时播放）", isOn: $otherApp)
+            Toggle("其他 App 全屏时", isOn: $fullScreen)
+            Toggle("未连接电源时", isOn: $battery)
+            Toggle("电脑不活跃时", isOn: $idle)
+            if idle {
+                Stepper(value: $idleMinutes, in: 1...120) {
+                    LabeledContent("不活跃超过") { Text("\(idleMinutes) 分钟").monospacedDigit() }
+                }
+            }
+            LabeledContent("锁屏、睡眠、显示器关闭") { Text("始终暂停").foregroundStyle(.secondary) }
+            if !live.autoPauseReasons.isEmpty, live.isActive {
+                Label("当前已自动暂停：" + live.autoPauseReasons.map(\.label).sorted().joined(separator: "、"),
+                      systemImage: "pause.circle")
+                    .foregroundStyle(.orange)
+            }
+        } header: {
+            Text("自动暂停")
+        } footer: {
+            SettingsFootnote("条件解除后自动继续播放。手动暂停的优先级更高：手动暂停后不会被自动恢复。")
+        }
+    }
+}
+
+/// 系统范围的快捷键：App 在后台时也有效
+private struct GlobalHotKeySection: View {
+    @ObservedObject private var hotKeys = GlobalHotKeys.shared
+    @State private var recording: GlobalHotKeys.Action?
+    @State private var monitor: Any?
+
+    var body: some View {
+        Section {
+            ForEach(GlobalHotKeys.Action.allCases) { action in
+                LabeledContent(action.title) {
+                    HStack(spacing: 6) {
+                        Button {
+                            recording == action ? stopRecording() : startRecording(action)
+                        } label: {
+                            Text(recording == action ? "请按下快捷键…" : (hotKeys.combos[action]?.display ?? "点击设置"))
+                                .monospaced()
+                                .frame(minWidth: 110)
+                        }
+                        if hotKeys.combos[action] != nil, recording != action {
+                            Button {
+                                hotKeys.set(nil, for: action)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("清除")
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("全局快捷键")
+        } footer: {
+            SettingsFootnote("需要包含 ⌘、⌥ 或 ⌃ 中的至少一个。按 Esc 取消录制。")
+        }
+        .onDisappear { stopRecording() }
+    }
+
+    private func startRecording(_ action: GlobalHotKeys.Action) {
+        stopRecording()
+        recording = action
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { // Esc
+                stopRecording()
+                return nil
+            }
+            guard let combo = GlobalHotKeys.combo(from: event) else {
+                NSSound.beep()
+                return nil
+            }
+            hotKeys.set(combo, for: action)
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        recording = nil
     }
 }
 

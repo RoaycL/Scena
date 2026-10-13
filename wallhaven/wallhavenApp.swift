@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StorageManager.configureImageCache()
         LiveWallpaperController.shared.restore()
         PlaylistManager.shared.restore()
+        DockIcon.apply()
+        GlobalHotKeys.shared.registerAll()
         // 启动几秒后在后台检查 GitHub 更新（每天最多一次，可在设置中关闭）
         Task {
             try? await Task.sleep(for: .seconds(5))

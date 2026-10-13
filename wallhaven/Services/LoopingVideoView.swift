@@ -105,6 +105,12 @@ final class LoopingVideoNSView: NSView {
         return try? await generator.image(at: player.currentTime()).image
     }
 
+    /// 桌面壁纸的显示方式：保持原始长宽比时用背景色填充空白区域
+    func setFit(keepAspectRatio: Bool, background: NSColor) {
+        playerLayer.videoGravity = keepAspectRatio ? .resizeAspect : .resizeAspectFill
+        layer?.backgroundColor = background.cgColor
+    }
+
     func play() { player.play() }
     func pause() { player.pause() }
 
