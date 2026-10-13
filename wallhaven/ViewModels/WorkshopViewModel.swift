@@ -8,10 +8,6 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum DownloadState {
-    case none, queued, downloading
-}
-
 final class WorkshopViewModel: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case library = "已下载"
@@ -25,10 +21,14 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var libraryItems: [WorkshopItem] = []
     @Published private(set) var onlineItems: [WorkshopItem] = []
     @Published private(set) var isLoading = false
-    /// 排队中 + 正在下载
-    @Published private(set) var downloading: Set<String> = []
-    /// 正在下载的这一批（其余为排队中）
+    @Published private(set) var downloadJobs: [WorkshopDownloadJob] = [] {
+        didSet { persistDownloads() }
+    }
+    /// 正在退出的批次也保留在这里，确保恢复操作不会启动第二个进程。
     @Published private(set) var activeDownloads: Set<String> = []
+    var downloading: Set<String> {
+        Set(downloadJobs.filter { $0.state == .queued || $0.state == .downloading }.map(\.id))
+    }
 
     // 订阅同步
     @Published private(set) var subscribedIDs: Set<String> = []
@@ -65,6 +65,7 @@ final class WorkshopViewModel: ObservableObject {
         static let folders = "workshop.libraryFolders"
         static let filters = "workshop.filters"
         static let subscribeOnDownload = "workshop.subscribeOnDownload"
+        static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
     }
 
@@ -73,14 +74,17 @@ final class WorkshopViewModel: ObservableObject {
     private var cursor: String?
     private var webPage = 1
     private var canLoadMore = true
+    private var searchGeneration = UUID()
+    private var libraryGeneration = UUID()
     private var searchTask: Task<Void, Never>?
     private var filterDebounce: Task<Void, Never>?
     private let account = SteamAccountSession.shared
     /// 下载队列：串行执行，每批最多 10 个条目共用一次 steamcmd 登录
-    private var downloadQueue: [String] = []
-    private var applyAfterDownload: String?
+    private var batchInterrupted = false
     private var isProcessingQueue = false
     private var storageObserver: NSObjectProtocol?
+    private var terminationObserver: NSObjectProtocol?
+    private var isShuttingDown = false
 
     init() {
         let defaults = UserDefaults.standard
@@ -90,6 +94,16 @@ final class WorkshopViewModel: ObservableObject {
         extraFolders = (defaults.stringArray(forKey: Keys.folders) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
         subscribeOnDownload = defaults.object(forKey: Keys.subscribeOnDownload) as? Bool ?? true
         autoDownloadSubscriptions = defaults.object(forKey: Keys.autoDownload) as? Bool ?? true
+        if let data = defaults.data(forKey: Keys.downloadJobs),
+           let saved = try? JSONDecoder().decode([WorkshopDownloadJob].self, from: data) {
+            downloadJobs = WorkshopDownloadQueue.restored(saved)
+        }
+        terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.isShuttingDown = true
+                self?.pauseAllDownloads()
+            }
+        }
         storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshLibrary() }
         }
@@ -110,9 +124,7 @@ final class WorkshopViewModel: ObservableObject {
     var isLoggedIn: Bool { account.isLoggedIn }
 
     func downloadState(of item: WorkshopItem) -> DownloadState {
-        if activeDownloads.contains(item.id) { return .downloading }
-        if downloading.contains(item.id) { return .queued }
-        return .none
+        downloadJobs.first { $0.id == item.id }?.state ?? .none
     }
 
     func isSubscribed(_ item: WorkshopItem) -> Bool {
@@ -137,7 +149,7 @@ final class WorkshopViewModel: ObservableObject {
     /// 点击信息面板里的标签：题材标签加入筛选，其余作为关键词搜索
     func applyTag(_ tag: String) {
         if WorkshopTags.isGenre(tag) {
-            filters.genres = [tag]
+            filters.selectGenre(tag)
         } else {
             query = tag
             if mode == .online { search(reset: true) }
@@ -157,12 +169,22 @@ final class WorkshopViewModel: ObservableObject {
     // MARK: - Library
 
     func refreshLibrary() {
+        Task { await refreshLibraryAndWait() }
+    }
+
+    /// 调用方可等待扫描，旧位置的慢扫描不能覆盖新库。
+    @discardableResult
+    private func refreshLibraryAndWait() async -> [WorkshopItem] {
+        let generation = UUID()
+        libraryGeneration = generation
         let roots = libraryRoots
-        Task {
-            let items = await Task.detached { WorkshopLibrary.scan(roots: roots) }.value
-            libraryItems = items
+        let scanned = await Task.detached { WorkshopLibrary.scan(roots: roots) }.value
+        guard roots == libraryRoots else { return await refreshLibraryAndWait() }
+        if libraryGeneration == generation {
+            libraryItems = scanned
             mergeDownloadState()
         }
+        return scanned
     }
 
     /// 导入本地文件夹：可以是单个壁纸文件夹（含 project.json），也可以是包含多个壁纸的目录
@@ -238,6 +260,7 @@ final class WorkshopViewModel: ObservableObject {
         if reset {
             // 筛选条件变化时取消进行中的请求，否则新请求会被 isLoading 挡住
             searchTask?.cancel()
+            searchGeneration = UUID()
             isLoading = false
             cursor = nil
             webPage = 1
@@ -246,43 +269,57 @@ final class WorkshopViewModel: ObservableObject {
         }
         guard canLoadMore, !isLoading else { return }
 
+        let generation = searchGeneration
+        let requestQuery = query
+        let requestFilters = filters
+        let requestKey = apiKey.trimmingCharacters(in: .whitespaces)
+        let requestCursor = cursor
+        let requestPage = webPage
         isLoading = true
         searchTask = Task {
+            defer {
+                if searchGeneration == generation { isLoading = false }
+            }
             do {
                 let newItems: [WorkshopItem]
+                var nextCursor = requestCursor
+                var nextPage = requestPage
+                let hasMore: Bool
                 if isIDLookup {
                     newItems = try await api.details(ids: ids)
-                    canLoadMore = false
-                } else if hasAPIKey {
+                    hasMore = false
+                } else if !requestKey.isEmpty {
                     // 有 API Key：官方 QueryFiles 接口，更快更稳定
                     let page = try await api.query(
-                        apiKey: apiKey.trimmingCharacters(in: .whitespaces),
-                        text: query,
-                        filters: filters,
-                        cursor: cursor
+                        apiKey: requestKey,
+                        text: requestQuery,
+                        filters: requestFilters,
+                        cursor: requestCursor
                     )
                     newItems = page.items
-                    canLoadMore = page.nextCursor != nil && page.nextCursor != cursor
-                    cursor = page.nextCursor
+                    hasMore = page.nextCursor != nil && page.nextCursor != requestCursor
+                    nextCursor = page.nextCursor
                 } else {
                     // 无 API Key：解析工坊网页
                     newItems = try await api.browseWeb(
-                        text: query,
-                        filters: filters,
-                        page: webPage
+                        text: requestQuery,
+                        filters: requestFilters,
+                        page: requestPage
                     )
-                    webPage += 1
-                    canLoadMore = !newItems.isEmpty
+                    nextPage += 1
+                    hasMore = !newItems.isEmpty
                 }
-                guard !Task.isCancelled else { return }
-                let existing = Set(onlineItems.map(\.id))
-                onlineItems.append(contentsOf: newItems.filter { !existing.contains($0.id) })
+                guard searchGeneration == generation, !Task.isCancelled else { return }
+                cursor = nextCursor
+                webPage = nextPage
+                canLoadMore = hasMore
+                var existing = Set(onlineItems.map(\.id))
+                onlineItems.append(contentsOf: newItems.filter { existing.insert($0.id).inserted })
                 mergeDownloadState()
             } catch {
-                guard !Task.isCancelled else { return }
+                guard searchGeneration == generation, !Task.isCancelled else { return }
                 toast.show(error.localizedDescription, style: .error)
             }
-            if !Task.isCancelled { isLoading = false }
         }
     }
 
@@ -298,76 +335,163 @@ final class WorkshopViewModel: ObservableObject {
             toast.show("「应用」类型的壁纸是 Windows 程序，无法在 macOS 上运行", style: .error)
             return
         }
-        if applyWhenDone { applyAfterDownload = item.id }
+
         // 双向同步：在 Mac 上下载时同时订阅，Windows 上的 Wallpaper Engine 会自动获取
         if subscribeOnDownload, account.isLoggedIn, !subscribedIDs.contains(item.id) {
             setSubscribed(item, true, quiet: true)
         }
-        enqueueDownloads([item.id])
+        enqueueDownloads([item], applyWhenDone: applyWhenDone)
     }
 
-    private func enqueueDownloads(_ ids: [String]) {
-        let fresh = ids.filter { !downloading.contains($0) }
-        guard !fresh.isEmpty else { return }
-        downloadQueue += fresh
-        downloading.formUnion(fresh)
+    private func persistDownloads() {
+        if let data = try? JSONEncoder().encode(downloadJobs) {
+            UserDefaults.standard.set(data, forKey: Keys.downloadJobs)
+        }
+    }
+
+    private func enqueueDownloads(_ items: [WorkshopItem], applyWhenDone: Bool = false, automatic: Bool = false) {
+        var jobs = downloadJobs
+        // 只有最新的手动应用意图可以在下载结束后改变桌面。
+        if applyWhenDone {
+            for index in jobs.indices { jobs[index].applyWhenDone = false }
+        }
+        for item in items {
+            if let index = jobs.firstIndex(where: { $0.id == item.id }) {
+                if automatic { continue } // 同步不能自动恢复用户暂停、停止或失败的任务。
+                if jobs[index].state != .downloading { jobs[index].state = .queued }
+                jobs[index].error = nil
+                jobs[index].applyWhenDone = applyWhenDone || jobs[index].applyWhenDone
+            } else {
+                jobs.append(WorkshopDownloadJob(id: item.id, title: item.title, state: .queued, applyWhenDone: applyWhenDone))
+            }
+        }
+        downloadJobs = jobs
         processDownloadQueue()
     }
 
     private func processDownloadQueue() {
-        guard !isProcessingQueue, !downloadQueue.isEmpty else { return }
+        guard !isProcessingQueue, !isShuttingDown else { return }
+        let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(10).map(\.id))
+        guard !batch.isEmpty else { return }
         isProcessingQueue = true
+        batchInterrupted = false
+        activeDownloads = Set(batch)
+        downloadJobs = downloadJobs.map {
+            var job = $0
+            if activeDownloads.contains(job.id) { job.state = .downloading }
+            return job
+        }
         Task {
             defer {
+                activeDownloads = []
                 isProcessingQueue = false
                 processDownloadQueue()
             }
-            let batch = Array(downloadQueue.prefix(10))
-            downloadQueue.removeFirst(batch.count)
-            activeDownloads = Set(batch)
-            defer { activeDownloads.subtract(batch) }
-            toast.show(batch.count == 1 ? "正在通过 steamcmd 下载…" : "正在通过 steamcmd 下载 \(batch.count) 个壁纸…", style: .progress)
-
+            let result: SteamCMDDownloader.BatchResult
             do {
-                let result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername)
-                // steamcmd 的下载目录不在库里时（自定义安装路径），把它的上级目录加入库
-                for folder in result.downloaded.values {
-                    let root = folder.deletingLastPathComponent()
-                    if !libraryRoots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
-                        setExtraFolders(extraFolders + [root])
-                    }
-                }
-                let items = await Task.detached { [roots = libraryRoots] in WorkshopLibrary.scan(roots: roots) }.value
-                libraryItems = items
-                mergeDownloadState()
-                downloading.subtract(batch)
-
-                if result.failed.isEmpty {
-                    toast.show(result.downloaded.count == 1 ? "下载完成" : "已下载 \(result.downloaded.count) 个壁纸", style: .success)
+                if batchInterrupted || isShuttingDown {
+                    result = .init()
                 } else {
-                    let reason = result.failed.values.first ?? ""
-                    toast.show("\(result.failed.count) 个壁纸下载失败：\(reason)", style: .error)
-                }
-
-                if let id = applyAfterDownload, result.downloaded[id] != nil,
-                   let downloaded = libraryItems.first(where: { $0.id == id }) {
-                    applyAfterDownload = nil
-                    apply(downloaded)
+                    result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername)
                 }
             } catch {
-                downloading.subtract(batch)
-                toast.show(error.localizedDescription, style: .error)
+                result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
+            }
+            for folder in result.downloaded.values {
+                let root = folder.deletingLastPathComponent()
+                if !libraryRoots.contains(where: { $0.standardizedFileURL == root.standardizedFileURL }) {
+                    setExtraFolders(extraFolders + [root])
+                }
+            }
+            // 在等待扫描前结算任务，暂停/恢复仍可在扫描期间正常操作。
+            let shouldApply = downloadJobs.first {
+                $0.applyWhenDone && $0.state == .downloading && result.downloaded[$0.id] != nil
+            }?.id
+            downloadJobs = WorkshopDownloadQueue.settle(downloadJobs, batch: Set(batch),
+                downloaded: Set(result.downloaded.keys), failures: result.failed, interrupted: batchInterrupted)
+            if !batchInterrupted {
+                let failed = downloadJobs.filter { batch.contains($0.id) && $0.state == .failed }
+                if let first = failed.first {
+                    toast.show("\(failed.count) 个壁纸下载失败：\(first.error ?? "下载未完成")", style: .error)
+                } else {
+                    toast.show("已下载 \(result.downloaded.count) 个壁纸", style: .success)
+                }
+            }
+            await refreshLibraryAndWait()
+            if let id = shouldApply,
+               downloadJobs.contains(where: { $0.id == id && $0.state == .completed && $0.applyWhenDone }),
+               let item = libraryItems.first(where: { $0.id == id }) {
+                apply(item)
+            }
+            downloadJobs = downloadJobs.map {
+                var job = $0
+                if job.state == .completed { job.applyWhenDone = false }
+                return job
             }
         }
     }
 
-    /// 排队中的直接移出队列；正在下载的会终止当前这一批
-    func cancelDownload(_ item: WorkshopItem) {
-        if let index = downloadQueue.firstIndex(of: item.id) {
-            downloadQueue.remove(at: index)
-            downloading.remove(item.id)
-        } else {
-            SteamCMDDownloader.shared.cancel(item.id)
+    func pauseDownload(_ id: String) { interruptDownload(id, state: .paused) }
+    func cancelDownload(_ item: WorkshopItem) { cancelDownload(item.id) }
+    func cancelDownload(_ id: String) { interruptDownload(id, state: .cancelled) }
+
+    private func interruptDownload(_ id: String, state: DownloadState) {
+        guard let index = downloadJobs.firstIndex(where: { $0.id == id }),
+              [.queued, .downloading, .paused, .failed].contains(downloadJobs[index].state) else { return }
+        downloadJobs[index].state = state
+        downloadJobs[index].applyWhenDone = false
+        downloadJobs[index].error = nil
+        if activeDownloads.contains(id) {
+            batchInterrupted = true
+            SteamCMDDownloader.shared.cancel(id)
+        }
+    }
+
+    func resumeDownload(_ id: String) {
+        guard let index = downloadJobs.firstIndex(where: { $0.id == id }),
+              [.paused, .failed, .cancelled].contains(downloadJobs[index].state) else { return }
+        downloadJobs[index].state = .queued
+        downloadJobs[index].error = nil
+        processDownloadQueue()
+    }
+
+    func pauseAllDownloads() {
+        downloadJobs = downloadJobs.map {
+            var job = $0
+            if job.state == .queued || job.state == .downloading {
+                job.state = .paused
+                job.applyWhenDone = false
+            }
+            return job
+        }
+        if !activeDownloads.isEmpty {
+            batchInterrupted = true
+            SteamCMDDownloader.shared.terminateAll()
+        }
+    }
+
+    func resumeAllDownloads() {
+        downloadJobs = downloadJobs.map {
+            var job = $0
+            if job.state == .paused { job.state = .queued; job.error = nil }
+            return job
+        }
+        processDownloadQueue()
+    }
+
+    func cancelAllDownloads() {
+        downloadJobs = downloadJobs.map {
+            var job = $0
+            if [.queued, .downloading, .paused, .failed].contains(job.state) {
+                job.state = .cancelled
+                job.applyWhenDone = false
+                job.error = nil
+            }
+            return job
+        }
+        if !activeDownloads.isEmpty {
+            batchInterrupted = true
+            SteamCMDDownloader.shared.terminateAll()
         }
     }
 
@@ -407,9 +531,10 @@ final class WorkshopViewModel: ObservableObject {
 
                 // Windows 上新订阅的壁纸自动下载到 Mac
                 if autoDownloadSubscriptions {
-                    let localIDs = Set(libraryItems.map(\.id))
-                    let missing = details.filter { !localIDs.contains($0.id) && $0.type.isPlayable }.map(\.id)
-                    if !missing.isEmpty { enqueueDownloads(missing) }
+                    let scanned = await refreshLibraryAndWait()
+                    let localIDs = Set(scanned.map(\.id))
+                    let missing = details.filter { !localIDs.contains($0.id) && $0.type.isPlayable }
+                    if !missing.isEmpty { enqueueDownloads(missing, automatic: true) }
                 }
                 if force || unavailable > 0 {
                     var message = "已同步 \(ids.count) 个订阅"

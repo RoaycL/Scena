@@ -71,6 +71,12 @@ struct wallhavenApp: App {
         }
         .defaultSize(width: 760, height: 520)
 
+        Window("下载任务", id: DownloadsWindow.id) {
+            WorkshopDownloadsView()
+                .environmentObject(workshop)
+        }
+        .windowResizability(.contentSize)
+
         Window("登录 Steam", id: SteamLoginWindow.id) {
             SteamLoginView()
         }
@@ -81,6 +87,7 @@ struct wallhavenApp: App {
         MenuBarExtra(isInserted: $showStatusItem) {
             StatusMenuContent(liveController: liveController)
                 .environmentObject(viewModel)
+                .environmentObject(workshop)
         } label: {
             Image(systemName: statusIcon)
         }

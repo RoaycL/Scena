@@ -102,6 +102,7 @@ final class PlaylistManager: ObservableObject {
     @Published private(set) var playlists: [Playlist] = []
     @Published private(set) var activeID: UUID?
     @Published private(set) var currentEntryID: String?
+    @Published private(set) var isPaused = false
     @Published private(set) var nextChangeAt: Date?
 
     var activePlaylist: Playlist? { playlists.first { $0.id == activeID } }
@@ -225,6 +226,7 @@ final class PlaylistManager: ObservableObject {
             return
         }
         activeID = id
+        isPaused = false
         rebuildOrder()
         let first = entryID ?? order.first
         if let first { applyEntry(first, attemptsLeft: order.count) }
@@ -233,6 +235,7 @@ final class PlaylistManager: ObservableObject {
     }
 
     func stop() {
+        isPaused = false
         timer?.invalidate()
         timer = nil
         activeID = nil
@@ -241,8 +244,19 @@ final class PlaylistManager: ObservableObject {
         persistState()
     }
 
-    func next() { step(by: 1) }
-    func previous() { step(by: -1) }
+    func setPlaybackPaused(_ paused: Bool) {
+        isPaused = paused
+        if paused {
+            timer?.invalidate()
+            timer = nil
+            nextChangeAt = nil
+        } else {
+            scheduleTimer()
+        }
+    }
+
+    func next() { isPaused = false; step(by: 1) }
+    func previous() { isPaused = false; step(by: -1) }
 
     /// 用户手动设置了其他壁纸：停止自动轮换，避免过一会儿又被换掉
     func userDidApplyManually() {
@@ -329,7 +343,7 @@ final class PlaylistManager: ObservableObject {
 
     private func scheduleTimer() {
         timer?.invalidate()
-        guard let playlist = activePlaylist else { return }
+        guard let playlist = activePlaylist, !isPaused else { nextChangeAt = nil; return }
         nextChangeAt = Date().addingTimeInterval(playlist.interval)
         timer = Timer.scheduledTimer(withTimeInterval: playlist.interval, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.next() }

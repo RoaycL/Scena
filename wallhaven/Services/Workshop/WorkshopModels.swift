@@ -184,27 +184,29 @@ nonisolated enum WorkshopRating: String, CaseIterable, Identifiable, Codable, Se
 
     var label: String {
         switch self {
-        case .everyone: "全年龄"
-        case .questionable: "轻度"
-        case .mature: "成人"
+        case .everyone: "大众级 (G)"
+        case .questionable: "家长指导级 (PG-13)"
+        case .mature: "限制级/成人级 (R-18)"
         }
     }
 }
 
 /// Wallpaper Engine 工坊官方标签（取自 Steam 创意工坊的筛选项）
 nonisolated enum WorkshopTags {
+    // 显示名称与官方中文筛选栏保持一致；tag 保留 Steam 请求使用的原始值。
     static let genres: [(tag: String, label: String)] = [
-        ("Anime", "动漫"), ("Landscape", "风景"), ("Nature", "自然"), ("Game", "游戏"),
-        ("Girls", "女孩"), ("Guys", "男孩"), ("Fantasy", "奇幻"), ("Sci-Fi", "科幻"),
-        ("Cyberpunk", "赛博朋克"), ("Abstract", "抽象"), ("Relaxing", "放松"), ("Music", "音乐"),
-        ("Pixel art", "像素"), ("Retro", "复古"), ("Animal", "动物"), ("Cartoon", "卡通"),
-        ("CGI", "CGI"), ("Technology", "科技"), ("Vehicle", "载具"), ("Television", "影视"),
-        ("Medieval", "中世纪"), ("Sports", "运动"), ("MMD", "MMD"), ("Memes", "梗图"),
-        ("Unspecified", "未分类"),
+        ("Abstract", "抽象"), ("Animal", "动物"), ("Anime", "动漫"), ("Cartoon", "卡通"),
+        ("CGI", "CGI"), ("Cyberpunk", "网络朋克"), ("Fantasy", "幻想"), ("Game", "游戏"),
+        ("Girls", "女生"), ("Guys", "男生"), ("Landscape", "风景"), ("Medieval", "中世纪"),
+        ("Memes", "网络事物"), ("MMD", "MMD (Miku-Miku Dance)"), ("Music", "音乐"),
+        ("Nature", "自然"), ("Pixel art", "像素艺术"), ("Relaxing", "放松"), ("Retro", "复古"),
+        ("Sci-Fi", "科幻"), ("Sports", "运动"), ("Technology", "科技"), ("Television", "电视节目"),
+        ("Vehicle", "汽车"), ("Unspecified", "未指定样式"),
     ]
 
     static let features: [(tag: String, label: String)] = [
-        ("Audio responsive", "音频响应"), ("Customizable", "可自定义"), ("3D", "3D"),
+        ("Approved", "🏆 广受好评"),
+        ("Audio responsive", "音频响应"), ("Customizable", "可自定义的"), ("3D", "3D"),
         ("HDR", "HDR"), ("Media Integration", "媒体联动"),
     ]
 
@@ -212,7 +214,7 @@ nonisolated enum WorkshopTags {
         ("1920 x 1080", "1080p"), ("2560 x 1440", "2K 1440p"), ("3840 x 2160", "4K"),
         ("Ultrawide 2560 x 1080", "带鱼屏 2560×1080"), ("Ultrawide 3440 x 1440", "带鱼屏 3440×1440"),
         ("Dual 3840 x 1080", "双屏 3840×1080"), ("Dual 5120 x 1440", "双屏 5120×1440"),
-        ("Portrait 1080 x 1920", "竖屏 1080×1920"), ("Dynamic resolution", "自适应分辨率"),
+        ("Portrait 1080 x 1920", "竖屏 1080×1920"), ("Dynamic resolution", "动态分辨率"),
     ]
 
     /// 热门排序的时间范围（天），-1 表示全部时间
@@ -234,11 +236,50 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
     var type: WorkshopTypeFilter = .all
     var ratings: Set<WorkshopRating> = [.everyone]
     /// 题材（多选时需同时包含，与 Steam 工坊行为一致）
-    var genres: Set<String> = []
+    var genres: Set<String> = [] {
+        didSet { genres.remove("Anime") }
+    }
     var features: Set<String> = []
     var resolution: String?
     var sort: WorkshopSort = .trend
     var trendDays = 7
+    var hideAnime = false {
+        didSet { genres.remove("Anime") }
+    }
+
+    init() {}
+
+    // 新开关缺失时沿用旧偏好，不能因升级丢失整份筛选设置。
+    enum CodingKeys: String, CodingKey {
+        case type, ratings, genres, features, resolution, sort, trendDays, hideAnime
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try values.decodeIfPresent(WorkshopTypeFilter.self, forKey: .type) ?? .all
+        ratings = try values.decodeIfPresent(Set<WorkshopRating>.self, forKey: .ratings) ?? [.everyone]
+        genres = try values.decodeIfPresent(Set<String>.self, forKey: .genres) ?? []
+        features = try values.decodeIfPresent(Set<String>.self, forKey: .features) ?? []
+        resolution = try values.decodeIfPresent(String.self, forKey: .resolution)
+        sort = try values.decodeIfPresent(WorkshopSort.self, forKey: .sort) ?? .trend
+        trendDays = try values.decodeIfPresent(Int.self, forKey: .trendDays) ?? 7
+        hideAnime = try values.decodeIfPresent(Bool.self, forKey: .hideAnime) ?? false
+        genres.remove("Anime")
+    }
+
+    mutating func toggleGenre(_ tag: String) {
+        guard tag != "Anime" else { return }
+        genres.formSymmetricDifference([tag])
+    }
+
+    mutating func selectGenre(_ tag: String) {
+        if tag == "Anime" {
+            // 点击素材的动漫标签只恢复显示，不再创建“只看动漫”条件。
+            hideAnime = false
+        } else {
+            genres = [tag]
+        }
+    }
 
     var isDefault: Bool { self == WorkshopFilters() }
 
@@ -248,6 +289,7 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
         if type != .all { count += 1 }
         if ratings != [.everyone] { count += 1 }
         if resolution != nil { count += 1 }
+        if hideAnime { count += 1 }
         return count
     }
 
@@ -255,14 +297,15 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
         // 只要壁纸，排除素材包（Asset）和预设（Preset）
         var tags = ["Wallpaper"]
         if let typeTag = type.workshopTag { tags.append(typeTag) }
-        tags += genres.sorted() + features.sorted()
+        tags += genres.filter { $0 != "Anime" }.sorted() + features.sorted()
         if let resolution { tags.append(resolution) }
         return tags
     }
 
     /// 分级用排除法表达「或」：未勾选的分级全部排除
     var excludedTags: [String] {
-        WorkshopRating.allCases.filter { !ratings.contains($0) }.map(\.rawValue) + ["Application"]
+        WorkshopRating.allCases.filter { !ratings.contains($0) }.map(\.rawValue)
+            + ["Application"] + (hideAnime ? ["Anime"] : [])
     }
 
     func matches(_ item: WorkshopItem, query: String) -> Bool {
@@ -270,6 +313,7 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
         let rating = WorkshopRating(rawValue: item.contentRating ?? "") ?? .everyone
         if !ratings.contains(rating) { return false }
         let tags = Set(item.tags)
+        if hideAnime && tags.contains("Anime") { return false }
         if !genres.isSubset(of: tags) || !features.isSubset(of: tags) { return false }
 
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)

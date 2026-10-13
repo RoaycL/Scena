@@ -17,6 +17,7 @@ protocol LivePlaybackView: NSView {
     func play()
     func pause()
     func stop()
+    func setVolume(_ volume: Double)
     /// 第一帧渲染完成（或加载失败）时回调，用于新旧壁纸无缝切换
     func whenReady(_ action: @escaping () -> Void)
 }
@@ -207,6 +208,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     private let webView: WKWebView
     private var isPageLoaded = false
     private var wantsPlaying = true
+    private var volume = 0.0
     private var lastPointerPush = Date.distantPast
 
     init(item: WorkshopItem, fps: Int = 30, tracksMouse: Bool = false) {
@@ -272,6 +274,11 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         call("__host.pause()")
     }
 
+    func setVolume(_ volume: Double) {
+        self.volume = min(1, max(0, volume))
+        call("__host.setVolume(\(self.volume))")
+    }
+
     func stop() {
         call("__host.pause()")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "host")
@@ -291,9 +298,10 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         case "loaded":
             isPageLoaded = true
             let base = WorkshopSchemeHandler.baseURL(for: item.id)
-            call("__host.load('\(base)', { fps: \(fps) })")
+            call("__host.load('\(base)', { fps: \(fps), volume: \(volume) })")
         case "ready":
             state = .ready
+            call("__host.setVolume(\(volume))")
             if !wantsPlaying { call("__host.pause()") }
         case "error":
             state = .failed(message["message"] as? String ?? "渲染失败")

@@ -151,42 +151,104 @@ struct PlaylistCommands: View {
 /// 状态栏图标的菜单
 struct StatusMenuContent: View {
     @ObservedObject var liveController: LiveWallpaperController
+    @ObservedObject private var playlists = PlaylistManager.shared
     @EnvironmentObject private var viewModel: WallpaperViewModel
+    @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.openWindow) private var openWindow
+    private let volumeLevels = [0, 25, 50, 75, 100]
 
     var body: some View {
-        PlaylistCommands(showsManageShortcut: false)
+        Button("素材中心") { showMainWindow() }
+        Menu("播放列表") { PlaylistCommands(showsManageShortcut: false) }
+        Button("导入本地图片或视频…") {
+            NSApp.activate()
+            LocalMediaViewModel().importFiles()
+            showMainWindow(tab: .local)
+        }
+        Button("添加工坊壁纸文件夹…") {
+            NSApp.activate()
+            workshop.addLibraryFolder()
+            showMainWindow(tab: .workshop)
+        }
         Divider()
 
         if let content = liveController.current {
-            Text("动态壁纸：\(content.title)")
-            Button(liveController.isPaused ? "继续播放" : "暂停") { liveController.togglePause() }
-            Button("停止动态壁纸") { liveController.stop() }
-            Divider()
+            Text("正在播放：\(content.title)")
         }
-
-        Button("随机换一张壁纸") { viewModel.applyRandomWallpaper() }
-
+        Menu("切换壁纸") {
+            Button("上一张") { playlists.previous() }
+                .disabled(playlists.activePlaylist == nil)
+            Button("下一张") { playlists.next() }
+                .disabled(playlists.activePlaylist == nil)
+            Divider()
+            Button("随机壁纸") {
+                playlists.userDidApplyManually()
+                viewModel.applyRandomWallpaper()
+            }
+            Button("从素材中心选择…") { showMainWindow() }
+        }
+        Button(liveController.isPaused || playlists.isPaused ? "恢复播放" : "暂停播放") {
+            if liveController.isActive {
+                liveController.togglePause()
+            } else {
+                playlists.setPlaybackPaused(!playlists.isPaused)
+            }
+        }
+        .disabled(!liveController.isActive && playlists.activePlaylist == nil)
+        Menu("音量调节") {
+            ForEach(volumeLevels, id: \.self) { level in
+                Button {
+                    liveController.setVolume(Double(level) / 100)
+                } label: {
+                    if Int((liveController.volume * 100).rounded()) == level {
+                        Label(level == 0 ? "静音" : "\(level)%", systemImage: "checkmark")
+                    } else {
+                        Text(level == 0 ? "静音" : "\(level)%")
+                    }
+                }
+            }
+        }
+        Button("停止播放") {
+            playlists.stop()
+            liveController.stop()
+        }
+        .disabled(!liveController.isActive && playlists.activePlaylist == nil)
         Divider()
 
-        Button("打开 wallhaven") { showMainWindow() }
-        SettingsLink { Text("设置…") }
+        Menu("下载任务（\(workshop.downloading.count) 个进行中）") {
+            Button("管理下载…") {
+                NSApp.activate()
+                openWindow(id: DownloadsWindow.id)
+            }
+            Divider()
+            Button("全部暂停") { workshop.pauseAllDownloads() }
+                .disabled(workshop.downloading.isEmpty)
+            Button("恢复已暂停任务") { workshop.resumeAllDownloads() }
+                .disabled(!workshop.downloadJobs.contains { $0.state == .paused })
+            Button("停止全部任务") { workshop.cancelAllDownloads() }
+                .disabled(!workshop.downloadJobs.contains { [.queued, .downloading, .paused, .failed].contains($0.state) })
+        }
+        Button("同步 Steam 订阅") { workshop.syncSubscriptions(force: true) }
+            .disabled(workshop.isSyncing)
+        Divider()
+
+        SettingsLink { Text("偏好设置…") }
             .keyboardShortcut(",")
-
         Divider()
-
         Button("退出 wallhaven") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
-    private func showMainWindow() {
+    private func showMainWindow(tab: MainTab? = nil) {
         MainWindow.opener = { openWindow(id: MainWindow.id) }
-        MainWindow.show()
+        MainWindow.show(tab: tab)
     }
 }
 
 enum MainWindow {
     static let id = "main"
+    static let navigationNotification = Notification.Name("wallhaven.mainWindowNavigate")
+    static var requestedTab: MainTab?
 
     /// SwiftUI 的 openWindow 只能在视图里拿到，主窗口出现时保存下来，供 Dock 图标重新打开窗口使用
     static var opener: (() -> Void)?
@@ -196,7 +258,8 @@ enum MainWindow {
     }
 
     /// 已有主窗口就带到前台（包括最小化的），否则新建一个
-    static func show() {
+    static func show(tab: MainTab? = nil) {
+        requestedTab = tab
         NSApp.activate()
         if let window = existingWindow, window.isVisible || window.isMiniaturized {
             if window.isMiniaturized { window.deminiaturize(nil) }
@@ -207,5 +270,6 @@ enum MainWindow {
         } else {
             existingWindow?.makeKeyAndOrderFront(nil)
         }
+        if tab != nil { NotificationCenter.default.post(name: navigationNotification, object: nil) }
     }
 }

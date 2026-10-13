@@ -78,6 +78,11 @@ final class LoopingVideoNSView: NSView {
         CATransaction.commit()
     }
 
+    func setVolume(_ volume: Double) {
+        player.volume = Float(min(1, max(0, volume)))
+        player.isMuted = volume <= 0
+    }
+
     func play() { player.play() }
     func pause() { player.pause() }
 

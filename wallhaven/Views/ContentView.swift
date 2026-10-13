@@ -30,6 +30,8 @@ struct ContentView: View {
     @State private var currentTab: MainTab = .home
     @State private var favoriteSelectionID: String?
     @State private var localSelectionID: String?
+    /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
+    @State private var selectionWithoutScrollingID: String?
     @State private var workshopSelectionID: String?
     @State private var isWorkshopFilterPresented = false
     @State private var workshopColumns = 4
@@ -78,6 +80,7 @@ struct ContentView: View {
     }
 
     private func select(_ item: GalleryItem) {
+        selectionWithoutScrollingID = nil
         switch currentTab {
         case .home: viewModel.selectedWallpaper = item.remote
         case .favorites: favoriteSelectionID = item.id
@@ -135,9 +138,21 @@ struct ContentView: View {
 
     private func deleteLocal(_ item: LocalMediaItem) {
         let wasSelected = localSelectionID == GalleryItem(origin: .local(item)).id
+        let deletedIndex = localViewModel.items.firstIndex { $0.id == item.id }
         localViewModel.delete(item: item)
-        if wasSelected { localSelectionID = nil }
-        ensureValidSelection()
+        // 删除失败时保留选中项；删除非选中项也不改变选择和滚动位置。
+        guard wasSelected, let deletedIndex,
+              !localViewModel.items.contains(where: { $0.id == item.id }) else { return }
+        let remaining = localViewModel.items
+        if remaining.isEmpty {
+            localSelectionID = nil
+        } else {
+            // 优先选中原位置的下一项，删除最后一项时选中前一项。
+            let neighbor = remaining[min(deletedIndex, remaining.count - 1)]
+            let neighborID = GalleryItem(origin: .local(neighbor)).id
+            selectionWithoutScrollingID = neighborID
+            localSelectionID = neighborID
+        }
     }
 
     private func handleKey(_ key: ImmersiveWindowController.Key) -> Bool {
@@ -225,6 +240,14 @@ struct ContentView: View {
         )
     }
 
+    private func handleMenuNavigation() {
+        guard let tab = MainWindow.requestedTab else { return }
+        MainWindow.requestedTab = nil
+        switchTab(tab)
+        if tab == .local { localViewModel.loadMedia() }
+        if tab == .workshop { workshop.mode = .library; workshop.refreshLibrary() }
+    }
+
     private func switchTab(_ tab: MainTab) {
         withAnimation(.easeInOut(duration: 0.2)) { currentTab = tab }
     }
@@ -279,13 +302,18 @@ struct ContentView: View {
         .onAppear {
             MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
+            handleMenuNavigation()
             viewModel.search(reset: true)
             localViewModel.loadMedia()
             workshop.refreshLibrary()
             // 已登录 Steam 时同步订阅（10 分钟内不重复）
             workshop.syncSubscriptions()
         }
+        .onReceive(NotificationCenter.default.publisher(for: MainWindow.navigationNotification)) { _ in
+            handleMenuNavigation()
+        }
         .onChange(of: currentTab) {
+            selectionWithoutScrollingID = nil
             if currentTab == .local { localViewModel.loadMedia() }
             if currentTab == .workshop {
                 workshop.refreshLibrary()
@@ -427,6 +455,7 @@ struct ContentView: View {
             Spacer(minLength: 12)
 
             LiveWallpaperStatus(controller: liveController)
+            WorkshopDownloadsButton()
 
             switch currentTab {
             case .home:
@@ -696,6 +725,7 @@ struct ContentView: View {
                 ThumbnailStrip(
                     items: items,
                     selectedID: selectedItem?.id,
+                    selectionWithoutScrollingID: selectionWithoutScrollingID,
                     isLoading: isLoading,
                     thumbHeight: max(72, min(130, size.height * 0.13)),
                     onSelect: { select($0) },

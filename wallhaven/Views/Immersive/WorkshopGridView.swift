@@ -142,7 +142,7 @@ private struct WorkshopTile: View {
                     )
             }
             .overlay {
-                if downloadState != .none {
+                if downloadState != .none && downloadState != .completed {
                     DownloadingOverlay(state: downloadState)
                 }
             }
@@ -283,14 +283,29 @@ private struct WorkshopDetailPanel: View {
                 Text("Windows 程序，macOS 无法运行")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.6))
+            } else if [.paused, .failed, .cancelled].contains(workshop.downloadState(of: item)) {
+                HStack {
+                    Text(workshop.downloadState(of: item).label)
+                    Spacer()
+                    Button(workshop.downloadState(of: item) == .failed ? "重试" : "恢复") {
+                        workshop.resumeDownload(item.id)
+                    }
+                    if workshop.downloadState(of: item) != .cancelled {
+                        Button("停止") { workshop.cancelDownload(item) }
+                    }
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
             } else if isDownloading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(.white)
-                    Text("下载中…")
+                    Text(workshop.downloadState(of: item).label)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
                     Spacer()
-                    Button("取消") { workshop.cancelDownload(item) }
+                    Button("暂停") { workshop.pauseDownload(item.id) }
+                        .buttonStyle(.plain)
+                    Button("停止") { workshop.cancelDownload(item) }
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.7))
@@ -398,13 +413,13 @@ struct DownloadingOverlay: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .symbolEffect(.rotate, options: .repeat(.continuous))
                     } else {
-                        Image(systemName: "clock")
+                        Image(systemName: state == .paused ? "pause.circle" : state == .failed ? "exclamationmark.circle" : state == .cancelled ? "stop.circle" : "clock")
                     }
                 }
                 .font(.system(size: large ? 34 : 22, weight: .semibold))
                 .foregroundStyle(.white)
 
-                Text(state == .downloading ? "下载中…" : "排队中")
+                Text(state.label)
                     .font(.system(size: large ? 13 : 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
             }

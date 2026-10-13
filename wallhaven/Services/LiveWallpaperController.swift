@@ -29,6 +29,15 @@ final class LiveWallpaperController: ObservableObject {
 
     @Published private(set) var current: LiveContent?
     @Published private(set) var isPaused = false
+    @Published private(set) var volume = min(1, max(0, UserDefaults.standard.double(forKey: "liveWallpaper.volume")))
+
+    func setVolume(_ value: Double) {
+        volume = min(1, max(0, value))
+        UserDefaults.standard.set(volume, forKey: "liveWallpaper.volume")
+        for (window, player) in zip(windows, players) {
+            player.setVolume(window.screen == NSScreen.screens.first ? volume : 0)
+        }
+    }
 
     var isActive: Bool { current != nil }
     /// 视频文件或工坊文件夹的地址
@@ -106,6 +115,7 @@ final class LiveWallpaperController: ObservableObject {
 
     func togglePause() {
         isPaused.toggle()
+        PlaylistManager.shared.setPlaybackPaused(isPaused)
         updatePlayback()
     }
 
@@ -148,6 +158,8 @@ final class LiveWallpaperController: ObservableObject {
 
         for screen in NSScreen.screens {
             guard let player = makePlayer(for: content) else { continue }
+            // 多屏只让主屏输出声音，避免重复播放与叠加音量。
+            player.setVolume(screen == NSScreen.screens.first ? volume : 0)
             let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]

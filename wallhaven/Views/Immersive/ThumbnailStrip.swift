@@ -9,6 +9,7 @@ import SwiftUI
 struct ThumbnailStrip<MenuItems: View>: View {
     let items: [GalleryItem]
     let selectedID: String?
+    let selectionWithoutScrollingID: String?
     let isLoading: Bool
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
@@ -42,7 +43,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .frame(height: thumbHeight + 20)
             .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
             .onChange(of: selectedID) { _, newID in
-                guard let newID else { return }
+                guard let newID, newID != selectionWithoutScrollingID else { return }
                 withAnimation(.easeInOut(duration: 0.3)) {
                     proxy.scrollTo(newID, anchor: .center)
                 }

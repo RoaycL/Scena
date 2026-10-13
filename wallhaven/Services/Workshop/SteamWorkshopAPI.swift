@@ -185,9 +185,9 @@ struct SteamWorkshopAPI: Sendable {
             title: title,
             type: WEProjectType(declared: typeTag),
             previewURL: (json["preview_url"] as? String).flatMap(URL.init(string:)),
-            // 去掉分级、类型、审核状态、分辨率等非内容标签
+            // 保留 Approved，供订阅/本地关联后的好评筛选使用。
             tags: tags.filter { tag in
-                !ratings.contains(tag) && tag != typeTag && !["Wallpaper", "Approved", "Preset"].contains(tag)
+                !ratings.contains(tag) && tag != typeTag && !["Wallpaper", "Preset"].contains(tag)
                     && !tag.contains(" x ")
             },
             contentRating: tags.first { ratings.contains($0) },

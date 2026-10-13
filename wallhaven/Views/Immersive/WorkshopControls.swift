@@ -62,16 +62,18 @@ struct GlassChip: View {
     let isOn: Bool
     var tint: Color = .white
     var disabled = false
+    var fontSize: CGFloat = 12
+    var horizontalPadding: CGFloat = 11
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: fontSize, weight: .medium))
                 .lineLimit(1)
                 .fixedSize()
                 .foregroundStyle(isOn ? (tint == .white ? .black : .white) : .white.opacity(0.8))
-                .padding(.horizontal, 11)
+                .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 6)
                 .background(
                     Capsule().fill(isOn ? (tint == .white ? Color.white.opacity(0.92) : tint.opacity(0.8)) : Color.white.opacity(0.08))
@@ -143,7 +145,7 @@ struct WorkshopFilterPanel: View {
     var maxHeight: CGFloat = 600
 
     var body: some View {
-        GlassPanel(width: 360, maxHeight: maxHeight) {
+        GlassPanel(width: 420, maxHeight: maxHeight) {
             HStack {
                 Text("筛选")
                     .font(.system(size: 15, weight: .bold))
@@ -160,6 +162,35 @@ struct WorkshopFilterPanel: View {
                 }
             }
 
+            GlassSection(title: "内容偏好") {
+                HStack(spacing: 8) {
+                    GlassChip(title: "显示动漫", isOn: !workshop.filters.hideAnime) {
+                        workshop.filters.hideAnime = false
+                    }
+                    GlassChip(title: "隐藏动漫", isOn: workshop.filters.hideAnime) {
+                        workshop.filters.hideAnime = true
+                    }
+                }
+                Text("显示动漫时保留其他题材；隐藏动漫时排除带有动漫标签的内容。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+
+            GlassSection(title: "仅显示") {
+                FlowLayout {
+                    ForEach(WorkshopTags.features, id: \.tag) { feature in
+                        GlassChip(title: feature.label, isOn: workshop.filters.features.contains(feature.tag)) {
+                            workshop.filters.features.formSymmetricDifference([feature.tag])
+                        }
+                    }
+                }
+                if workshop.mode == .library, workshop.filters.features.contains("Approved") {
+                    Text("仅显示带有官方好评标记的素材；本地文件可能未保存该标记。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+
             GlassSection(title: "类型") {
                 FlowLayout {
                     ForEach(WorkshopTypeFilter.allCases) { type in
@@ -171,9 +202,9 @@ struct WorkshopFilterPanel: View {
             }
 
             GlassSection(title: "年龄分级", trailing: "可多选") {
-                FlowLayout {
+                HStack(spacing: 6) {
                     ForEach(WorkshopRating.allCases) { rating in
-                        GlassChip(title: rating.label, isOn: workshop.filters.ratings.contains(rating), tint: tint(for: rating)) {
+                        GlassChip(title: rating.label, isOn: workshop.filters.ratings.contains(rating), tint: tint(for: rating), fontSize: 11, horizontalPadding: 8) {
                             toggle(rating)
                         }
                     }
@@ -207,21 +238,11 @@ struct WorkshopFilterPanel: View {
                 }
             }
 
-            GlassSection(title: "题材", trailing: "多选时需同时包含") {
+            GlassSection(title: "标签", trailing: "多选时需同时包含") {
                 FlowLayout {
-                    ForEach(WorkshopTags.genres, id: \.tag) { genre in
+                    ForEach(WorkshopTags.genres.filter { $0.tag != "Anime" }, id: \.tag) { genre in
                         GlassChip(title: genre.label, isOn: workshop.filters.genres.contains(genre.tag)) {
-                            workshop.filters.genres.formSymmetricDifference([genre.tag])
-                        }
-                    }
-                }
-            }
-
-            GlassSection(title: "特性") {
-                FlowLayout {
-                    ForEach(WorkshopTags.features, id: \.tag) { feature in
-                        GlassChip(title: feature.label, isOn: workshop.filters.features.contains(feature.tag)) {
-                            workshop.filters.features.formSymmetricDifference([feature.tag])
+                            workshop.filters.toggleGenre(genre.tag)
                         }
                     }
                 }
