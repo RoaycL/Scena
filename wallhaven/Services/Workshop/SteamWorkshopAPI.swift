@@ -83,6 +83,65 @@ struct SteamWorkshopAPI: Sendable {
         )
     }
 
+    /// 无 API Key 时的浏览方式：解析创意工坊网页拿到条目 ID（每页 30 个），再用无需 Key 的详情接口补全
+    func browseWeb(
+        text: String,
+        sort: WorkshopSort,
+        type: WorkshopTypeFilter,
+        includeQuestionable: Bool,
+        page: Int
+    ) async throws -> [WorkshopItem] {
+        var components = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let browseSort: String = {
+            if !trimmed.isEmpty { return "textsearch" }
+            switch sort {
+            case .trend: return "trend"
+            case .topRated: return "toprated"
+            case .newest: return "mostrecent"
+            case .mostSubscribed: return "totaluniquesubscribers"
+            }
+        }()
+        var items: [URLQueryItem] = [
+            .init(name: "appid", value: WorkshopConstants.appID),
+            .init(name: "section", value: "readytouseitems"),
+            .init(name: "browsesort", value: browseSort),
+            .init(name: "actualsort", value: browseSort),
+            .init(name: "numperpage", value: "30"),
+            .init(name: "p", value: String(page)),
+        ]
+        if sort == .trend { items.append(.init(name: "days", value: "7")) }
+        if !trimmed.isEmpty { items.append(.init(name: "searchtext", value: trimmed)) }
+        if let tag = type.workshopTag { items.append(.init(name: "requiredtags[]", value: tag)) }
+        var excluded = ["Mature", "Application"]
+        if !includeQuestionable { excluded.append("Questionable") }
+        items += excluded.map { .init(name: "excludedtags[]", value: $0) }
+        components.queryItems = items
+
+        var request = URLRequest(url: components.url!)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw WallperError.network("无法访问 Steam 创意工坊。")
+        }
+
+        // 按出现顺序去重，保持网页上的排序
+        let html = String(decoding: data, as: UTF8.self)
+        var seen = Set<String>()
+        let ids = html.matches(of: /filedetails\/\?id=(\d+)/)
+            .map { String($0.1) }
+            .filter { seen.insert($0).inserted }
+        guard !ids.isEmpty else { return [] }
+
+        // 详情接口按请求顺序返回；再兜底过滤一次分级和应用类型
+        return try await details(ids: ids).filter { item in
+            item.contentRating != "Mature"
+                && (includeQuestionable || item.contentRating != "Questionable")
+                && item.type != .application
+        }
+    }
+
     /// 按 ID 查询（支持粘贴工坊链接），无需 API Key
     func details(ids: [String]) async throws -> [WorkshopItem] {
         guard !ids.isEmpty else { return [] }

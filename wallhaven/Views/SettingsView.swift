@@ -240,7 +240,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.green)
                         }
                     }
-                    Text("用于通过 Steam 官方接口浏览、搜索 Wallpaper Engine 创意工坊。粘贴工坊链接查看单个壁纸不需要 Key。")
+                    Text("可选。不填也能浏览创意工坊（解析工坊网页）；填写后改用 Steam 官方接口，速度更快、更稳定。")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)

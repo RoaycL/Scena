@@ -622,15 +622,6 @@ struct ContentView: View {
                 Button("添加文件夹") { workshop.addLibraryFolder() }.buttonStyle(.bordered)
                 Button("在线浏览") { workshop.mode = .online }.buttonStyle(.bordered)
             }
-        } else if !workshop.hasAPIKey {
-            Text("浏览创意工坊需要 Steam Web API Key")
-            Text("在设置 →「创意工坊」中填写（可在 Steam 官网免费申请）")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.6))
-            HStack {
-                Button("申请 API Key") { workshop.openAPIKeyPage() }.buttonStyle(.bordered)
-                SettingsLink { Text("打开设置") }.buttonStyle(.bordered)
-            }
         } else {
             Text("没有找到符合条件的壁纸")
             Button("调整筛选") { isWorkshopFilterPresented = true }.buttonStyle(.bordered)

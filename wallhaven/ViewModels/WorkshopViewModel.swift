@@ -44,6 +44,7 @@ final class WorkshopViewModel: ObservableObject {
     private let api = SteamWorkshopAPI()
     private let toast = ToastCenter.shared
     private var cursor: String?
+    private var webPage = 1
     private var canLoadMore = true
     private var searchTask: Task<Void, Never>?
 
@@ -140,13 +141,15 @@ final class WorkshopViewModel: ObservableObject {
     // MARK: - Online
 
     func search(reset: Bool) {
-        // 输入的是工坊链接 / ID 时直接按 ID 查询（不需要 API Key）
+        // 输入的是工坊链接 / ID 时直接按 ID 查询
         let ids = SteamWorkshopAPI.extractIDs(from: query)
         let isIDLookup = reset && !ids.isEmpty && !query.trimmingCharacters(in: .whitespaces).contains(" ")
-        guard hasAPIKey || isIDLookup else { return }
         if reset {
+            // 筛选条件变化时取消进行中的请求，否则新请求会被 isLoading 挡住
             searchTask?.cancel()
+            isLoading = false
             cursor = nil
+            webPage = 1
             canLoadMore = true
             onlineItems = []
         }
@@ -154,12 +157,13 @@ final class WorkshopViewModel: ObservableObject {
 
         isLoading = true
         searchTask = Task {
-            defer { isLoading = false }
             do {
+                let newItems: [WorkshopItem]
                 if isIDLookup {
-                    onlineItems = try await api.details(ids: ids)
+                    newItems = try await api.details(ids: ids)
                     canLoadMore = false
-                } else {
+                } else if hasAPIKey {
+                    // 有 API Key：官方 QueryFiles 接口，更快更稳定
                     let page = try await api.query(
                         apiKey: apiKey.trimmingCharacters(in: .whitespaces),
                         text: query,
@@ -168,17 +172,30 @@ final class WorkshopViewModel: ObservableObject {
                         includeQuestionable: includeQuestionable,
                         cursor: cursor
                     )
-                    guard !Task.isCancelled else { return }
-                    let existing = Set(onlineItems.map(\.id))
-                    onlineItems.append(contentsOf: page.items.filter { !existing.contains($0.id) })
+                    newItems = page.items
                     canLoadMore = page.nextCursor != nil && page.nextCursor != cursor
                     cursor = page.nextCursor
+                } else {
+                    // 无 API Key：解析工坊网页
+                    newItems = try await api.browseWeb(
+                        text: query,
+                        sort: sort,
+                        type: typeFilter,
+                        includeQuestionable: includeQuestionable,
+                        page: webPage
+                    )
+                    webPage += 1
+                    canLoadMore = !newItems.isEmpty
                 }
+                guard !Task.isCancelled else { return }
+                let existing = Set(onlineItems.map(\.id))
+                onlineItems.append(contentsOf: newItems.filter { !existing.contains($0.id) })
                 mergeDownloadState()
             } catch {
                 guard !Task.isCancelled else { return }
                 toast.show(error.localizedDescription, style: .error)
             }
+            if !Task.isCancelled { isLoading = false }
         }
     }
 
