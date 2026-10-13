@@ -20,6 +20,8 @@ protocol LivePlaybackView: NSView {
     func setVolume(_ volume: Double)
     /// 第一帧渲染完成（或加载失败）时回调，用于新旧壁纸无缝切换
     func whenReady(_ action: @escaping () -> Void)
+    /// 当前显示的画面（退出 App 时定格为静态壁纸）
+    func snapshot() async -> CGImage?
 }
 
 extension LoopingVideoNSView: LivePlaybackView {}
@@ -272,6 +274,11 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     func pause() {
         wantsPlaying = false
         call("__host.pause()")
+    }
+
+    func snapshot() async -> CGImage? {
+        guard isPageLoaded, let image = try? await webView.takeSnapshot(configuration: nil) else { return nil }
+        return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 
     func setVolume(_ volume: Double) {

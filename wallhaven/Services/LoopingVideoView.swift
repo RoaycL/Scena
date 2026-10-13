@@ -83,6 +83,16 @@ final class LoopingVideoNSView: NSView {
         player.isMuted = volume <= 0
     }
 
+    /// 截取当前播放到的这一帧
+    func snapshot() async -> CGImage? {
+        guard let asset = player.currentItem?.asset else { return nil }
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        return try? await generator.image(at: player.currentTime()).image
+    }
+
     func play() { player.play() }
     func pause() { player.pause() }
 

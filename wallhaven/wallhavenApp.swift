@@ -17,6 +17,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PlaylistManager.shared.restore()
     }
 
+    private var isFreezingBeforeQuit = false
+
+    /// 退出前把动态壁纸定格成静态壁纸（最多等 3 秒，不能卡住退出）
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard LiveWallpaperController.shared.isActive, !isFreezingBeforeQuit else { return .terminateNow }
+        isFreezingBeforeQuit = true
+        var replied = false
+        let reply = {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        Task {
+            await LiveWallpaperController.shared.freezeCurrentFrame()
+            reply()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { reply() }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         SteamCMDDownloader.shared.terminateAll()
     }

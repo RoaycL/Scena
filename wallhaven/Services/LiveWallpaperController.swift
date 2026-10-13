@@ -5,6 +5,7 @@
 
 import AppKit
 import AVFoundation
+import ImageIO
 import Combine
 import CryptoKit
 
@@ -284,6 +285,40 @@ final class LiveWallpaperController: ObservableObject {
 
     // MARK: - Static poster
 
+    // MARK: - Freeze on quit
+
+    /// 退出 App 前把每块屏幕当前显示的画面设为系统壁纸：动态壁纸定格成静态，而不是露出黑屏或旧壁纸
+    func freezeCurrentFrame() async {
+        guard isActive, !windows.isEmpty else { return }
+        let folder = Self.posterFolder
+        let stamp = Int(Date().timeIntervalSince1970)
+        var written: Set<String> = []
+
+        for (index, (window, player)) in zip(windows, players).enumerated() {
+            guard let screen = window.screen, let image = await player.snapshot() else { continue }
+            let url = folder.appendingPathComponent("frozen-\(index)-\(stamp).png")
+            guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
+                  (try? data.write(to: url, options: .atomic)) != nil else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+            written.insert(url.lastPathComponent)
+        }
+
+        // 只保留这次的定格图片
+        let old = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in old where name.hasPrefix("frozen-") && !written.contains(name) {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+    }
+
+    nonisolated private static var posterFolder: URL {
+        let fm = FileManager.default
+        let folder = ((try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+            ?? fm.temporaryDirectory)
+            .appendingPathComponent("wallhaven/LivePosters", isDirectory: true)
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     /// 把封面设为系统静态壁纸：App 退出后桌面仍保持一致的画面
     private func setStaticPoster(for content: LiveContent) {
         Task {
@@ -298,13 +333,11 @@ final class LiveWallpaperController: ObservableObject {
 
     nonisolated private static func makePoster(for content: LiveContent) async throws -> URL {
         let fm = FileManager.default
-        let folder = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("wallhaven/LivePosters", isDirectory: true)
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folder = posterFolder
 
-        // 每个内容一个独立文件名，系统才会刷新壁纸
+        // 每个内容一个独立文件名，系统才会刷新壁纸（v2：跳过黑帧，旧的黑色封面会重新生成）
         let hash = SHA256.hash(data: Data(content.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        let posterURL = folder.appendingPathComponent("poster-\(hash).png")
+        let posterURL = folder.appendingPathComponent("poster-v2-\(hash).png")
         if fm.fileExists(atPath: posterURL.path) { return posterURL }
 
         let cgImage: CGImage
@@ -315,9 +348,7 @@ final class LiveWallpaperController: ObservableObject {
             let item = WorkshopItem.load(from: content.url)
             if let videoURL = item?.nativeVideoURL {
                 cgImage = try await firstFrame(of: videoURL)
-            } else if let preview = item?.previewURL,
-                      let image = NSImage(contentsOf: preview),
-                      let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            } else if let preview = item?.previewURL, let cg = posterFrame(ofImageAt: preview) {
                 cgImage = cg
             } else {
                 throw WallperError.wallpaper("没有可用的封面。")
@@ -332,10 +363,50 @@ final class LiveWallpaperController: ObservableObject {
         return posterURL
     }
 
+    /// 视频的封面帧：依次尝试几个时间点，跳过开头淡入的黑帧
     nonisolated private static func firstFrame(of url: URL) async throws -> CGImage {
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
+        let duration = (try? await asset.load(.duration).seconds) ?? 0
+        let candidates = [0, 1, 2, duration * 0.25, duration * 0.5].filter { $0 < max(duration, 0.1) }
+        var fallback: CGImage?
+        for seconds in candidates {
+            guard let image = try? await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image else { continue }
+            if averageBrightness(of: image) > 12 { return image }
+            fallback = fallback ?? image
+        }
+        if let fallback { return fallback }
         return try await generator.image(at: .zero).image
+    }
+
+    /// 图片（含 GIF）的封面帧：GIF 跳过开头的黑帧
+    nonisolated private static func posterFrame(ofImageAt url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        let candidates = count > 1 ? [0, count / 8, count / 4, count / 3, count / 2] : [0]
+        var fallback: CGImage?
+        for index in candidates where index < count {
+            guard let image = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            if averageBrightness(of: image) > 12 { return image }
+            fallback = fallback ?? image
+        }
+        return fallback
+    }
+
+    /// 缩到 8×8 求平均亮度（0～255）
+    nonisolated private static func averageBrightness(of image: CGImage) -> Int {
+        var pixels = [UInt8](repeating: 0, count: 8 * 8 * 4)
+        guard let context = CGContext(
+            data: &pixels, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return 255 }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+        var total = 0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            total += Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
+        }
+        return total / (64 * 3)
     }
 
     // MARK: - System events
