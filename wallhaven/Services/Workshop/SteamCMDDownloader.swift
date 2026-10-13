@@ -114,10 +114,18 @@ final class SteamCMDDownloader {
         #!/bin/bash
         echo "正在登录 Steam（只需一次，之后 steamcmd 会缓存登录状态）"
         echo "请在下方输入密码和 Steam 令牌验证码。"
+        echo "提示：输入密码时屏幕不会显示字符；请先切换到英文输入法，也可以直接粘贴。"
         echo
         "\(steamcmd.path)" +login "\(username)" +quit
+        status=$?
         echo
-        echo "完成后可以关闭此窗口，回到 wallhaven 下载壁纸。"
+        if [ $status -eq 0 ]; then
+            echo "✅ 登录成功，可以关闭此窗口，回到 wallhaven 下载壁纸。"
+        else
+            echo "❌ 登录失败（退出码 $status）。请检查上方的错误信息："
+            echo "   Invalid Password → 密码错误（注意输入法）；Rate Limit → 尝试次数过多，请稍后再试。"
+            echo "   修正后在 wallhaven 设置里重新点击「在终端登录 steamcmd」。"
+        fi
         """
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("wallhaven-steam-login.command")
         try script.write(to: url, atomically: true, encoding: .utf8)
