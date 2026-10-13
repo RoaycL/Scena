@@ -356,15 +356,21 @@ struct ContentView: View {
                         .opacity(immersive.isChromeHidden ? 0 : 1)
                         .offset(y: immersive.isChromeHidden ? -12 : 0)
                         .allowsHitTesting(!immersive.isChromeHidden)
+                }
+                .padding(.top, 10)
 
-                    // 提示条不随界面隐藏
+                // 提示条放在右上角顶部栏下方，不随界面隐藏
+                VStack {
                     if let toast = toastCenter.current {
                         ToastView(toast: toast)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .frame(maxWidth: 380, alignment: .trailing)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                             .onTapGesture { toastCenter.dismiss() }
                     }
                 }
-                .padding(.top, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, topBarInset + 8)
+                .padding(.trailing, 16)
 
                 filterOverlay(maxHeight: size.height - 90)
             }

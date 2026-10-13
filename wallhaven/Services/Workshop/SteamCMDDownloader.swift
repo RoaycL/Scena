@@ -86,7 +86,8 @@ final class SteamCMDDownloader {
         guard Self.isValidUsername(username) else { throw SteamCMDError.missingUsername }
         let process = Process()
         process.executableURL = steamcmd
-        process.arguments = ["+@ShutdownOnFailedCommand", "1", "+@NoPromptForPassword", "1", "+login", username, "+quit"]
+        process.arguments = ["+@ShutdownOnFailedCommand", "1", "+@NoPromptForPassword", "1"]
+            + Self.installDirArguments() + ["+login", username, "+quit"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -218,6 +219,14 @@ final class SteamCMDDownloader {
         }
     }
 
+    /// 只登录不下载时也指定存储位置：steamcmd 登录后可能按默认目录里的清单检查工坊内容，
+    /// 指定后就不会在系统盘的 Steam 目录里写入壁纸
+    private static func installDirArguments() -> [String] {
+        guard let dir = StorageManager.shared.workshopInstallDir,
+              FileManager.default.fileExists(atPath: dir.path) else { return [] }
+        return ["+force_install_dir", dir.path]
+    }
+
     /// 在「终端」中运行一次交互式登录（密码 / Steam Guard 由用户自己输入）
     static func openLoginInTerminal(username: String) throws {
         guard let steamcmd = locate() else { throw SteamCMDError.notInstalled }
@@ -229,7 +238,7 @@ final class SteamCMDDownloader {
         echo "请在下方输入密码和 Steam 令牌验证码。"
         echo "提示：输入密码时屏幕不会显示字符；请先切换到英文输入法，也可以直接粘贴。"
         echo
-        "\(steamcmd.path)" +login "\(username)" +quit
+        "\(steamcmd.path)" \(installDirArguments().map { "\"\($0)\"" }.joined(separator: " ")) +login "\(username)" +quit
         status=$?
         echo
         if [ $status -eq 0 ]; then
