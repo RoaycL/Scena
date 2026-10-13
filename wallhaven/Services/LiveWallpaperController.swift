@@ -33,7 +33,14 @@ final class LiveWallpaperController: ObservableObject {
     @Published private(set) var volume = min(1, max(0, UserDefaults.standard.double(forKey: "liveWallpaper.volume")))
 
     func setVolume(_ value: Double) {
+        let wasSilent = volume <= 0
         volume = min(1, max(0, value))
+        // 静音的视频不解码音轨；从静音调到有声（或反过来）时重建播放器
+        if wasSilent != (volume <= 0), players.contains(where: { $0 is LoopingVideoNSView }) {
+            UserDefaults.standard.set(volume, forKey: "liveWallpaper.volume")
+            rebuildWindows()
+            return
+        }
         UserDefaults.standard.set(volume, forKey: "liveWallpaper.volume")
         for (window, player) in zip(windows, players) {
             player.setVolume(window.screen == NSScreen.screens.first ? volume : 0)
@@ -167,15 +174,15 @@ final class LiveWallpaperController: ObservableObject {
 
     // MARK: - Windows
 
-    private func makePlayer(for content: LiveContent) -> LivePlaybackView? {
+    private func makePlayer(for content: LiveContent, playsSound: Bool) -> LivePlaybackView? {
         switch content.kind {
         case .video:
-            return LoopingVideoNSView(url: content.url)
+            return LoopingVideoNSView(url: content.url, includeAudio: playsSound)
         case .workshop:
             guard let item = WorkshopItem.load(from: content.url) else { return nil }
             // 视频类工坊壁纸优先用 AVFoundation 播放，更省电
             if let videoURL = item.nativeVideoURL {
-                return LoopingVideoNSView(url: videoURL)
+                return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
             }
             let player = WorkshopPlayerNSView(item: item, fps: frameRate)
             player.onStateChange = { state in
@@ -191,6 +198,7 @@ final class LiveWallpaperController: ObservableObject {
     private func rebuildWindows() {
         generation += 1
         let currentGeneration = generation
+        revealedWindows.removeAll()
         let oldWindows = windows
         let oldPlayers = players
         removeMouseTracking()
@@ -210,7 +218,9 @@ final class LiveWallpaperController: ObservableObject {
         let keepAspect = DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)
         let background = DesktopSettings.backgroundNSColor
         for screen in NSScreen.screens where !disabled.contains(screen.displayUUID) {
-            guard let player = makePlayer(for: content) else { continue }
+            // 多屏只让主屏输出声音；音量为 0 时视频不解码音轨
+            let playsSound = screen == NSScreen.screens.first && volume > 0
+            guard let player = makePlayer(for: content, playsSound: playsSound) else { continue }
             (player as? LoopingVideoNSView)?.setFit(keepAspectRatio: keepAspect, background: background)
             // 多屏只让主屏输出声音，避免重复播放与叠加音量。
             player.setVolume(screen == NSScreen.screens.first ? volume : 0)
@@ -264,7 +274,21 @@ final class LiveWallpaperController: ObservableObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.35
             window.animator().alphaValue = 1
+        } completionHandler: { [weak self, weak window] in
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.revealedWindows.insert(ObjectIdentifier(window))
+                self.updatePlayback()
+            }
         }
+    }
+
+    /// 已淡入完成的窗口：只有这些窗口才按遮挡状态暂停（淡入前的透明窗口会被系统当成不可见）
+    private var revealedWindows: Set<ObjectIdentifier> = []
+
+    /// 桌面被其他窗口完全挡住（最大化、全屏、铺满的窗口）时，这块屏幕上的壁纸看不见，暂停渲染
+    private func isOccluded(_ window: NSWindow) -> Bool {
+        revealedWindows.contains(ObjectIdentifier(window)) && !window.occlusionState.contains(.visible)
     }
 
     /// 新窗口淡入完成后再移除旧窗口
@@ -292,6 +316,7 @@ final class LiveWallpaperController: ObservableObject {
 
     private func tearDownWindows() {
         generation += 1
+        revealedWindows.removeAll()
         removeMouseTracking()
         fadeOut(windows, players)
         players.removeAll()
@@ -310,7 +335,7 @@ final class LiveWallpaperController: ObservableObject {
         let covered = autoPause.fullScreenDisplays
         for (window, player) in zip(windows, players) {
             let isCovered = window.screen.map { covered.contains($0.displayUUID) } ?? false
-            let shouldPlay = !isPaused && !blocked && !isCovered
+            let shouldPlay = !isPaused && !blocked && !isCovered && !isOccluded(window)
             shouldPlay ? player.play() : player.pause()
         }
         // 播放列表只在所有屏幕都被暂停时才停止轮换（手动暂停由播放列表自己处理）
@@ -490,6 +515,13 @@ final class LiveWallpaperController: ObservableObject {
             }
         })
 
+        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let self, let window = notification.object as? NSWindow,
+                      self.windows.contains(where: { $0 === window }) else { return }
+                self.updatePlayback()
+            }
+        })
         observers.append(center.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }

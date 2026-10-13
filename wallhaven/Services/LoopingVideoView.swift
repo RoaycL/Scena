@@ -40,8 +40,16 @@ final class LoopingVideoNSView: NSView {
     private var looper: AVPlayerLooper?
     private var readyObservation: NSKeyValueObservation?
     private var readyCallbacks: [() -> Void] = []
+    /// 调用方希望的播放状态（play / pause）
+    private var wantsPlaying = true
+    /// 所在窗口被完全挡住时自动暂停（App 内预览用；桌面壁纸由 LiveWallpaperController 统一处理）
+    private let pausesWhenHidden: Bool
+    private var occlusionObserver: NSObjectProtocol?
+    private var isStopped = false
 
-    init(url: URL) {
+    /// - includeAudio: 不需要声音时只解码画面轨。AVPlayer 静音时仍会解码、混音音频，去掉音轨能省下这部分开销
+    init(url: URL, includeAudio: Bool = false, pausesWhenHidden: Bool = false) {
+        self.pausesWhenHidden = pausesWhenHidden
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
@@ -53,12 +61,60 @@ final class LoopingVideoNSView: NSView {
         playerLayer.videoGravity = .resizeAspectFill
         layer?.addSublayer(playerLayer)
 
-        looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
-        player.play()
+        if includeAudio {
+            startLooping(AVPlayerItem(url: url))
+        } else {
+            Task { [weak self] in
+                let item = await Self.videoOnlyItem(url: url) ?? AVPlayerItem(url: url)
+                self?.startLooping(item)
+            }
+        }
 
         readyObservation = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
             guard layer.isReadyForDisplay else { return }
             DispatchQueue.main.async { self?.fireReady() }
+        }
+    }
+
+    private func startLooping(_ item: AVPlayerItem) {
+        guard !isStopped else { return }
+        looper = AVPlayerLooper(player: player, templateItem: item)
+        updatePlayback()
+    }
+
+    /// 只包含画面轨的播放项（读取失败时返回 nil，调用方退回原文件）
+    private static func videoOnlyItem(url: URL) async -> AVPlayerItem? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let duration = try? await asset.load(.duration), duration.isNumeric, duration > .zero else { return nil }
+        let composition = AVMutableComposition()
+        guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+              (try? videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: track, at: .zero)) != nil else { return nil }
+        videoTrack.preferredTransform = (try? await track.load(.preferredTransform)) ?? .identity
+        return AVPlayerItem(asset: composition)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard pausesWhenHidden else { return }
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
+        guard let window else { return }
+        occlusionObserver = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updatePlayback() }
+        }
+        updatePlayback()
+    }
+
+    private func updatePlayback() {
+        guard !isStopped else { return }
+        // 第一帧出来之前不因遮挡暂停，否则切换时拿不到首帧
+        let hidden = pausesWhenHidden && playerLayer.isReadyForDisplay
+            && !(window?.occlusionState.contains(.visible) ?? false)
+        if wantsPlaying && !hidden {
+            if player.rate == 0 { player.play() }
+        } else if player.rate != 0 {
+            player.pause()
         }
     }
 
@@ -72,6 +128,7 @@ final class LoopingVideoNSView: NSView {
     }
 
     private func fireReady() {
+        updatePlayback()
         let callbacks = readyCallbacks
         readyCallbacks.removeAll()
         callbacks.forEach { $0() }
@@ -111,10 +168,13 @@ final class LoopingVideoNSView: NSView {
         layer?.backgroundColor = background.cgColor
     }
 
-    func play() { player.play() }
-    func pause() { player.pause() }
+    func play() { wantsPlaying = true; updatePlayback() }
+    func pause() { wantsPlaying = false; updatePlayback() }
 
     func stop() {
+        isStopped = true
+        if let occlusionObserver { NotificationCenter.default.removeObserver(occlusionObserver) }
+        occlusionObserver = nil
         readyObservation = nil
         readyCallbacks.removeAll()
         player.pause()
@@ -129,7 +189,8 @@ struct LoopingVideoView: NSViewRepresentable {
     var onReady: () -> Void = {}
 
     func makeNSView(context: Context) -> LoopingVideoNSView {
-        let view = LoopingVideoNSView(url: url)
+        // App 内预览没有声音；窗口隐藏、最小化或被挡住时暂停解码
+        let view = LoopingVideoNSView(url: url, pausesWhenHidden: true)
         view.whenReady(onReady)
         return view
     }
