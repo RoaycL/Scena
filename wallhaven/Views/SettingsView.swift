@@ -443,7 +443,7 @@ private struct AutoPauseSection: View {
     var body: some View {
         Section {
             Toggle("其他 App 在使用时（只在桌面 / 访达处于前台时播放）", isOn: $otherApp)
-            Toggle("其他 App 全屏时", isOn: $fullScreen)
+            Toggle("其他 App 全屏时（只暂停被盖住的显示器）", isOn: $fullScreen)
             Toggle("未连接电源时", isOn: $battery)
             Toggle("电脑不活跃时", isOn: $idle)
             if idle {
@@ -554,7 +554,7 @@ private struct WorkshopSettings: View {
 
             Section {
                 Stepper(value: $workshop.maxConcurrentDownloads, in: 1...10) {
-                    LabeledContent("同时下载数量") {
+                    LabeledContent("每批下载数量") {
                         Text("\(workshop.maxConcurrentDownloads) 个")
                             .monospacedDigit()
                     }
@@ -569,7 +569,7 @@ private struct WorkshopSettings: View {
             } header: {
                 Text("下载")
             } footer: {
-                SettingsFootnote("超出数量的壁纸会排队等待。同一个 Steam 账号同时只能运行一个 steamcmd，这里的数量是每次登录处理的壁纸数。")
+                SettingsFootnote("同一个 Steam 账号同时只能运行一个 steamcmd，一批里的壁纸会逐个下载，下载速度不会因为数量变大而变快。数量越大，登录次数越少；数量越小，暂停、停止单个任务时影响的范围越小。")
             }
 
             Section {

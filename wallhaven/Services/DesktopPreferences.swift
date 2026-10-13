@@ -108,10 +108,10 @@ final class AutoPauseMonitor {
         }
     }
 
-    var onChange: ((Set<Reason>) -> Void)?
-    private(set) var reasons: Set<Reason> = [] {
-        didSet { if reasons != oldValue { onChange?(reasons) } }
-    }
+    var onChange: (() -> Void)?
+    private(set) var reasons: Set<Reason> = []
+    /// 被全屏窗口盖住的显示器（只暂停这些屏幕上的动态壁纸）
+    private(set) var fullScreenDisplays: Set<String> = []
 
     private var observers: [NSObjectProtocol] = []
     private var timer: Timer?
@@ -143,9 +143,11 @@ final class AutoPauseMonitor {
            let front, front.bundleIdentifier != "com.apple.finder", front.processIdentifier != getpid() {
             next.insert(.otherAppActive)
         }
+        var covered = Set<String>()
         if DesktopSettings.bool(DesktopSettings.pauseWhenFullScreen, default: true),
-           let front, front.processIdentifier != getpid(), Self.hasFullScreenWindow(pid: front.processIdentifier) {
-            next.insert(.fullScreen)
+           let front, front.processIdentifier != getpid() {
+            covered = Self.fullScreenDisplays(pid: front.processIdentifier)
+            if !covered.isEmpty { next.insert(.fullScreen) }
         }
         if DesktopSettings.bool(DesktopSettings.pauseOnBattery, default: false), Self.isOnBattery {
             next.insert(.battery)
@@ -154,22 +156,33 @@ final class AutoPauseMonitor {
             let minutes = max(1, UserDefaults.standard.object(forKey: DesktopSettings.idleMinutes) as? Int ?? 10)
             if Self.idleSeconds >= Double(minutes * 60) { next.insert(.idle) }
         }
+        guard next != reasons || covered != fullScreenDisplays else { return }
         reasons = next
+        fullScreenDisplays = covered
+        onChange?()
     }
 
-    /// 前台 App 是否有铺满整块屏幕的窗口（全屏视频、游戏、全屏模式）
-    private static func hasFullScreenWindow(pid: pid_t) -> Bool {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return false
+    /// 前台 App 铺满整块屏幕的窗口（全屏视频、游戏、全屏模式）所在的显示器
+    private static func fullScreenDisplays(pid: pid_t) -> Set<String> {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+              let primaryHeight = NSScreen.screens.first?.frame.height else { return [] }
+        // CGWindow 坐标原点在主屏左上角，NSScreen 在左下角
+        let screens = NSScreen.screens.map { screen -> (String, CGRect) in
+            let frame = screen.frame
+            return (screen.displayUUID, CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height))
         }
-        let screenSizes = NSScreen.screens.map(\.frame.size)
-        return list.contains { info in
+        var result = Set<String>()
+        for info in list {
             guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
                   (info[kCGWindowLayer as String] as? Int) == 0,
                   let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsInfo) else { return false }
-            return screenSizes.contains { abs($0.width - bounds.width) < 1 && abs($0.height - bounds.height) < 1 }
+                  let bounds = CGRect(dictionaryRepresentation: boundsInfo) else { continue }
+            for (id, frame) in screens where abs(frame.minX - bounds.minX) < 1 && abs(frame.minY - bounds.minY) < 1
+                && abs(frame.width - bounds.width) < 1 && abs(frame.height - bounds.height) < 1 {
+                result.insert(id)
+            }
         }
+        return result
     }
 
     private static var isOnBattery: Bool {

@@ -13,6 +13,8 @@ struct ImmersiveBackground: View {
     var showsPreviewCard = true
     /// 卡片居中；否则放在右上区域，避开左下角的信息面板
     var centersPreviewCard = true
+    /// 首帧就绪前垫在下面的黑底；调用方自己提供占位图（如缩略图）时关掉
+    var showsBlackBase = true
 
     @State private var displayedItem: GalleryItem?
     @State private var requestedID: String?
@@ -24,7 +26,7 @@ struct ImmersiveBackground: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            if showsBlackBase { Color.black }
             ForEach(layers) { candidate in
                 BackgroundLayer(item: candidate, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard, onFailure: {
                     DispatchQueue.main.async {

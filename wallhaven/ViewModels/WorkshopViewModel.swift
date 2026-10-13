@@ -56,7 +56,7 @@ final class WorkshopViewModel: ObservableObject {
     @Published var subscribeOnDownload: Bool {
         didSet { UserDefaults.standard.set(subscribeOnDownload, forKey: Keys.subscribeOnDownload) }
     }
-    /// 同时下载数量（每次 steamcmd 登录处理的条目数），超出的排队等待
+    /// 每批下载数量（每次 steamcmd 登录处理的条目数，批内逐个下载），超出的排队等待
     @Published var maxConcurrentDownloads: Int {
         didSet {
             let clamped = min(10, max(1, maxConcurrentDownloads))
@@ -160,7 +160,7 @@ final class WorkshopViewModel: ObservableObject {
            let saved = try? JSONDecoder().decode([WorkshopDownloadJob].self, from: data) {
             downloadJobs = WorkshopDownloadQueue.restored(saved)
         }
-        completeJobsAlreadyOnDisk()
+        Task { await completeJobsAlreadyOnDisk() }
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.isShuttingDown = true
@@ -518,7 +518,18 @@ final class WorkshopViewModel: ObservableObject {
         downloadJobs[index].state = .completed
         downloadJobs[index].error = nil
         activeDownloads.remove(id)
-        refreshLibrary()
+        scheduleLibraryRefresh()
+    }
+
+    /// 一批里多个条目接连完成时合并成一次扫描，避免每完成一个就重扫整个资料库、刷新整个界面
+    private var pendingLibraryRefresh: Task<Void, Never>?
+    private func scheduleLibraryRefresh() {
+        pendingLibraryRefresh?.cancel()
+        pendingLibraryRefresh = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await refreshLibraryAndWait()
+        }
     }
 
     /// steamcmd 下载中的临时目录：<安装目录>/steamapps/workshop/downloads/431960/<id>
@@ -535,21 +546,23 @@ final class WorkshopViewModel: ObservableObject {
     ///  - 没有记录的旧壁纸：project.json 指向的入口文件存在且非空，并且 steamcmd 临时目录里没有它（没在下载中）。
     ///    确认后补一份记录，之后按记录判断
     /// 用户点「重试」的条目（forcedValidation）总是交给 Steam 校验。
-    private func completeJobsAlreadyOnDisk() {
+    private func completeJobsAlreadyOnDisk() async {
+        let candidates = downloadJobs
+            .filter { [.queued, .paused].contains($0.state) && !forcedValidation.contains($0.id) }
+            .map { ($0.id, downloadReceipts[$0.id]) }
+        guard !candidates.isEmpty else { return }
         let roots = libraryRoots
         let staging = Self.stagingFolder
-        let fm = FileManager.default
+        // 逐个文件比对可能较慢（大壁纸、外接盘），放到后台
+        let complete = await Task.detached(priority: .utility) {
+            Self.completedOnDisk(candidates, roots: roots, staging: staging)
+        }.value
+        guard !complete.isEmpty else { return }
+        for (id, receipt) in complete { downloadReceipts[id] = receipt }
+        // 检查期间用户可能暂停 / 停止 / 要求重试，只更新状态仍然符合的任务
         downloadJobs = downloadJobs.map { job in
-            guard [.queued, .paused].contains(job.state), !forcedValidation.contains(job.id) else { return job }
-            let isComplete = roots.contains { root in
-                let folder = root.appendingPathComponent(job.id)
-                if let receipt = downloadReceipts[job.id] { return receipt.matches(folder: folder) }
-                guard !fm.fileExists(atPath: staging.appendingPathComponent(job.id).path),
-                      let receipt = WorkshopDownloadReceipt.capture(folder: folder) else { return false }
-                downloadReceipts[job.id] = receipt
-                return true
-            }
-            guard isComplete else { return job }
+            guard complete[job.id] != nil, [.queued, .paused].contains(job.state),
+                  !forcedValidation.contains(job.id) else { return job }
             var completed = job
             completed.state = .completed
             completed.error = nil
@@ -558,11 +571,39 @@ final class WorkshopViewModel: ObservableObject {
         }
     }
 
+    nonisolated private static func completedOnDisk(_ candidates: [(String, WorkshopDownloadReceipt?)],
+                                                    roots: [URL], staging: URL) -> [String: WorkshopDownloadReceipt] {
+        let fm = FileManager.default
+        var result: [String: WorkshopDownloadReceipt] = [:]
+        for (id, receipt) in candidates {
+            for root in roots {
+                let folder = root.appendingPathComponent(id)
+                if let receipt {
+                    if receipt.matches(folder: folder) { result[id] = receipt; break }
+                } else if !fm.fileExists(atPath: staging.appendingPathComponent(id).path),
+                          let captured = WorkshopDownloadReceipt.capture(folder: folder) {
+                    result[id] = captured
+                    break
+                }
+            }
+        }
+        return result
+    }
+
     private func processDownloadQueue() {
         guard !isProcessingQueue, !isShuttingDown else { return }
-        // 已经在本地的条目不再交给 steamcmd（否则会重新校验、重写整个文件夹）
-        completeJobsAlreadyOnDisk()
-        // 同时下载数量：这一批标记为「下载中」，其余继续排队
+        isProcessingQueue = true
+        Task {
+            // 已经在本地的条目不再交给 steamcmd（否则会重新校验、重写整个文件夹）
+            await completeJobsAlreadyOnDisk()
+            isProcessingQueue = false
+            startNextBatch()
+        }
+    }
+
+    private func startNextBatch() {
+        guard !isProcessingQueue, !isShuttingDown else { return }
+        // 每批数量：这一批标记为「下载中」，其余继续排队
         let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(maxConcurrentDownloads).map(\.id))
         if let job = downloadJobs.first(where: { $0.state == .completed && $0.applyWhenDone }),
            let item = libraryItems.first(where: { $0.id == job.id }) {

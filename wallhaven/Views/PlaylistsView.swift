@@ -556,12 +556,18 @@ private struct PlaylistLargePreview: View {
 
     var body: some View {
         ZStack {
+            // 先显示缩略图，大图或视频首帧就绪后再淡入，不会先黑一下
+            KFImage(source: PlaylistsView.thumbnailSource(for: entry))
+                .setProcessor(GIFPosterFrameProcessor(maxPixelSize: 480))
+                .placeholder { Color.black.opacity(0.2) }
+                .resizable()
+                .scaledToFill()
+                .blur(radius: 6)
+                .clipped()
             if let item {
-                ImmersiveBackground(item: item)
-            } else {
-                Color.black.opacity(0.2)
+                ImmersiveBackground(item: item, showsBlackBase: false)
             }
-            if isLoading {
+            if isLoading && item == nil {
                 ProgressView().controlSize(.small)
             } else if item == nil {
                 Label("壁纸文件不可用", systemImage: "exclamationmark.triangle")

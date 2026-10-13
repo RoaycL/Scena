@@ -76,9 +76,10 @@ final class LiveWallpaperController: ObservableObject {
 
     private init() {
         observeSystemEvents()
-        autoPause.onChange = { [weak self] reasons in
-            self?.autoPauseReasons = reasons
-            self?.updatePlayback()
+        autoPause.onChange = { [weak self] in
+            guard let self else { return }
+            self.autoPauseReasons = self.autoPause.reasons
+            self.updatePlayback()
         }
         autoPause.start()
     }
@@ -304,9 +305,17 @@ final class LiveWallpaperController: ObservableObject {
 
     private func updatePlayback() {
         // 手动暂停优先；自动暂停条件解除后自动继续
-        let shouldPlay = !isPaused && !isSystemSuspended && autoPauseReasons.isEmpty
-        players.forEach { shouldPlay ? $0.play() : $0.pause() }
-        PlaylistManager.shared.setAutomaticPlaybackPaused(isSystemSuspended || !autoPauseReasons.isEmpty)
+        // 全屏只暂停被盖住的那块屏幕，其他条件暂停所有屏幕
+        let blocked = isSystemSuspended || !autoPauseReasons.subtracting([.fullScreen]).isEmpty
+        let covered = autoPause.fullScreenDisplays
+        for (window, player) in zip(windows, players) {
+            let isCovered = window.screen.map { covered.contains($0.displayUUID) } ?? false
+            let shouldPlay = !isPaused && !blocked && !isCovered
+            shouldPlay ? player.play() : player.pause()
+        }
+        // 播放列表只在所有屏幕都被暂停时才停止轮换（手动暂停由播放列表自己处理）
+        let allCovered = !windows.isEmpty && windows.allSatisfy { $0.screen.map { covered.contains($0.displayUUID) } ?? false }
+        PlaylistManager.shared.setAutomaticPlaybackPaused(blocked || allCovered)
     }
 
     /// 桌面窗口不接收鼠标事件，把全局鼠标位置推给场景壁纸（视差 / 鼠标交互效果）
