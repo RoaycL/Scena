@@ -26,9 +26,7 @@ struct SteamWorkshopAPI: Sendable {
     func query(
         apiKey: String,
         text: String,
-        sort: WorkshopSort,
-        type: WorkshopTypeFilter,
-        includeQuestionable: Bool,
+        filters: WorkshopFilters,
         cursor: String?
     ) async throws -> Page {
         var components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
@@ -37,7 +35,7 @@ struct SteamWorkshopAPI: Sendable {
             .init(name: "key", value: apiKey),
             .init(name: "appid", value: WorkshopConstants.appID),
             // 有关键词时按相关度排序
-            .init(name: "query_type", value: String(trimmed.isEmpty ? sort.queryType : 12)),
+            .init(name: "query_type", value: String(trimmed.isEmpty ? filters.sort.queryType : 12)),
             .init(name: "numperpage", value: "30"),
             .init(name: "cursor", value: cursor ?? "*"),
             .init(name: "return_previews", value: "true"),
@@ -45,19 +43,17 @@ struct SteamWorkshopAPI: Sendable {
             .init(name: "return_metadata", value: "true"),
             .init(name: "match_all_tags", value: "true"),
         ]
-        if sort == .trend { items.append(.init(name: "days", value: "7")) }
+        if filters.sort == .trend {
+            // 「全部时间」用一个足够大的天数
+            items.append(.init(name: "days", value: String(filters.trendDays > 0 ? filters.trendDays : 3650)))
+        }
         if !trimmed.isEmpty { items.append(.init(name: "search_text", value: trimmed)) }
 
-        var required: [String] = []
-        if let tag = type.workshopTag { required.append(tag) }
-        var excluded = ["Mature"]
-        if !includeQuestionable { excluded.append("Questionable") }
-        // macOS 无法运行 application 类型
-        excluded.append("Application")
-        for (index, tag) in required.enumerated() {
+        for (index, tag) in filters.requiredTags.enumerated() {
             items.append(.init(name: "requiredtags[\(index)]", value: tag))
         }
-        for (index, tag) in excluded.enumerated() {
+        // macOS 无法运行 application 类型，已包含在 excludedTags 中
+        for (index, tag) in filters.excludedTags.enumerated() {
             items.append(.init(name: "excludedtags[\(index)]", value: tag))
         }
         components.queryItems = items
@@ -86,16 +82,14 @@ struct SteamWorkshopAPI: Sendable {
     /// 无 API Key 时的浏览方式：解析创意工坊网页拿到条目 ID（每页 30 个），再用无需 Key 的详情接口补全
     func browseWeb(
         text: String,
-        sort: WorkshopSort,
-        type: WorkshopTypeFilter,
-        includeQuestionable: Bool,
+        filters: WorkshopFilters,
         page: Int
     ) async throws -> [WorkshopItem] {
         var components = URLComponents(string: "https://steamcommunity.com/workshop/browse/")!
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let browseSort: String = {
             if !trimmed.isEmpty { return "textsearch" }
-            switch sort {
+            switch filters.sort {
             case .trend: return "trend"
             case .topRated: return "toprated"
             case .newest: return "mostrecent"
@@ -110,12 +104,10 @@ struct SteamWorkshopAPI: Sendable {
             .init(name: "numperpage", value: "30"),
             .init(name: "p", value: String(page)),
         ]
-        if sort == .trend { items.append(.init(name: "days", value: "7")) }
+        if filters.sort == .trend { items.append(.init(name: "days", value: String(filters.trendDays))) }
         if !trimmed.isEmpty { items.append(.init(name: "searchtext", value: trimmed)) }
-        if let tag = type.workshopTag { items.append(.init(name: "requiredtags[]", value: tag)) }
-        var excluded = ["Mature", "Application"]
-        if !includeQuestionable { excluded.append("Questionable") }
-        items += excluded.map { .init(name: "excludedtags[]", value: $0) }
+        items += filters.requiredTags.map { .init(name: "requiredtags[]", value: $0) }
+        items += filters.excludedTags.map { .init(name: "excludedtags[]", value: $0) }
         components.queryItems = items
 
         var request = URLRequest(url: components.url!)
@@ -136,9 +128,8 @@ struct SteamWorkshopAPI: Sendable {
 
         // 详情接口按请求顺序返回；再兜底过滤一次分级和应用类型
         return try await details(ids: ids).filter { item in
-            item.contentRating != "Mature"
-                && (includeQuestionable || item.contentRating != "Questionable")
-                && item.type != .application
+            let rating = WorkshopRating(rawValue: item.contentRating ?? "") ?? .everyone
+            return filters.ratings.contains(rating) && item.type != .application
         }
     }
 

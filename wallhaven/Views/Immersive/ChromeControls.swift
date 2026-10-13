@@ -34,64 +34,42 @@ struct ToastView: View {
     }
 }
 
-/// 筛选面板：分类、纯度、排序合并到一个弹出面板里，顶栏只留一个按钮
+/// 筛选面板：分类、纯度、排序合并到一个面板里，顶栏只留一个按钮
 struct FilterPanel: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            section("分类") {
-                chip("常规", isOn: viewModel.includeGeneral, action: viewModel.toggleGeneral)
-                chip("动漫", isOn: viewModel.includeAnime, action: viewModel.toggleAnime)
-                chip("人物", isOn: viewModel.includePeople, action: viewModel.togglePeople)
+        GlassPanel(width: 300) {
+            Text("筛选")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+
+            GlassSection(title: "分类") {
+                FlowLayout {
+                    GlassChip(title: "常规", isOn: viewModel.includeGeneral, action: viewModel.toggleGeneral)
+                    GlassChip(title: "动漫", isOn: viewModel.includeAnime, action: viewModel.toggleAnime)
+                    GlassChip(title: "人物", isOn: viewModel.includePeople, action: viewModel.togglePeople)
+                }
             }
 
-            section("内容分级") {
-                chip("SFW", isOn: viewModel.includeSFW, tint: .green, action: viewModel.toggleSFW)
-                chip("Sketchy", isOn: viewModel.includeSketchy, tint: .yellow, disabled: !viewModel.isAuthenticated, action: viewModel.toggleSketchy)
-                chip("NSFW", isOn: viewModel.includeNSFW, tint: .red, disabled: !viewModel.isAuthenticated, action: viewModel.toggleNSFW)
-            }
-            if !viewModel.isAuthenticated {
-                Text("登录后可开启 Sketchy / NSFW")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            GlassSection(title: "内容分级", trailing: viewModel.isAuthenticated ? nil : "登录后可开启 Sketchy / NSFW") {
+                FlowLayout {
+                    GlassChip(title: "SFW", isOn: viewModel.includeSFW, tint: .green, action: viewModel.toggleSFW)
+                    GlassChip(title: "Sketchy", isOn: viewModel.includeSketchy, tint: .orange, disabled: !viewModel.isAuthenticated, action: viewModel.toggleSketchy)
+                    GlassChip(title: "NSFW", isOn: viewModel.includeNSFW, tint: .red, disabled: !viewModel.isAuthenticated, action: viewModel.toggleNSFW)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("排序").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Picker("排序", selection: $viewModel.sortOrder) {
+            GlassSection(title: "排序") {
+                FlowLayout {
                     ForEach(SortOrder.allCases) { option in
-                        Text(option.label).tag(option)
+                        GlassChip(title: option.label, isOn: viewModel.sortOrder == option) {
+                            viewModel.sortOrder = option
+                        }
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 160)
             }
         }
-        .padding(16)
-        .frame(width: 260)
-    }
-
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            HStack(spacing: 6) { content() }
-        }
-    }
-
-    private func chip(_ title: String, isOn: Bool, tint: Color = .accentColor, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .foregroundStyle(isOn ? .white : .primary)
-                .background(isOn ? tint.opacity(0.85) : Color.primary.opacity(0.08), in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
     }
 }
 

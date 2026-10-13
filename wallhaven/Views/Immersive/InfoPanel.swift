@@ -13,6 +13,7 @@ struct InfoPanel<Actions: View>: View {
     var colors: [String] = []
     var tags: [String] = []
     var onTag: ((String) -> Void)? = nil
+    var tagLabel: (String) -> String = { $0 }
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
@@ -52,7 +53,7 @@ struct InfoPanel<Actions: View>: View {
                 HStack(spacing: 6) {
                     ForEach(tags.prefix(5), id: \.self) { tag in
                         Button { onTag?(tag) } label: {
-                            Text("#\(tag)")
+                            Text("#\(tagLabel(tag))")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.85))
                                 .padding(.horizontal, 9)

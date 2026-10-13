@@ -23,9 +23,13 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var downloading: Set<String> = []
 
     @Published var query = ""
-    @Published var sort: WorkshopSort = .trend
-    @Published var typeFilter: WorkshopTypeFilter = .all
-    @Published var includeQuestionable = false
+    @Published var filters: WorkshopFilters {
+        didSet {
+            if let data = try? JSONEncoder().encode(filters) {
+                UserDefaults.standard.set(data, forKey: Keys.filters)
+            }
+        }
+    }
 
     @Published var apiKey: String {
         didSet { UserDefaults.standard.set(apiKey, forKey: Keys.apiKey) }
@@ -39,6 +43,7 @@ final class WorkshopViewModel: ObservableObject {
         static let apiKey = "workshop.steamWebAPIKey"
         static let username = "workshop.steamUsername"
         static let folders = "workshop.libraryFolders"
+        static let filters = "workshop.filters"
     }
 
     private let api = SteamWorkshopAPI()
@@ -47,19 +52,47 @@ final class WorkshopViewModel: ObservableObject {
     private var webPage = 1
     private var canLoadMore = true
     private var searchTask: Task<Void, Never>?
+    private var filterDebounce: Task<Void, Never>?
 
     init() {
         let defaults = UserDefaults.standard
         apiKey = defaults.string(forKey: Keys.apiKey) ?? ""
         steamUsername = defaults.string(forKey: Keys.username) ?? ""
+        filters = defaults.data(forKey: Keys.filters).flatMap { try? JSONDecoder().decode(WorkshopFilters.self, from: $0) } ?? WorkshopFilters()
         extraFolders = (defaults.stringArray(forKey: Keys.folders) ?? []).map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
     var hasAPIKey: Bool { !apiKey.trimmingCharacters(in: .whitespaces).isEmpty }
     var steamCMDPath: URL? { SteamCMDDownloader.locate() }
 
+    /// 已下载模式在本地按关键词和筛选条件过滤；在线模式由服务端过滤
     var items: [WorkshopItem] {
-        mode == .library ? libraryItems : onlineItems
+        mode == .library ? libraryItems.filter { filters.matches($0, query: query) } : onlineItems
+    }
+
+    /// 筛选条件变化：在线模式防抖后重新搜索（连续点选多个标签只发一次请求）
+    func filtersDidChange() {
+        guard mode == .online else { return }
+        filterDebounce?.cancel()
+        filterDebounce = Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            search(reset: true)
+        }
+    }
+
+    func resetFilters() {
+        filters = WorkshopFilters()
+    }
+
+    /// 点击信息面板里的标签：题材标签加入筛选，其余作为关键词搜索
+    func applyTag(_ tag: String) {
+        if WorkshopTags.isGenre(tag) {
+            filters.genres = [tag]
+        } else {
+            query = tag
+            if mode == .online { search(reset: true) }
+        }
     }
 
     /// 本地库根目录：Steam / steamcmd 默认下载目录 + 用户添加的文件夹
@@ -167,9 +200,7 @@ final class WorkshopViewModel: ObservableObject {
                     let page = try await api.query(
                         apiKey: apiKey.trimmingCharacters(in: .whitespaces),
                         text: query,
-                        sort: sort,
-                        type: typeFilter,
-                        includeQuestionable: includeQuestionable,
+                        filters: filters,
                         cursor: cursor
                     )
                     newItems = page.items
@@ -179,9 +210,7 @@ final class WorkshopViewModel: ObservableObject {
                     // 无 API Key：解析工坊网页
                     newItems = try await api.browseWeb(
                         text: query,
-                        sort: sort,
-                        type: typeFilter,
-                        includeQuestionable: includeQuestionable,
+                        filters: filters,
                         page: webPage
                     )
                     webPage += 1

@@ -5,42 +5,268 @@
 
 import SwiftUI
 
-/// 创意工坊在线浏览的筛选面板
-struct WorkshopFilterPanel: View {
-    @EnvironmentObject private var workshop: WorkshopViewModel
+// MARK: - Glass panel building blocks
+
+/// 深色玻璃面板：与沉浸式界面统一风格（替代系统 popover，避免浅色外观下白底白字）
+struct GlassPanel<Content: View>: View {
+    var width: CGFloat = 340
+    var maxHeight: CGFloat = 600
+    @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("类型").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Picker("类型", selection: $workshop.typeFilter) {
-                    ForEach(WorkshopTypeFilter.allCases) { Text($0.label).tag($0) }
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                content()
+            }
+            .padding(18)
+            .frame(width: width, alignment: .leading)
+        }
+        .frame(width: width)
+        .frame(maxHeight: maxHeight)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Color.black.opacity(0.45), in: shape)
+        .background(.ultraThinMaterial, in: shape)
+        .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .clipShape(shape)
+        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+struct GlassSection<Content: View>: View {
+    let title: String
+    var trailing: String? = nil
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                if let trailing {
+                    Spacer()
+                    Text(trailing)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
+            }
+            content()
+        }
+    }
+}
+
+struct GlassChip: View {
+    let title: String
+    let isOn: Bool
+    var tint: Color = .white
+    var disabled = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(isOn ? (tint == .white ? .black : .white) : .white.opacity(0.8))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(isOn ? (tint == .white ? Color.white.opacity(0.92) : tint.opacity(0.8)) : Color.white.opacity(0.08))
+                )
+                .overlay(Capsule().stroke(.white.opacity(isOn ? 0 : 0.12), lineWidth: 0.5))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .animation(.easeOut(duration: 0.15), value: isOn)
+    }
+}
+
+/// 自动换行的流式布局（标签云）
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews: subviews, maxWidth: proposal.width ?? .infinity)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        let width = rows.map(\.width).max() ?? 0
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews: subviews, maxWidth: bounds.width) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(subviews: Subviews, maxWidth: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var current = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let needed = current.indices.isEmpty ? size.width : current.width + spacing + size.width
+            if needed > maxWidth, !current.indices.isEmpty {
+                rows.append(current)
+                current = Row()
+            }
+            current.width = current.indices.isEmpty ? size.width : current.width + spacing + size.width
+            current.height = max(current.height, size.height)
+            current.indices.append(index)
+        }
+        if !current.indices.isEmpty { rows.append(current) }
+        return rows
+    }
+}
+
+// MARK: - Workshop filter panel
+
+/// 创意工坊筛选：类型、分级、排序、题材、特性、分辨率（对应 Steam 工坊的官方标签分类）
+struct WorkshopFilterPanel: View {
+    @EnvironmentObject private var workshop: WorkshopViewModel
+    var maxHeight: CGFloat = 600
+
+    var body: some View {
+        GlassPanel(width: 360, maxHeight: maxHeight) {
+            HStack {
+                Text("筛选")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(workshop.mode == .online ? "创意工坊" : "已下载")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+                if !workshop.filters.isDefault {
+                    Button("重置") { workshop.resetFilters() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("排序").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Picker("排序", selection: $workshop.sort) {
-                    ForEach(WorkshopSort.allCases) { Text($0.label).tag($0) }
+            GlassSection(title: "类型") {
+                FlowLayout {
+                    ForEach(WorkshopTypeFilter.allCases) { type in
+                        GlassChip(title: type.label, isOn: workshop.filters.type == type) {
+                            workshop.filters.type = type
+                        }
+                    }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 160)
             }
 
-            Toggle("显示「Questionable」分级", isOn: $workshop.includeQuestionable)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 12))
+            GlassSection(title: "年龄分级", trailing: "可多选") {
+                FlowLayout {
+                    ForEach(WorkshopRating.allCases) { rating in
+                        GlassChip(title: rating.label, isOn: workshop.filters.ratings.contains(rating), tint: tint(for: rating)) {
+                            toggle(rating)
+                        }
+                    }
+                }
+                if workshop.filters.ratings.contains(.mature) {
+                    Text("部分成人内容需要 Steam 账号完成年龄验证才会返回。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
 
-            Text("「应用」类型（Windows 程序）和 Mature 分级不会显示。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if workshop.mode == .online {
+                GlassSection(title: "排序") {
+                    FlowLayout {
+                        ForEach(WorkshopSort.allCases) { sort in
+                            GlassChip(title: sort.label, isOn: workshop.filters.sort == sort) {
+                                workshop.filters.sort = sort
+                            }
+                        }
+                    }
+                    if workshop.filters.sort == .trend {
+                        FlowLayout {
+                            ForEach(WorkshopTags.trendRanges, id: \.days) { range in
+                                GlassChip(title: range.label, isOn: workshop.filters.trendDays == range.days, tint: .accentColor) {
+                                    workshop.filters.trendDays = range.days
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+            }
+
+            GlassSection(title: "题材", trailing: "多选时需同时包含") {
+                FlowLayout {
+                    ForEach(WorkshopTags.genres, id: \.tag) { genre in
+                        GlassChip(title: genre.label, isOn: workshop.filters.genres.contains(genre.tag)) {
+                            workshop.filters.genres.formSymmetricDifference([genre.tag])
+                        }
+                    }
+                }
+            }
+
+            GlassSection(title: "特性") {
+                FlowLayout {
+                    ForEach(WorkshopTags.features, id: \.tag) { feature in
+                        GlassChip(title: feature.label, isOn: workshop.filters.features.contains(feature.tag)) {
+                            workshop.filters.features.formSymmetricDifference([feature.tag])
+                        }
+                    }
+                }
+            }
+
+            if workshop.mode == .online {
+                GlassSection(title: "分辨率") {
+                    FlowLayout {
+                        GlassChip(title: "不限", isOn: workshop.filters.resolution == nil) {
+                            workshop.filters.resolution = nil
+                        }
+                        ForEach(WorkshopTags.resolutions, id: \.tag) { resolution in
+                            GlassChip(title: resolution.label, isOn: workshop.filters.resolution == resolution.tag) {
+                                workshop.filters.resolution = resolution.tag
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text("「应用」类型是 Windows 程序，macOS 无法运行，已自动排除。")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.4))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
-        .frame(width: 280)
+    }
+
+    private func tint(for rating: WorkshopRating) -> Color {
+        switch rating {
+        case .everyone: .green
+        case .questionable: .orange
+        case .mature: .red
+        }
+    }
+
+    /// 至少保留一个分级
+    private func toggle(_ rating: WorkshopRating) {
+        var ratings = workshop.filters.ratings
+        if ratings.contains(rating) {
+            guard ratings.count > 1 else { return }
+            ratings.remove(rating)
+        } else {
+            ratings.insert(rating)
+        }
+        workshop.filters.ratings = ratings
     }
 }
 

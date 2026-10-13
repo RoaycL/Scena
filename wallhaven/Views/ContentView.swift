@@ -203,6 +203,8 @@ struct ContentView: View {
                     }
                 }
                 .padding(.top, 10)
+
+                filterOverlay(maxHeight: size.height - 90)
             }
         }
         .ignoresSafeArea()
@@ -217,14 +219,13 @@ struct ContentView: View {
         .onChange(of: currentTab) {
             if currentTab == .local { localViewModel.loadMedia() }
             if currentTab == .workshop { workshop.refreshLibrary() }
+            closeFilterPanels()
             ensureValidSelection()
         }
         .onChange(of: workshop.mode) {
             if workshop.mode == .online, workshop.onlineItems.isEmpty { workshop.search(reset: true) }
         }
-        .onChange(of: workshop.sort) { workshop.search(reset: true) }
-        .onChange(of: workshop.typeFilter) { workshop.search(reset: true) }
-        .onChange(of: workshop.includeQuestionable) { workshop.search(reset: true) }
+        .onChange(of: workshop.filters) { workshop.filtersDidChange() }
         .onChange(of: isWorkshopFilterPresented) { _, presented in immersive.setHold("workshopFilter", active: presented) }
         .onChange(of: currentItems.map(\.id), initial: true) {
             ensureValidSelection()
@@ -277,6 +278,34 @@ struct ContentView: View {
             }
         } message: {
             Text("请输入新的名称")
+        }
+    }
+
+    /// 筛选面板浮层：点击面板外部关闭
+    @ViewBuilder
+    private func filterOverlay(maxHeight: CGFloat) -> some View {
+        if isFilterPresented || isWorkshopFilterPresented {
+            ZStack(alignment: .topTrailing) {
+                Color.black.opacity(0.001)
+                    .onTapGesture { closeFilterPanels() }
+                Group {
+                    if isWorkshopFilterPresented {
+                        WorkshopFilterPanel(maxHeight: maxHeight)
+                    } else {
+                        FilterPanel()
+                    }
+                }
+                .padding(.top, 58)
+                .padding(.trailing, 16)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+            }
+        }
+    }
+
+    private func closeFilterPanels() {
+        withAnimation(.easeOut(duration: 0.18)) {
+            isFilterPresented = false
+            isWorkshopFilterPresented = false
         }
     }
 
@@ -345,17 +374,15 @@ struct ContentView: View {
                 .help("导入图片或视频（视频可设为动态壁纸）")
             case .workshop:
                 WorkshopModePicker()
-                if workshop.mode == .online {
-                    workshopSearchField
-                    workshopFilterButton
-                } else {
+                workshopSearchField
+                workshopFilterButton
+                if workshop.mode == .library {
                     Button { workshop.addLibraryFolder() } label: {
-                        Label("添加文件夹", systemImage: "folder.badge.plus")
-                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.85))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(.ultraThinMaterial, in: Capsule())
+                            .frame(width: 34, height: 34)
+                            .background(.ultraThinMaterial, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .help("添加 Wallpaper Engine 壁纸文件夹或工坊目录")
@@ -416,20 +443,21 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
-            TextField("搜索工坊或粘贴链接", text: $workshop.query)
+            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索已下载", text: $workshop.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
                 .focused($isSearchFocused)
                 .frame(width: isSearchFocused ? 170 : 120)
                 .onSubmit {
-                    workshop.search(reset: true)
+                    // 已下载模式是实时过滤，无需提交
+                    if workshop.mode == .online { workshop.search(reset: true) }
                     isSearchFocused = false
                 }
             if !workshop.query.isEmpty {
                 Button {
                     workshop.query = ""
-                    workshop.search(reset: true)
+                    if workshop.mode == .online { workshop.search(reset: true) }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
@@ -446,7 +474,9 @@ struct ContentView: View {
 
     private var workshopFilterButton: some View {
         // 工坊页顶栏元素较多，筛选按钮只显示图标
-        Button { isWorkshopFilterPresented.toggle() } label: {
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { isWorkshopFilterPresented.toggle() }
+        } label: {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
@@ -454,15 +484,24 @@ struct ContentView: View {
                 .background(.ultraThinMaterial, in: Circle())
         }
         .buttonStyle(.plain)
-        .help("筛选与排序：\(workshop.sort.label) · \(workshop.typeFilter.label)")
-        .popover(isPresented: $isWorkshopFilterPresented, arrowEdge: .bottom) {
-            WorkshopFilterPanel()
-                .environmentObject(workshop)
+        .overlay(alignment: .topTrailing) {
+            // 角标：已启用的筛选项数量
+            if workshop.filters.activeCount > 0 {
+                Text("\(workshop.filters.activeCount)")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(minWidth: 15, minHeight: 15)
+                    .background(.white, in: Circle())
+                    .offset(x: 3, y: -3)
+            }
         }
+        .help("筛选：类型、分级、题材、分辨率、排序")
     }
 
     private var filterButton: some View {
-        Button { isFilterPresented.toggle() } label: {
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { isFilterPresented.toggle() }
+        } label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
                 Text(viewModel.sortOrder.label).lineLimit(1)
@@ -475,10 +514,6 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .help("筛选与排序")
-        .popover(isPresented: $isFilterPresented, arrowEdge: .bottom) {
-            FilterPanel()
-                .environmentObject(viewModel)
-        }
     }
 
     private var folderMenu: some View {
@@ -613,7 +648,7 @@ struct ContentView: View {
     @ViewBuilder
     private var workshopEmptyState: some View {
         Image(systemName: "square.stack.3d.up").font(.system(size: 34, weight: .light))
-        if workshop.mode == .library {
+        if workshop.mode == .library && workshop.libraryItems.isEmpty {
             Text("还没有 Wallpaper Engine 壁纸")
             Text("添加从 Steam 下载的壁纸文件夹，或切换到「在线」浏览创意工坊")
                 .font(.caption)
@@ -624,7 +659,12 @@ struct ContentView: View {
             }
         } else {
             Text("没有找到符合条件的壁纸")
-            Button("调整筛选") { isWorkshopFilterPresented = true }.buttonStyle(.bordered)
+            HStack {
+                Button("调整筛选") { isWorkshopFilterPresented = true }.buttonStyle(.bordered)
+                if !workshop.filters.isDefault {
+                    Button("重置筛选") { workshop.resetFilters() }.buttonStyle(.bordered)
+                }
+            }
         }
     }
 
@@ -680,7 +720,9 @@ struct ContentView: View {
             eyebrow: isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(item.type.label)",
             title: item.title,
             meta: workshopMeta(item),
-            tags: item.tags
+            tags: item.tags,
+            onTag: { workshop.applyTag($0) },
+            tagLabel: WorkshopTags.label(for:)
         ) {
             if !item.type.isPlayable {
                 Text("Windows 程序，macOS 无法运行")

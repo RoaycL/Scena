@@ -124,7 +124,7 @@ nonisolated extension WorkshopItem {
     }
 }
 
-enum WorkshopSort: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum WorkshopSort: String, CaseIterable, Identifiable, Codable, Sendable {
     case trend, topRated, newest, mostSubscribed
 
     var id: String { rawValue }
@@ -149,7 +149,7 @@ enum WorkshopSort: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum WorkshopTypeFilter: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum WorkshopTypeFilter: String, CaseIterable, Identifiable, Codable, Sendable {
     case all, scene, video, web
 
     var id: String { rawValue }
@@ -171,6 +171,111 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable, Sendable {
         case .video: "Video"
         case .web: "Web"
         }
+    }
+}
+
+/// 年龄分级（工坊 Age Rating 标签）
+nonisolated enum WorkshopRating: String, CaseIterable, Identifiable, Codable, Sendable {
+    case everyone = "Everyone"
+    case questionable = "Questionable"
+    case mature = "Mature"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .everyone: "全年龄"
+        case .questionable: "轻度"
+        case .mature: "成人"
+        }
+    }
+}
+
+/// Wallpaper Engine 工坊官方标签（取自 Steam 创意工坊的筛选项）
+nonisolated enum WorkshopTags {
+    static let genres: [(tag: String, label: String)] = [
+        ("Anime", "动漫"), ("Landscape", "风景"), ("Nature", "自然"), ("Game", "游戏"),
+        ("Girls", "女孩"), ("Guys", "男孩"), ("Fantasy", "奇幻"), ("Sci-Fi", "科幻"),
+        ("Cyberpunk", "赛博朋克"), ("Abstract", "抽象"), ("Relaxing", "放松"), ("Music", "音乐"),
+        ("Pixel art", "像素"), ("Retro", "复古"), ("Animal", "动物"), ("Cartoon", "卡通"),
+        ("CGI", "CGI"), ("Technology", "科技"), ("Vehicle", "载具"), ("Television", "影视"),
+        ("Medieval", "中世纪"), ("Sports", "运动"), ("MMD", "MMD"), ("Memes", "梗图"),
+        ("Unspecified", "未分类"),
+    ]
+
+    static let features: [(tag: String, label: String)] = [
+        ("Audio responsive", "音频响应"), ("Customizable", "可自定义"), ("3D", "3D"),
+        ("HDR", "HDR"), ("Media Integration", "媒体联动"),
+    ]
+
+    static let resolutions: [(tag: String, label: String)] = [
+        ("1920 x 1080", "1080p"), ("2560 x 1440", "2K 1440p"), ("3840 x 2160", "4K"),
+        ("Ultrawide 2560 x 1080", "带鱼屏 2560×1080"), ("Ultrawide 3440 x 1440", "带鱼屏 3440×1440"),
+        ("Dual 3840 x 1080", "双屏 3840×1080"), ("Dual 5120 x 1440", "双屏 5120×1440"),
+        ("Portrait 1080 x 1920", "竖屏 1080×1920"), ("Dynamic resolution", "自适应分辨率"),
+    ]
+
+    /// 热门排序的时间范围（天），-1 表示全部时间
+    static let trendRanges: [(days: Int, label: String)] = [
+        (1, "今天"), (7, "本周"), (30, "本月"), (90, "三个月"), (365, "一年"), (-1, "全部"),
+    ]
+
+    private static let labels: [String: String] = Dictionary(
+        (genres + features + resolutions).map { ($0.tag, $0.label) },
+        uniquingKeysWith: { first, _ in first }
+    )
+
+    static func label(for tag: String) -> String { labels[tag] ?? tag }
+    static func isGenre(_ tag: String) -> Bool { genres.contains { $0.tag == tag } }
+}
+
+/// 创意工坊筛选条件：在线搜索转成 Steam 的 required / excluded 标签，本地库直接在内存里过滤
+nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
+    var type: WorkshopTypeFilter = .all
+    var ratings: Set<WorkshopRating> = [.everyone]
+    /// 题材（多选时需同时包含，与 Steam 工坊行为一致）
+    var genres: Set<String> = []
+    var features: Set<String> = []
+    var resolution: String?
+    var sort: WorkshopSort = .trend
+    var trendDays = 7
+
+    var isDefault: Bool { self == WorkshopFilters() }
+
+    /// 非默认的筛选项数量（显示在筛选按钮的角标上）
+    var activeCount: Int {
+        var count = genres.count + features.count
+        if type != .all { count += 1 }
+        if ratings != [.everyone] { count += 1 }
+        if resolution != nil { count += 1 }
+        return count
+    }
+
+    var requiredTags: [String] {
+        // 只要壁纸，排除素材包（Asset）和预设（Preset）
+        var tags = ["Wallpaper"]
+        if let typeTag = type.workshopTag { tags.append(typeTag) }
+        tags += genres.sorted() + features.sorted()
+        if let resolution { tags.append(resolution) }
+        return tags
+    }
+
+    /// 分级用排除法表达「或」：未勾选的分级全部排除
+    var excludedTags: [String] {
+        WorkshopRating.allCases.filter { !ratings.contains($0) }.map(\.rawValue) + ["Application"]
+    }
+
+    func matches(_ item: WorkshopItem, query: String) -> Bool {
+        if let typeTag = type.workshopTag, item.type.rawValue != typeTag.lowercased() { return false }
+        let rating = WorkshopRating(rawValue: item.contentRating ?? "") ?? .everyone
+        if !ratings.contains(rating) { return false }
+        let tags = Set(item.tags)
+        if !genres.isSubset(of: tags) || !features.isSubset(of: tags) { return false }
+
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return true }
+        return item.title.localizedCaseInsensitiveContains(keyword)
+            || item.tags.contains { $0.localizedCaseInsensitiveContains(keyword) || WorkshopTags.label(for: $0).contains(keyword) }
     }
 }
 
