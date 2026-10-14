@@ -25,8 +25,7 @@ struct GlassPanel<Content: View>: View {
         .frame(width: width)
         .frame(maxHeight: maxHeight)
         .fixedSize(horizontal: false, vertical: true)
-        .background(Color.black.opacity(0.45), in: shape)
-        .background(.ultraThinMaterial, in: shape)
+        .sceneGlass(in: shape, tint: .black.opacity(0.4))
         .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
         .clipShape(shape)
         .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
@@ -318,6 +317,6 @@ struct WorkshopModePicker: View {
             }
         }
         .padding(3)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
     }
 }

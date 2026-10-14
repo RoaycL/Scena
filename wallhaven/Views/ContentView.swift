@@ -372,6 +372,9 @@ struct ContentView: View {
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden
                 )
                     .frame(width: size.width, height: size.height)
+                    // 播放列表页：背景虚化，面板成为主体
+                    .blur(radius: page == .playlists && !Motion.reducesMotion ? 18 : 0)
+                    .animation(Motion.navigation, value: page == .playlists)
                     // 沉浸式页面双击图片：隐藏 / 显示界面，只看图片细节（同空格键）
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
@@ -654,7 +657,7 @@ struct ContentView: View {
             }
         }
         .padding(4)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
         .measureWidth($topBarTabsWidth)
         .animation(Motion.navigation, value: currentTab)
     }
@@ -720,7 +723,7 @@ struct ContentView: View {
                             .rotationEffect(.degrees(workshop.isSyncing ? 360 : 0))
                             .animation(workshop.isSyncing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: workshop.isSyncing)
                             .frame(width: 34, height: 34)
-                            .background(.ultraThinMaterial, in: Circle())
+                            .sceneGlass(in: Circle(), interactive: true)
                     }
                     .buttonStyle(.plain)
                     .disabled(workshop.isSyncing)
@@ -733,7 +736,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(width: 34, height: 34)
-                    .background(.ultraThinMaterial, in: Circle())
+                    .sceneGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(.plain)
             .help("设置")
@@ -763,7 +766,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
         .animation(Motion.panel, value: isSearchFocused)
     }
 
@@ -776,7 +779,7 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 34, height: 34)
-                .background(.ultraThinMaterial, in: Circle())
+                .sceneGlass(in: Circle(), interactive: true)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -814,7 +817,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
         .animation(Motion.panel, value: isSearchFocused)
     }
 
@@ -848,7 +851,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
         .animation(Motion.panel, value: isSearchFocused)
     }
 
@@ -861,7 +864,7 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 34, height: 34)
-                .background(.ultraThinMaterial, in: Circle())
+                .sceneGlass(in: Circle(), interactive: true)
         }
         .buttonStyle(.plain)
         .overlay(alignment: .topTrailing) {
@@ -890,7 +893,7 @@ struct ContentView: View {
             .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
-            .background(.ultraThinMaterial, in: Capsule())
+            .sceneGlass(in: Capsule())
         }
         .buttonStyle(.plain)
         .help("筛选与排序")
@@ -945,7 +948,7 @@ struct ContentView: View {
         .fixedSize()
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
     }
 
     private var selectedFolder: FavoriteFolder? {
@@ -964,7 +967,7 @@ struct ContentView: View {
         if page == .playlists {
             PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)))
                 .scrollContentBackground(.hidden)
-                .background(.regularMaterial)
+                .sceneGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: .black.opacity(0.35))
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
                 .environment(\.colorScheme, .dark)
@@ -973,6 +976,11 @@ struct ContentView: View {
                 .padding(.horizontal, 32)
                 .padding(.bottom, 24)
                 .onHover { immersive.setHold("playlists", active: $0) }
+                // 进入时从下方轻轻升起，离开时淡出
+                .transition(.asymmetric(
+                    insertion: Motion.reducesMotion ? .opacity : .offset(y: 36).combined(with: .opacity),
+                    removal: .opacity
+                ))
         } else if items.isEmpty && !isLoading {
             emptyState
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1188,7 +1196,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
+                .sceneGlass(in: Capsule())
             } else if workshopItem.isDownloaded {
                 PrimaryActionButton(title: "设为壁纸") { workshop.apply(workshopItem) }
             } else {

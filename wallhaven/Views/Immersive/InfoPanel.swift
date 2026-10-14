@@ -104,7 +104,7 @@ struct CircleIconLabel: View {
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(tint)
             .frame(width: 32, height: 32)
-            .background(.ultraThinMaterial, in: Circle())
+            .sceneGlass(in: Circle(), interactive: true)
             .overlay(Circle().stroke(.white.opacity(0.2), lineWidth: 0.5))
     }
 }

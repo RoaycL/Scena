@@ -27,7 +27,7 @@ struct ToastView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: Capsule())
+        .sceneGlass(in: Capsule())
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
         .environment(\.colorScheme, .dark)
@@ -114,7 +114,7 @@ struct LiveWallpaperStatus: View {
             .fixedSize()
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(.ultraThinMaterial, in: Capsule())
+            .sceneGlass(in: Capsule())
             .help(controller.isPaused ? "动态壁纸已暂停" : "动态壁纸正在桌面播放：\(content.title)")
         }
     }

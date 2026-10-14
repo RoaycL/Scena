@@ -13,7 +13,7 @@ struct WorkshopDownloadsButton: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
                 .frame(width: 34, height: 34)
-                .background(.ultraThinMaterial, in: Circle())
+                .sceneGlass(in: Circle(), interactive: true)
         }
         .buttonStyle(.plain)
         .help("下载任务")

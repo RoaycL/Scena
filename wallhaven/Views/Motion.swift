@@ -27,3 +27,22 @@ enum Motion {
         reducesMotion ? .easeInOut(duration: 0.12) : animation
     }
 }
+
+// MARK: - Glass
+
+extension View {
+    /// 统一的玻璃材质：macOS 26 用系统 Liquid Glass，旧系统退回磨砂材质。
+    /// - tint: 叠加的颜色，用于在明亮壁纸上保证文字可读（面板类）
+    /// - interactive: 可点击的元素，玻璃会响应悬停和按下
+    @ViewBuilder
+    func sceneGlass<S: Shape>(in shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            let base: Glass = tint.map { Glass.regular.tint($0) } ?? .regular
+            glassEffect(interactive ? base.interactive() : base, in: shape)
+        } else if let tint {
+            background(tint, in: shape).background(.ultraThinMaterial, in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
