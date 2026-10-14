@@ -82,14 +82,9 @@ struct ThumbnailStrip<MenuItems: View>: View {
 
     private func thumbnail(for item: GalleryItem) -> some View {
         let isSelected = item.id == selectedID
-        return KFImage(source: item.thumbnailSource)
-            .setProcessor(item.thumbnailProcessor)
-            .scaleFactor(ImageSizing.scale)
-            .cancelOnDisappear(true)
-            .placeholder { Color.white.opacity(0.08) }
-            .fade(duration: 0.2)
-            .resizable()
-            .scaledToFill()
+        return RetryingThumbnailImage(item: item)
+            // 工坊下载后预览地址会改变，新的来源不能沿用旧请求的失败状态。
+            .id("\(item.thumbnailSource?.cacheKey ?? item.id)-\(item.thumbnailProcessor.identifier)")
             .frame(width: thumbWidth, height: thumbHeight)
             .overlay {
                 let state = downloadState(item)
@@ -125,5 +120,110 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .animation(Motion.hover, value: isSelected)
             .animation(Motion.hover, value: hoveredID == item.id)
             .contentShape(Rectangle())
+    }
+}
+
+
+/// 缩略图加载兜底：只请求屏幕上看得见的卡片，但被中断或失败的会自动补上，不会一直空白。
+///  - 滑出屏幕就取消请求，长列表快速滚动时不堆积下载；
+///  - 被取消的卡片：等重新出现时再请求（仍在屏幕上的，稍后复查一次）；
+///  - 真正失败的：自动重试 2 次，仍失败再显示「重试」按钮。
+private struct RetryingThumbnailImage: View {
+    let item: GalleryItem
+    @State private var generation = 0
+    @State private var automaticRetries = 0
+    @State private var isVisible = false
+    @State private var isLoaded = false
+    @State private var needsReloadOnAppear = false
+    @State private var cancelCheckID: UUID?
+    @State private var failureID: UUID?
+    @State private var failureMessage: String?
+
+    var body: some View {
+        let attempt = generation
+        KFImage(source: item.thumbnailSource)
+            .setProcessor(item.thumbnailProcessor)
+            .scaleFactor(ImageSizing.scale)
+            .cancelOnDisappear(true)
+            // 加载中只用淡色占位；转圈只在重试时出现，避免一屏几十个同时转
+            .placeholder { Color.white.opacity(0.08) }
+            .fade(duration: Motion.reducesMotion ? 0 : 0.2)
+            .onSuccess { _ in
+                guard generation == attempt else { return }
+                isLoaded = true
+                needsReloadOnAppear = false
+                failureID = nil
+                failureMessage = nil
+                automaticRetries = 0
+            }
+            .onFailure { error in
+                guard generation == attempt, !isLoaded else { return }
+                if error.isTaskCancelled {
+                    // 被取消（滑出屏幕、列表刷新）：等卡片重新出现时补请求。
+                    // 取消回调是异步的，卡片可能已经重新出现了，所以稍后再看一眼（见下面的 task）
+                    needsReloadOnAppear = true
+                    cancelCheckID = UUID()
+                    return
+                }
+                failureMessage = error.localizedDescription
+                failureID = UUID()
+            }
+            .resizable()
+            .scaledToFill()
+            // 换编号强制重新请求。编号必须全局唯一：懒加载列表里各卡片若都用 0、1 这种重复的 id，
+            // 布局只会创建第一张卡片
+            .id("\(item.id)#\(attempt)")
+            .onAppear {
+                isVisible = true
+                if needsReloadOnAppear, !isLoaded {
+                    needsReloadOnAppear = false
+                    reload()
+                }
+            }
+            .onDisappear { isVisible = false }
+            .overlay {
+                if failureID != nil {
+                    if automaticRetries < 2 {
+                        ProgressView().controlSize(.small).tint(.white)
+                    } else {
+                        Button {
+                            automaticRetries = 0
+                            reload()
+                        } label: {
+                            Label("重试", systemImage: "arrow.clockwise")
+                                .font(.caption)
+                                .foregroundStyle(.white)
+                                .padding(6)
+                                .background(.black.opacity(0.5), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help(failureMessage ?? "重新加载缩略图")
+                        .accessibilityLabel("重新加载缩略图")
+                    }
+                }
+            }
+            .task(id: cancelCheckID) {
+                // 延迟复查，而不是立即重载：懒加载列表在布局时会反复创建、移除卡片，立即重载会和它互相触发
+                guard cancelCheckID != nil else { return }
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                guard isVisible, needsReloadOnAppear, !isLoaded, generation == attempt else { return }
+                needsReloadOnAppear = false
+                reload()
+            }
+            .task(id: failureID) {
+                guard let failureID, automaticRetries < 2 else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(automaticRetries == 0 ? 400 : 1000))
+                } catch { return }
+                guard self.failureID == failureID else { return }
+                automaticRetries += 1
+                reload()
+            }
+    }
+
+    private func reload() {
+        failureID = nil
+        failureMessage = nil
+        generation += 1
     }
 }
