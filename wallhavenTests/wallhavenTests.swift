@@ -216,6 +216,12 @@ struct wallhavenTests {
         #expect(query.contains("q=%2Banime%20-cat"))
     }
 
+    @Test func workshopDescriptionDropsBBCode() {
+        let raw = "[h1]标题[/h1]\r\n[b]4K[/b] 60fps\n[img]https://x/y.png[/img]\n[url=https://a.b]作者主页[/url]\n[list][*]昼夜切换[/list]\n\n\n\n结尾"
+        let text = SteamWorkshopAPI.plainText(fromBBCode: raw)
+        #expect(text == "标题\n4K 60fps\n\n作者主页\n• 昼夜切换\n\n结尾")
+    }
+
     @Test func updateVersionComparisonIsNumeric() {
         #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
         #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))

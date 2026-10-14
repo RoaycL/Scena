@@ -155,6 +155,93 @@ struct SteamWorkshopAPI: Sendable {
             .compactMap(Self.item(from:))
     }
 
+    /// 详情栏里的补充信息：简介、作者、评分、更新时间
+    struct ExtraInfo: Sendable, Equatable {
+        var description = ""
+        var authorName: String?
+        var authorURL: URL?
+        var updated: Date?
+        var favorited = 0
+        var votesUp: Int?
+        var votesDown: Int?
+    }
+
+    /// 有 API Key 时用 IPublishedFileService/GetDetails（含好评数据）并查作者昵称；没有时用无需 Key 的接口（没有评分和昵称）
+    func extraInfo(id: String, apiKey: String) async throws -> ExtraInfo {
+        let key = apiKey.trimmingCharacters(in: .whitespaces)
+        var detail: [String: Any]
+        if !key.isEmpty {
+            var components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/GetDetails/v1/")!
+            components.queryItems = [
+                .init(name: "key", value: key),
+                .init(name: "publishedfileids[0]", value: id),
+                .init(name: "includevotes", value: "true"),
+                .init(name: "short_description", value: "false"),
+            ]
+            let (data, _) = try await session.data(from: components.urlEncodingPlus!)
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let body = root["response"] as? [String: Any],
+                  let first = (body["publishedfiledetails"] as? [[String: Any]])?.first else {
+                throw WallperError.network("获取工坊详情失败。")
+            }
+            detail = first
+        } else {
+            var request = URLRequest(url: URL(string: "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/")!)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            request.httpBody = "itemcount=1&publishedfileids%5B0%5D=\(id)".data(using: .utf8)
+            let (data, _) = try await session.data(for: request)
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let body = root["response"] as? [String: Any],
+                  let first = (body["publishedfiledetails"] as? [[String: Any]])?.first else {
+                throw WallperError.network("获取工坊详情失败。")
+            }
+            detail = first
+        }
+
+        var info = ExtraInfo()
+        info.description = Self.plainText(fromBBCode: (detail["file_description"] ?? detail["description"]) as? String ?? "")
+        let updated = Self.int(detail["time_updated"])
+        if updated > 0 { info.updated = Date(timeIntervalSince1970: TimeInterval(updated)) }
+        info.favorited = Self.int(detail["favorited"])
+        if let votes = detail["vote_data"] as? [String: Any] {
+            info.votesUp = Self.int(votes["votes_up"])
+            info.votesDown = Self.int(votes["votes_down"])
+        }
+        let creator = (detail["creator"] as? String) ?? (detail["creator"].map { "\(Self.int($0))" })
+        if let creator, !creator.isEmpty, creator != "0" {
+            info.authorURL = URL(string: "https://steamcommunity.com/profiles/\(creator)/myworkshopfiles/?appid=\(WorkshopConstants.appID)")
+            if !key.isEmpty {
+                var components = URLComponents(string: "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/")!
+                components.queryItems = [.init(name: "key", value: key), .init(name: "steamids", value: creator)]
+                if let (data, _) = try? await session.data(from: components.urlEncodingPlus!),
+                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let player = ((root["response"] as? [String: Any])?["players"] as? [[String: Any]])?.first {
+                    info.authorName = player["personaname"] as? String
+                }
+            }
+        }
+        return info
+    }
+
+    /// 工坊简介是 BBCode：去掉图片和格式标签，链接只保留文字
+    static func plainText(fromBBCode text: String) -> String {
+        var result = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let rules: [(String, String)] = [
+            (#"\[img\].*?\[/img\]"#, ""),
+            (#"\[previewyoutube=[^\]]*\].*?\[/previewyoutube\]"#, ""),
+            (#"\[url=[^\]]*\](.*?)\[/url\]"#, "$1"),
+            (#"\[\*\]"#, "• "),
+            (#"\[/?[a-zA-Z0-9]+(=[^\]]*)?\]"#, ""),
+            (#"\n{3,}"#, "\n\n"),
+        ]
+        for (pattern, template) in rules {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { continue }
+            result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// 从工坊链接或纯数字中提取 ID
     static func extractIDs(from text: String) -> [String] {
         let pattern = #"(?:[?&]id=)?(\d{6,12})"#

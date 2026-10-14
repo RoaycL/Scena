@@ -473,6 +473,33 @@ final class WorkshopViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Detail info
+
+    private var extraInfoCache: [String: SteamWorkshopAPI.ExtraInfo] = [:]
+
+    /// 详情栏的简介、作者、评分（按条目缓存）。本地导入、没有工坊 ID 的条目读 project.json 里的简介
+    func extraInfo(for item: WorkshopItem) async -> SteamWorkshopAPI.ExtraInfo? {
+        if let cached = extraInfoCache[item.id] { return cached }
+        var info: SteamWorkshopAPI.ExtraInfo?
+        if item.workshopPageURL != nil {
+            info = try? await api.extraInfo(id: item.id, apiKey: apiKey)
+        }
+        if info == nil || info?.description.isEmpty == true, let folder = item.localFolder {
+            let local = await Task.detached { () -> String? in
+                guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+                return json["description"] as? String
+            }.value
+            if let local, !local.isEmpty {
+                var merged = info ?? SteamWorkshopAPI.ExtraInfo()
+                merged.description = SteamWorkshopAPI.plainText(fromBBCode: local)
+                info = merged
+            }
+        }
+        if let info { extraInfoCache[item.id] = info }
+        return info
+    }
+
     /// 网格滑到底部时调用
     func loadMore() {
         guard mode == .online else { return }

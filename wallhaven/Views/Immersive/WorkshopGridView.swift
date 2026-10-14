@@ -259,7 +259,11 @@ private struct WorkshopDetailPanel: View {
                     .placeholder { Color.white.opacity(0.06) }
                     .resizable()
                     .scaledToFill()
-                if let url = item.previewURL {
+                if let videoURL = item.nativeVideoURL {
+                    // 已下载的视频壁纸直接播放实际效果（硬件解码，窗口隐藏时自动暂停）
+                    LoopingVideoView(url: videoURL)
+                        .id(videoURL)
+                } else if let url = item.previewURL {
                     AnimatedPreviewImage(url: url)
                         .id(url)
                 }
@@ -309,6 +313,8 @@ private struct WorkshopDetailPanel: View {
             }
 
             actions(isDownloading: isDownloading)
+
+            WorkshopExtraInfoSection(item: item)
         }
     }
 
@@ -468,5 +474,110 @@ struct DownloadingOverlay: View {
         }
         .transition(.opacity)
         .allowsHitTesting(false)
+    }
+}
+
+/// 详情栏下半部分：作者、评分、更新时间、收藏数和简介
+private struct WorkshopExtraInfoSection: View {
+    @EnvironmentObject private var workshop: WorkshopViewModel
+    let item: WorkshopItem
+    @State private var info: SteamWorkshopAPI.ExtraInfo?
+    @State private var isLoading = false
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let info {
+                Divider().overlay(.white.opacity(0.12))
+                stats(info)
+                if !info.description.isEmpty {
+                    description(info.description)
+                }
+            } else if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text("正在读取简介…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+        .task(id: item.id) {
+            info = nil
+            isExpanded = false
+            isLoading = true
+            info = await workshop.extraInfo(for: item)
+            isLoading = false
+        }
+    }
+
+    private func stats(_ info: SteamWorkshopAPI.ExtraInfo) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if info.authorName != nil || info.authorURL != nil {
+                row("person.crop.circle") {
+                    if let url = info.authorURL {
+                        Link(destination: url) {
+                            HStack(spacing: 3) {
+                                Text(info.authorName ?? "作者的工坊主页")
+                                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
+                            }
+                        }
+                        .help("在浏览器中查看作者的全部作品")
+                    } else if let name = info.authorName {
+                        Text(name)
+                    }
+                }
+            }
+            if let up = info.votesUp, let down = info.votesDown, up + down > 0 {
+                let percent = Int((Double(up) / Double(up + down) * 100).rounded())
+                row("hand.thumbsup") {
+                    Text("好评 \(percent)%").foregroundStyle(percent >= 80 ? .green : .white.opacity(0.85))
+                    Text("· \((up + down).formatted()) 个评价").foregroundStyle(.white.opacity(0.5))
+                }
+            }
+            if info.favorited > 0 {
+                row("heart") { Text("\(info.favorited.formatted()) 人收藏") }
+            }
+            if let updated = info.updated {
+                row("clock.arrow.circlepath") {
+                    Text("更新于 \(updated.formatted(date: .abbreviated, time: .omitted))")
+                }
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.white.opacity(0.85))
+    }
+
+    private func row<Content: View>(_ icon: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 16)
+            HStack(spacing: 4) { content() }
+                .lineLimit(1)
+        }
+    }
+
+    private func description(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("简介")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(1.5)
+                .foregroundStyle(.white.opacity(0.5))
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineSpacing(3)
+                .lineLimit(isExpanded ? nil : 8)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if text.count > 160 || text.filter({ $0 == "\n" }).count > 6 {
+                Button(isExpanded ? "收起" : "展开全部") {
+                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+            }
+        }
     }
 }
