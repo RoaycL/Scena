@@ -125,6 +125,21 @@ private struct BackgroundLayer: View {
             }
     }
 
+    /// 视频文件本身的一帧作为封面（按窗口大小解码）；读不出来时退回壁纸预览图的模糊底色
+    private func videoPoster(_ url: URL, size: CGSize) -> some View {
+        KFImage(source: .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1)))
+            .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
+            .scaleFactor(ImageSizing.scale)
+            .loadDiskFileSynchronously(false)
+            .cancelOnDisappear(true)
+            .onSuccess { _ in signalReady() }
+            .placeholder { ambientPoster(size: size) }
+            .resizable()
+            .scaledToFill()
+            .frame(width: size.width, height: size.height)
+            .clipped()
+    }
+
     /// 动态壁纸的封面：清晰显示（不模糊），读取失败时什么也不显示，由外层保留上一张
     private func poster(size: CGSize) -> some View {
         KFImage(source: item.thumbnailSource)
@@ -158,6 +173,15 @@ private struct BackgroundLayer: View {
                 poster(size: size)
                 if !staticOnly {
                     LoopingVideoView(url: url, onReady: { liveDidBecomeReady() })
+                        .frame(width: size.width, height: size.height)
+                        .opacity(isLiveReady ? 1 : 0)
+                }
+            } else if let videoURL = item.playableWorkshopItem?.nativeVideoURL {
+                // 工坊视频壁纸：直接用 AVFoundation 硬件解码、从磁盘流式播放（网页渲染器要先把整个文件读进来，大文件很慢）。
+                // 封面取视频本身的画面，构图和随后淡入的视频完全一致
+                videoPoster(videoURL, size: size)
+                if !staticOnly {
+                    LoopingVideoView(url: videoURL, onReady: { liveDidBecomeReady() })
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
                 }

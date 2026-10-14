@@ -101,10 +101,13 @@ final class WorkshopSchemeHandler: NSObject, WKURLSchemeHandler {
         defer { try? handle.close() }
         let total = Int((try? handle.seekToEnd()) ?? 0)
 
-        // 支持 Range 请求（<video> 需要）
+        // 支持 Range 请求（<video> 需要）。<video> 一开始请求「bytes=0-」（到文件末尾），
+        // 如果照单全收，几百 MB 的视频要整个读进内存才能开始播放；每次最多回 4 MB，
+        // WebKit 会按需继续请求后面的部分，首帧几乎立即出来
         if let range, let match = range.firstMatch(of: /bytes=(\d*)-(\d*)/), total > 0 {
             let start = Int(match.1) ?? 0
-            let end = min(Int(match.2) ?? (total - 1), total - 1)
+            let chunk = 4 * 1024 * 1024
+            let end = min(Int(match.2) ?? (total - 1), total - 1, start + chunk - 1)
             guard start <= end else { return nil }
             if headOnly { return ReadResult(data: Data(), totalSize: total, rangeStart: start, rangeEnd: end) }
             try? handle.seek(toOffset: UInt64(start))
