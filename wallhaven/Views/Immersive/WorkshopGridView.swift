@@ -374,10 +374,7 @@ private struct WorkshopDetailPanel: View {
                 .background(.white.opacity(0.1), in: Capsule())
             } else {
                 Button { workshop.apply(item) } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: item.isDownloaded ? "play.fill" : "arrow.down")
-                        Text(item.isDownloaded ? "设为动态壁纸" : "下载并应用")
-                    }
+                    Text(item.isDownloaded ? "设为壁纸" : "下载并应用")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity)

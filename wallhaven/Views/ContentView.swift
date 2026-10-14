@@ -1097,7 +1097,7 @@ struct ContentView: View {
                     local.url.pathExtension.uppercased(),
                 ]
             ) {
-                PrimaryActionButton(title: local.isVideo ? "设为动态壁纸" : "设为壁纸") { localViewModel.applyWallpaper(local) }
+                PrimaryActionButton(title: "设为壁纸") { localViewModel.applyWallpaper(local) }
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
                     NSWorkspace.shared.activateFileViewerSelecting([local.url])
                 }
@@ -1147,9 +1147,9 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(.ultraThinMaterial, in: Capsule())
             } else if workshopItem.isDownloaded {
-                PrimaryActionButton(title: "设为动态壁纸") { workshop.apply(workshopItem) }
+                PrimaryActionButton(title: "设为壁纸") { workshop.apply(workshopItem) }
             } else {
-                PrimaryActionButton(title: "下载并应用", systemImage: "arrow.down") { workshop.apply(workshopItem) }
+                PrimaryActionButton(title: "下载并应用") { workshop.apply(workshopItem) }
             }
 
             if workshop.isLoggedIn, workshopItem.workshopPageURL != nil {
@@ -1231,14 +1231,14 @@ struct ContentView: View {
             Divider()
             Button("在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
         case .local(let local):
-            Button(local.isVideo ? "设为动态壁纸" : "设为壁纸") { localViewModel.applyWallpaper(local) }
+            Button("设为壁纸") { localViewModel.applyWallpaper(local) }
             AddToPlaylistMenu(item: item)
             Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([local.url]) }
             Divider()
             Button("移到废纸篓", role: .destructive) { deleteLocal(local) }
         case .workshop(let workshopItem):
             if workshopItem.type.isPlayable {
-                Button(workshopItem.isDownloaded ? "设为动态壁纸" : "下载并应用") { workshop.apply(workshopItem) }
+                Button(workshopItem.isDownloaded ? "设为壁纸" : "下载并应用") { workshop.apply(workshopItem) }
             }
             if !workshopItem.isDownloaded, workshopItem.type.isPlayable {
                 Button("仅下载") { workshop.download(workshopItem) }

@@ -81,15 +81,11 @@ struct InfoPanel<Actions: View>: View {
 
 struct PrimaryActionButton: View {
     let title: String
-    var systemImage = "arrow.up.right"
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Text(title).font(.system(size: 12, weight: .semibold))
-                Image(systemName: systemImage).font(.system(size: 10, weight: .semibold))
-            }
+            Text(title).font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.black)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
