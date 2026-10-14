@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import Combine
 import Testing
 @testable import wallhaven
 
@@ -77,6 +78,29 @@ struct PlaylistEditingTests {
         #expect(state.insertionPlaylistID == nil)
         state.update(point: CGPoint(x: 500, y: 500), playlistID: source, ids: ["a", "b", "c"])
         #expect(state.sidebarTargetID == nil && state.insertionPlaylistID == nil)
+    }
+
+    @Test @MainActor func pointerMovementWithinSameDropTargetDoesNotPublishPageChanges() {
+        let source = UUID()
+        let state = PlaylistDragState()
+        state.frames = [
+            "viewport": CGRect(x: 0, y: 0, width: 400, height: 120),
+            "a": CGRect(x: 0, y: 0, width: 100, height: 100),
+            "b": CGRect(x: 110, y: 0, width: 100, height: 100)
+        ]
+        state.begin(PlaylistDragPayload(playlistID: source, ids: ["b"]))
+        defer { state.end() }
+        state.update(point: CGPoint(x: 10, y: 40), playlistID: source, ids: ["a", "b"])
+        var pageChanges = 0, pointerChanges = 0
+        let pageSubscription = state.objectWillChange.sink { pageChanges += 1 }
+        let pointerSubscription = state.pointer.objectWillChange.sink { pointerChanges += 1 }
+        state.update(point: CGPoint(x: 20, y: 40), playlistID: source, ids: ["a", "b"])
+        state.update(point: CGPoint(x: 30, y: 40), playlistID: source, ids: ["a", "b"])
+        #expect(pageChanges == 0)
+        #expect(pointerChanges == 2)
+        state.update(point: CGPoint(x: 380, y: 40), playlistID: source, ids: ["a", "b"])
+        #expect(pageChanges == 1)
+        withExtendedLifetime((pageSubscription, pointerSubscription)) {}
     }
 
     @Test func dragPayloadRetainsSourceListAndAllSelectedIDs() {

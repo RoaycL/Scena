@@ -2,6 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// 高频位置只由浮图观察，不传播到播放列表页面。
+final class PlaylistDragPointer: ObservableObject {
+    @Published var location = CGPoint.zero
+}
+
 /// 拖动期间用窗口鼠标位置驱动边缘滚动；松手或离开页面立即停止。
 final class PlaylistDragState: ObservableObject {
     @Published var payload: PlaylistDragPayload?
@@ -12,7 +17,7 @@ final class PlaylistDragState: ObservableObject {
     private var timer: Timer?
     private(set) var isCancelled = false
     var frames: [String: CGRect] = [:]
-    @Published var location = CGPoint.zero
+    let pointer = PlaylistDragPointer()
 
     func attach(_ scrollView: NSScrollView) { self.scrollView = scrollView }
     func begin(_ payload: PlaylistDragPayload) {
@@ -23,28 +28,34 @@ final class PlaylistDragState: ObservableObject {
         }
     }
     func update(point: CGPoint, playlistID: UUID, ids: [String]) {
-        location = point
+        if pointer.location != point { pointer.location = point }
         guard let payload else { return }
-        sidebarTargetID = frames.first(where: { $0.key.hasPrefix("list-") && $0.value.contains(point) })
+        var target = frames.first(where: { $0.key.hasPrefix("list-") && $0.value.contains(point) })
             .flatMap { UUID(uuidString: String($0.key.dropFirst(5))) }
-        if sidebarTargetID == payload.playlistID { sidebarTargetID = nil }
-        guard sidebarTargetID == nil, frames["viewport"]?.contains(point) == true else {
-            insertionPlaylistID = nil; return
+        if target == payload.playlistID { target = nil }
+        let insertion = target == nil && frames["viewport"]?.contains(point) == true ? playlistID : nil
+        var before: String?
+        if insertion != nil {
+            let visible = ids.filter { frames[$0] != nil }
+            if let next = visible.first(where: { frames[$0]!.midX > point.x }) {
+                before = PlaylistEditing.insertionAnchor(ids: ids, hovered: next, after: false, selected: Set(payload.ids))
+            } else if let last = visible.last {
+                before = PlaylistEditing.insertionAnchor(ids: ids, hovered: last, after: true, selected: Set(payload.ids))
+            }
         }
-        insertionPlaylistID = playlistID
-        let visible = ids.filter { frames[$0] != nil }
-        if let next = visible.first(where: { frames[$0]!.midX > point.x }) {
-            insertionBeforeID = PlaylistEditing.insertionAnchor(ids: ids, hovered: next, after: false, selected: Set(payload.ids))
-        } else if let last = visible.last {
-            insertionBeforeID = PlaylistEditing.insertionAnchor(ids: ids, hovered: last, after: true, selected: Set(payload.ids))
-        } else { insertionBeforeID = nil }
+        if sidebarTargetID != target { sidebarTargetID = target }
+        if insertionPlaylistID != insertion { insertionPlaylistID = insertion }
+        if insertionBeforeID != before { insertionBeforeID = before }
     }
 
     func cancel() { end(); isCancelled = true }
     func end() {
         isCancelled = false
         timer?.invalidate(); timer = nil
-        payload = nil; insertionBeforeID = nil; insertionPlaylistID = nil; sidebarTargetID = nil
+        if payload != nil { payload = nil }
+        if insertionBeforeID != nil { insertionBeforeID = nil }
+        if insertionPlaylistID != nil { insertionPlaylistID = nil }
+        if sidebarTargetID != nil { sidebarTargetID = nil }
     }
     private func tick() {
         guard insertionPlaylistID != nil, sidebarTargetID == nil, let scrollView, let window = scrollView.window,
