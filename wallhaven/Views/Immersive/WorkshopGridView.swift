@@ -268,7 +268,7 @@ private struct WorkshopDetailPanel: View {
                         .id(url)
                 }
                 let state = workshop.downloadState(of: item)
-                if state != .none {
+                if state != .none && state != .completed {
                     DownloadingOverlay(state: state, large: true)
                 }
             }
@@ -461,7 +461,7 @@ struct DownloadingOverlay: View {
                                 .tint(.white)
                         }
                     } else {
-                        Image(systemName: state == .paused ? "pause.circle" : state == .failed ? "exclamationmark.circle" : state == .cancelled ? "stop.circle" : "clock")
+                        Image(systemName: state == .paused ? "pause.circle" : state == .failed ? "exclamationmark.circle" : state == .cancelled ? "stop.circle" : "hourglass")
                     }
                 }
                 .font(.system(size: large ? 34 : 22, weight: .semibold))

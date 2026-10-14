@@ -572,7 +572,24 @@ final class WorkshopViewModel: ObservableObject {
         downloadJobs[index].state = .completed
         downloadJobs[index].error = nil
         activeDownloads.remove(id)
-        scheduleLibraryRefresh()
+        if downloadJobs[index].applyWhenDone {
+            // 「下载并应用」：这一个下载完就立即应用，不等整批结束
+            Task {
+                await refreshLibraryAndWait()
+                applyIfRequested(id)
+            }
+        } else {
+            scheduleLibraryRefresh()
+        }
+    }
+
+    /// 下载完成且用户点过「下载并应用」的条目：应用一次并清除这个意图
+    private func applyIfRequested(_ id: String) {
+        guard let index = downloadJobs.firstIndex(where: { $0.id == id }),
+              downloadJobs[index].state == .completed, downloadJobs[index].applyWhenDone,
+              let item = libraryItems.first(where: { $0.id == id }), item.isDownloaded else { return }
+        downloadJobs[index].applyWhenDone = false
+        apply(item)
     }
 
     /// 一批里多个条目接连完成时合并成一次扫描，避免每完成一个就重扫整个资料库、刷新整个界面
@@ -714,8 +731,9 @@ final class WorkshopViewModel: ObservableObject {
                 }
             }
             // 在等待扫描前结算任务，暂停/恢复仍可在扫描期间正常操作。
+            // 批次中途已完成的条目状态已经是 completed，也要算进来
             let shouldApply = downloadJobs.first {
-                $0.applyWhenDone && $0.state == .downloading && result.downloaded[$0.id] != nil
+                $0.applyWhenDone && [.downloading, .completed].contains($0.state) && result.downloaded[$0.id] != nil
             }?.id
             downloadJobs = WorkshopDownloadQueue.settle(downloadJobs, batch: Set(batch),
                 downloaded: Set(result.downloaded.keys), failures: result.failed, interrupted: batchInterrupted)
@@ -729,11 +747,7 @@ final class WorkshopViewModel: ObservableObject {
                 }
             }
             await refreshLibraryAndWait()
-            if let id = shouldApply,
-               downloadJobs.contains(where: { $0.id == id && $0.state == .completed && $0.applyWhenDone }),
-               let item = libraryItems.first(where: { $0.id == id }) {
-                apply(item)
-            }
+            if let id = shouldApply { applyIfRequested(id) }
             downloadJobs = downloadJobs.map {
                 var job = $0
                 if job.state == .completed { job.applyWhenDone = false }
