@@ -35,6 +35,10 @@ nonisolated enum FileSizeText {
 
 /// 静音、无缝循环播放的视频 NSView，App 内背景和桌面动态壁纸共用
 final class LoopingVideoNSView: NSView {
+    /// 只负责显示画面，不接收鼠标：SwiftUI 的裁剪不限制 AppKit 视图的点击范围，
+    /// 视图比可见区域大时会盖住旁边的控件（如播放列表侧栏），吞掉点击
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     private let player = AVQueuePlayer()
     private let playerLayer = AVPlayerLayer()
     private var looper: AVPlayerLooper?

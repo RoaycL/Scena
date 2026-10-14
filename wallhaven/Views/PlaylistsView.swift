@@ -5,7 +5,6 @@
 
 import Kingfisher
 import SwiftUI
-import UniformTypeIdentifiers
 
 enum PlaylistsWindow {
     static let id = "playlists"
@@ -153,16 +152,16 @@ struct PlaylistsView: View {
                         )
                         .id(playlist.id)
                         // 拖动排序：拖起的行变淡，经过其他行时实时让位
-                        .opacity(draggingPlaylistID == playlist.id ? 0.4 : 1)
-                        .onDrag {
-                            draggingPlaylistID = playlist.id
-                            return NSItemProvider(object: "scena-playlist:\(playlist.id.uuidString)" as NSString)
-                        }
-                        .onDrop(of: [.text], delegate: PlaylistReorderDropDelegate(
-                            target: playlist.id, dragging: $draggingPlaylistID, manager: manager))
+                        .opacity(draggingPlaylistID == playlist.id ? 0.55 : 1)
+                        .scaleEffect(draggingPlaylistID == playlist.id && !Motion.reducesMotion ? 1.02 : 1)
+                        .animation(Motion.hover, value: draggingPlaylistID == playlist.id)
                         // 单击立即响应；双击另外识别（先写 count: 2 会让单击等待双击判定）
                         .onTapGesture { selectedID = playlist.id }
                         .simultaneousGesture(TapGesture(count: 2).onEnded { manager.play(playlist.id) })
+                        // 拖动排序：用自定义拖动手势（系统拖放 onDrag 会吞掉单击）。经过其他行时实时让位
+                        .simultaneousGesture(DragGesture(minimumDistance: 4, coordinateSpace: .named("playlistBoard"))
+                            .onChanged { value in reorderPlaylist(playlist.id, at: value.location) }
+                            .onEnded { _ in draggingPlaylistID = nil })
                         // 把下方队列里的壁纸拖到其他列表上：复制过去
                         .overlay {
                             RoundedRectangle(cornerRadius: Radius.card)
@@ -194,20 +193,6 @@ struct PlaylistsView: View {
                 withAnimation(Motion.hover) { selectedID = next }
                 withAnimation(Motion.scroll) { proxy.scrollTo(next) }
             })
-            .onDrop(of: [.text], isTargeted: nil) { _ in
-                // 拖到行之间的空隙或列表外松手：结束拖动
-                draggingPlaylistID = nil
-                return false
-            }
-            // 拖到窗口外取消时系统不会回调：松开鼠标后恢复被拖行的样子
-            .task(id: draggingPlaylistID) {
-                guard draggingPlaylistID != nil else { return }
-                while !Task.isCancelled, NSEvent.pressedMouseButtons & 1 != 0 {
-                    try? await Task.sleep(for: .milliseconds(150))
-                }
-                guard !Task.isCancelled else { return }
-                draggingPlaylistID = nil
-            }
             }
 
             Divider().padding(.vertical, 8)
@@ -221,6 +206,16 @@ struct PlaylistsView: View {
         }
         .frame(width: 236)
         .padding(.trailing, 16)
+    }
+
+    /// 拖动中的列表经过哪一行，就移到那一行的位置（行的位置来自 playlistDragFrame 记录的 list-<id>）
+    private func reorderPlaylist(_ id: UUID, at point: CGPoint) {
+        if draggingPlaylistID != id { draggingPlaylistID = id }
+        guard let target = manager.playlists.first(where: { other in
+            guard other.id != id, let frame = dragState.frames["list-\(other.id.uuidString)"] else { return false }
+            return point.y >= frame.minY && point.y <= frame.maxY
+        }) else { return }
+        withAnimation(Motion.hover) { manager.movePlaylist(id, to: target.id) }
     }
 
     private func copyEntries(_ payload: PlaylistDragPayload, to target: Playlist) -> Bool {
@@ -325,6 +320,8 @@ struct PlaylistsView: View {
                 ZStack(alignment: .bottomLeading) {
                     if let entry {
                         PlaylistLargePreview(entry: entry, onDisplayed: { displayedPreviewID = $0; failedPreviewID = nil }, onFailed: { failedPreviewID = $0 })
+                            // 预览只负责显示。视频、动态壁纸等内容的布局可能超出可见区域，参与点击命中会挡住旁边的侧栏
+                            .allowsHitTesting(false)
                         LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
                             .allowsHitTesting(false)
                         VStack(alignment: .leading, spacing: 6) {
@@ -808,6 +805,8 @@ private struct PlaylistLargePreview: View {
                 .placeholder { Color.black.opacity(0.2) }
                 .resizable()
                 .scaledToFill()
+                // 布局尺寸跟随预览区域，不被铺满后的图片撑大（否则上层的视频视图也会跟着变大）
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .blur(radius: 6)
                 .clipped()
             if let item {
@@ -1121,28 +1120,6 @@ struct PlaybackStateIcon: View {
     }
 }
 
-/// 侧栏拖动排序：经过哪一行就把被拖的列表移到那里，松手即完成
-private struct PlaylistReorderDropDelegate: DropDelegate {
-    let target: UUID
-    @Binding var dragging: UUID?
-    let manager: PlaylistManager
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging, dragging != target else { return }
-        withAnimation(Motion.hover) { manager.movePlaylist(dragging, to: target) }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-
-    func performDrop(info: DropInfo) -> Bool {
-        let handled = dragging != nil
-        dragging = nil
-        return handled
-    }
-
-    func validateDrop(info: DropInfo) -> Bool { dragging != nil }
-}
-
 /// 在所在区域上滚动鼠标滚轮或触控板时回调 ±1。触控板按累计距离触发，惯性滚动不触发，避免一甩跳好几个
 private struct ScrollWheelSwitcher: NSViewRepresentable {
     let onStep: (Int) -> Void
@@ -1159,6 +1136,10 @@ private struct ScrollWheelSwitcher: NSViewRepresentable {
             self.onStep = onStep
             super.init(frame: .zero)
         }
+
+        /// 只用来确定区域、监听滚轮，不能接收点击：垫在列表下面的 AppKit 视图在命中测试里
+        /// 会排在 SwiftUI 绘制的行前面，不返回 nil 就会把行上的单击全部截走
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
         @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
         override func viewDidMoveToWindow() {

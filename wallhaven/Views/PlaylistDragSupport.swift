@@ -84,6 +84,7 @@ struct PlaylistScrollAccessor: NSViewRepresentable {
     final class Probe: NSView {
         let onResolve: (NSScrollView) -> Void
         init(onResolve: @escaping (NSScrollView) -> Void) { self.onResolve = onResolve; super.init(frame: .zero) }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
         @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); resolve() }
         func resolve() {
