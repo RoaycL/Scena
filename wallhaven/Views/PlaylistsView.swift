@@ -603,8 +603,19 @@ struct AddToPlaylistItems: View {
     let entry: PlaylistEntry
 
     var body: some View {
+        // 已经包含这张壁纸的列表打勾；再点一次从该列表移除
         ForEach(manager.playlists) { playlist in
-            Button(MenuText.compact(playlist.name)) { manager.add([entry], to: playlist.id) }
+            Toggle(MenuText.compact(playlist.name), isOn: Binding(
+                get: { playlist.entries.contains { $0.id == entry.id } },
+                set: { add in
+                    if add {
+                        manager.add([entry], to: playlist.id)
+                    } else {
+                        manager.remove([entry.id], from: playlist.id)
+                        ToastCenter.shared.show("已从「\(playlist.name)」移除", style: .info)
+                    }
+                }
+            ))
         }
         if !manager.playlists.isEmpty { Divider() }
         Button("新建播放列表…") {
