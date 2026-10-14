@@ -1152,7 +1152,8 @@ struct ContentView: View {
                     help: isSubscribed ? "已订阅（点击取消订阅）" : "订阅到 Steam 账号"
                 ) { workshop.toggleSubscription(workshopItem) }
             }
-            if workshopItem.isDownloaded {
+            // 未下载的也能加：先下载，完成后加入选择的播放列表
+            if workshopItem.isDownloaded || workshopItem.type.isPlayable {
                 AddToPlaylistButton(item: item)
             }
             if let folder = workshopItem.localFolder {

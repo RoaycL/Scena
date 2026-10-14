@@ -410,7 +410,8 @@ private struct WorkshopDetailPanel: View {
                 if !item.isDownloaded, item.type.isPlayable, !isDownloading {
                     CircleIconButton(systemImage: "arrow.down.to.line", help: "仅下载") { workshop.download(item) }
                 }
-                if item.isDownloaded {
+                // 未下载的也能加：先下载，完成后加入选择的播放列表
+                if item.isDownloaded || item.type.isPlayable {
                     AddToPlaylistButton(item: GalleryItem(origin: .workshop(item)))
                 }
                 if item.workshopPageURL != nil {
