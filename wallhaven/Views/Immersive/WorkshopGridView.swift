@@ -63,6 +63,21 @@ struct WorkshopGridView<MenuItems: View>: View {
                         onlineFooter
                     }
                 }
+                .coordinateSpace(name: Self.scrollSpace)
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { viewportHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, height in viewportHeight = height }
+                })
+                .onPreferenceChange(GridFooterOffsetKey.self) { y in
+                    MainActor.assumeIsolated { updateNearBottom(footerY: y) }
+                }
+                .onChange(of: items.count) {
+                    // 新的一页加载完后，底部仍在可视范围附近（新增很少）：继续加载一页
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        if isNearBottom { workshop.loadMore() }
+                    }
+                }
                 .onChange(of: selectedID) { _, id in
                     guard let id else { return }
                     // anchor 为 nil：只在选中项不可见时滚动最小距离
@@ -109,21 +124,23 @@ struct WorkshopGridView<MenuItems: View>: View {
         }
         .frame(maxWidth: .infinity, minHeight: 44)
         .padding(.bottom, 8)
-        .onAppear {
-            isFooterVisible = true
-            workshop.loadMore()
-        }
-        .onDisappear { isFooterVisible = false }
-        .onChange(of: items.count) {
-            // 新的一页加载完后底部仍然可见（新增很少或被去重）：继续加载
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { footerCheck() }
-        }
+        // 用实际位置判断是否滚到了底部附近：底部不在懒加载网格里，onAppear 会在创建时就触发、之后再也不消失，
+        // 用它判断会让列表在后台不停翻页
+        .background(GeometryReader { geo in
+            Color.clear.preference(key: GridFooterOffsetKey.self, value: geo.frame(in: .named(Self.scrollSpace)).minY)
+        })
     }
 
-    @State private var isFooterVisible = false
+    private static var scrollSpace: String { "workshopGrid" }
+    @State private var viewportHeight: CGFloat = 0
+    @State private var isNearBottom = false
 
-    private func footerCheck() {
-        if isFooterVisible { workshop.loadMore() }
+    private func updateNearBottom(footerY: CGFloat) {
+        guard viewportHeight > 0 else { return }
+        let near = footerY < viewportHeight + 400
+        guard near != isNearBottom else { return }
+        isNearBottom = near
+        if near { workshop.loadMore() }
     }
 
     private func isLive(_ item: WorkshopItem) -> Bool {
@@ -580,4 +597,9 @@ private struct WorkshopExtraInfoSection: View {
             }
         }
     }
+}
+
+private struct GridFooterOffsetKey: PreferenceKey {
+    static let defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

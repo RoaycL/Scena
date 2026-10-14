@@ -463,7 +463,7 @@ final class WorkshopViewModel: ObservableObject {
                 guard searchGeneration == generation, !Task.isCancelled else { return }
                 pageStates.merge(nextStates) { _, new in new }
                 let hasMore = isIDLookup ? false : groups.contains { !(pageStates[$0]?.isDone ?? false) }
-                canLoadMore = hasMore
+                if canLoadMore != hasMore { canLoadMore = hasMore }
                 var existing = Set(onlineItems.map(\.id))
                 let fresh = newItems.filter { existing.insert($0.id).inserted }
                 onlineItems.append(contentsOf: fresh)
