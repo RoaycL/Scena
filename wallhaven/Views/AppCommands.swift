@@ -262,6 +262,8 @@ enum MainWindow {
     static let id = "main"
     static let navigationNotification = Notification.Name("wallhaven.mainWindowNavigate")
     static var requestedTab: MainTab?
+    /// 要在主窗口里定位的工坊壁纸（下载任务点击跳转）
+    static var requestedWorkshopItemID: String?
 
     /// SwiftUI 的 openWindow 只能在视图里拿到，主窗口出现时保存下来，供 Dock 图标重新打开窗口使用
     static var opener: (() -> Void)?
@@ -284,6 +286,13 @@ enum MainWindow {
             existingWindow?.makeKeyAndOrderFront(nil)
         }
         if tab != nil { NotificationCenter.default.post(name: navigationNotification, object: nil) }
+    }
+
+    /// 打开主窗口并定位到这个工坊壁纸：本地还在就去资料库，已删除就到创意工坊按 ID 查出来
+    static func reveal(workshopItemID id: String) {
+        requestedWorkshopItemID = id
+        show()
+        NotificationCenter.default.post(name: navigationNotification, object: nil)
     }
 }
 

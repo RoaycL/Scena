@@ -18,7 +18,7 @@ struct WorkshopDownloadsButton: View {
         .buttonStyle(.plain)
         .help("下载任务")
         .popover(isPresented: $isPresented) {
-            WorkshopDownloadsView()
+            WorkshopDownloadsView(isPopover: true)
                 .environmentObject(workshop)
         }
     }
@@ -26,17 +26,22 @@ struct WorkshopDownloadsButton: View {
 
 struct WorkshopDownloadsView: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
+    /// 弹出面板里点击任务跳转后收起面板；独立窗口保持打开
+    var isPopover = false
 
     var body: some View {
         // 进度每秒刷新，单独放在子视图里观察
-        WorkshopDownloadsList(progress: workshop.progress)
+        WorkshopDownloadsList(progress: workshop.progress, isPopover: isPopover)
             .environmentObject(workshop)
     }
 }
 
 private struct WorkshopDownloadsList: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
+    /// 在弹出面板里时，跳转后收起面板
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var progress: WorkshopDownloadProgress
+    var isPopover = false
 
     /// 进行中的排在前面，已完成的放到最后
     private var sortedJobs: [WorkshopDownloadJob] {
@@ -111,6 +116,32 @@ private struct WorkshopDownloadsList: View {
     private func row(_ job: WorkshopDownloadJob) -> some View {
         let entry = progress.entries[job.id]
         return HStack(alignment: .center, spacing: 10) {
+            Button {
+                MainWindow.reveal(workshopItemID: job.id)
+                if isPopover { dismiss() }
+            } label: {
+                rowText(job, entry: entry)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("在 Scena 中查看（已删除的会在创意工坊中按 ID 查找）")
+            Spacer(minLength: 8)
+            controls(job)
+        }
+        .contextMenu {
+            Button("在 Scena 中查看") {
+                MainWindow.reveal(workshopItemID: job.id)
+                if isPopover { dismiss() }
+            }
+            if let url = URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(job.id)") {
+                Button("在 Steam 中打开") { NSWorkspace.shared.open(url) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowText(_ job: WorkshopDownloadJob, entry: WorkshopDownloadProgress.Entry?) -> some View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(job.title).lineLimit(1).truncationMode(.middle)
                 if job.state == .downloading, let entry {
@@ -130,9 +161,6 @@ private struct WorkshopDownloadsList: View {
                     Text(error).font(.caption).foregroundStyle(.red).lineLimit(3)
                 }
             }
-            Spacer(minLength: 8)
-            controls(job)
-        }
     }
 
     private func progressText(_ entry: WorkshopDownloadProgress.Entry) -> String {

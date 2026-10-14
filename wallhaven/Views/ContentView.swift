@@ -321,12 +321,37 @@ struct ContentView: View {
     }
 
     private func handleMenuNavigation() {
+        if let id = MainWindow.requestedWorkshopItemID {
+            MainWindow.requestedWorkshopItemID = nil
+            revealWorkshopItem(id)
+            return
+        }
         guard let tab = MainWindow.requestedTab else { return }
         MainWindow.requestedTab = nil
         switchTab(tab)
         if tab == .library {
             localViewModel.loadMedia()
             workshop.refreshLibrary()
+        }
+    }
+
+    /// 下载任务点击跳转：本地还在就到「资料库 · 创意工坊」选中它，已删除就到「发现 · 创意工坊」按 ID 查询
+    private func revealWorkshopItem(_ id: String) {
+        // 和鼠标点选一样：暂停画廊的自动轮播，不让跳转过来的壁纸几秒后被换掉
+        immersive.userDidSelectThumbnail()
+        let selectionID = GalleryItem(origin: .workshop(WorkshopItem(id: id, title: "", type: .unknown, tags: []))).id
+        if workshop.libraryItems.contains(where: { $0.id == id }) {
+            librarySource = .workshop
+            libraryQuery = ""
+            switchTab(.library)
+            localSelectionID = selectionID
+        } else {
+            discoverSource = .workshop
+            switchTab(.discover)
+            workshop.mode = .online
+            workshop.query = id
+            workshop.search(reset: true)
+            workshopSelectionID = selectionID
         }
     }
 
@@ -374,7 +399,8 @@ struct ContentView: View {
                     topBar(width: size.width)
                         // 兜底：即使放不下也只裁掉边缘，不会撑宽父视图、把整个界面推歪露出白边
                         .frame(width: size.width)
-                        .clipped()
+                        // 只裁左右（防止窄窗口时把界面撑宽）；上下留出空间，按钮角标不会被切掉
+                        .mask(Rectangle().padding(.vertical, -40))
                         .opacity(immersive.isChromeHidden ? 0 : 1)
                         .offset(y: immersive.isChromeHidden ? -12 : 0)
                         .allowsHitTesting(!immersive.isChromeHidden)
