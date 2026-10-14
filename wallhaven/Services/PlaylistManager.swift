@@ -110,6 +110,10 @@ final class PlaylistManager: ObservableObject {
 
     private let persistenceURL: URL
     private var timer: Timer?
+    private var applyTask: Task<Void, Never>?
+    private var playbackGeneration = 0
+    private let applier: (@MainActor (PlaylistEntry) async throws -> Void)?
+    private let playbackDefaults: UserDefaults
     /// 当前播放顺序（随机模式下是打乱后的条目 ID）
     private var order: [String] = []
     private let toast = ToastCenter.shared
@@ -126,7 +130,9 @@ final class PlaylistManager: ObservableObject {
         return folder.appendingPathComponent("playlists.json")
     }
 
-    init(storageURL: URL? = nil) {
+    init(storageURL: URL? = nil, playbackDefaults: UserDefaults = .standard, applier: (@MainActor (PlaylistEntry) async throws -> Void)? = nil) {
+        self.applier = applier
+        self.playbackDefaults = playbackDefaults
         persistenceURL = storageURL ?? Self.storageURL
         if let data = try? Data(contentsOf: persistenceURL),
            let decoded = try? JSONDecoder().decode([Playlist].self, from: data) {
@@ -269,6 +275,7 @@ final class PlaylistManager: ObservableObject {
             toast.show("播放列表是空的", style: .info)
             return
         }
+        invalidatePlayback()
         activeID = id
         isPaused = false
         rebuildOrder()
@@ -279,6 +286,7 @@ final class PlaylistManager: ObservableObject {
     }
 
     func stop() {
+        invalidatePlayback()
         isPaused = false
         timer?.invalidate()
         timer = nil
@@ -318,7 +326,7 @@ final class PlaylistManager: ObservableObject {
 
     /// App 启动时恢复：只重新计时，不立即切换
     func restore() {
-        let defaults = UserDefaults.standard
+        let defaults = playbackDefaults
         guard let raw = defaults.string(forKey: Keys.activeID), let id = UUID(uuidString: raw),
               playlists.contains(where: { $0.id == id }) else { return }
         activeID = id
@@ -328,6 +336,7 @@ final class PlaylistManager: ObservableObject {
     }
 
     private func step(by offset: Int) {
+        invalidatePlayback()
         guard activeID != nil, !order.isEmpty else { return }
         let index = currentEntryID.flatMap { order.firstIndex(of: $0) } ?? -1
         var nextIndex = index + offset
@@ -372,16 +381,31 @@ final class PlaylistManager: ObservableObject {
         order = ids
     }
 
+    private func invalidatePlayback() {
+        playbackGeneration += 1
+        applyTask?.cancel()
+        applyTask = nil
+    }
+
     private func applyEntry(_ entryID: String, attemptsLeft: Int) {
         guard let entry = activePlaylist?.entries.first(where: { $0.id == entryID }) else { return }
+        invalidatePlayback()
+        let generation = playbackGeneration
+        let playlistID = activeID
         currentEntryID = entryID
         persistState()
         scheduleTimer()
 
-        Task {
+        applyTask = Task {
+            let isCurrent = {
+                generation == self.playbackGeneration && self.activeID == playlistID &&
+                    self.activePlaylist?.entries.contains(where: { $0.id == entryID }) == true
+            }
             do {
-                try await apply(entry)
+                try await apply(entry, isCurrent: isCurrent)
             } catch {
+                // 旧任务的成功和失败都不能干扰新的播放状态。
+                guard isCurrent(), !Task.isCancelled, !(error is CancellationError) else { return }
                 toast.show("「\(entry.title)」无法播放：\(error.localizedDescription)", style: .error)
                 // 跳过失败的条目；全部失败时停止，避免死循环
                 if attemptsLeft > 1, let index = order.firstIndex(of: entryID), order.count > 1 {
@@ -393,21 +417,35 @@ final class PlaylistManager: ObservableObject {
         }
     }
 
-    private func apply(_ entry: PlaylistEntry) async throws {
+    private func apply(_ entry: PlaylistEntry, isCurrent: () -> Bool) async throws {
+        func checkCurrent() throws {
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+        }
+        try checkCurrent()
+        if let applier {
+            // 注入的应用器同样需要在异步准备完成、产生副作用前检查取消。
+            try await applier(entry)
+            try checkCurrent()
+            return
+        }
         switch entry.kind {
         case .wallhaven:
             guard let wallpaper = entry.wallhaven else { throw WallperError.wallpaper("缺少壁纸信息。") }
             let fileURL = try await DownloadService().download(wallpaper)
+            try checkCurrent()
             try WallpaperManager.applyWallpaper(from: fileURL)
         case .local:
             guard let path = entry.path, FileManager.default.fileExists(atPath: path) else {
                 throw WallperError.wallpaper("文件不存在。")
             }
+            try checkCurrent()
             try WallpaperManager.applyWallpaper(from: URL(fileURLWithPath: path))
         case .workshop:
             guard let path = entry.path, let item = WorkshopItem.load(from: URL(fileURLWithPath: path)) else {
                 throw WallperError.wallpaper("工坊壁纸已被删除。")
             }
+            try checkCurrent()
             try LiveWallpaperController.shared.start(workshop: item)
         }
     }
@@ -422,7 +460,7 @@ final class PlaylistManager: ObservableObject {
     }
 
     private func persistState() {
-        let defaults = UserDefaults.standard
+        let defaults = playbackDefaults
         defaults.set(activeID?.uuidString, forKey: Keys.activeID)
         defaults.set(currentEntryID, forKey: Keys.currentEntryID)
     }
