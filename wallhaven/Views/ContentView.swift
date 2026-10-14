@@ -1287,7 +1287,7 @@ struct ContentView: View {
                     viewModel.searchTag(tag)
                 }
             ) {
-                PrimaryActionButton(title: "设为壁纸") { viewModel.downloadAndApply(wallpaper) }
+                ApplyWallpaperButton(item: item) { viewModel.downloadAndApply(wallpaper) }.id("apply-\(item.id)")
                 // 以壁纸 id 作为按钮身份：切换壁纸时直接换新按钮，只有同一张壁纸的状态变化才播放过渡动画
                 FavoriteMenuButton(wallpaper: wallpaper)
                     .id("favorite-\(wallpaper.id)")
@@ -1311,7 +1311,7 @@ struct ContentView: View {
                     local.url.pathExtension.uppercased(),
                 ]
             ) {
-                PrimaryActionButton(title: "设为壁纸") { localViewModel.applyWallpaper(local) }
+                ApplyWallpaperButton(item: item) { localViewModel.applyWallpaper(local) }.id("apply-\(item.id)")
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
                     NSWorkspace.shared.activateFileViewerSelecting([local.url])
                 }
@@ -1362,9 +1362,9 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .sceneGlass(in: Capsule())
             } else if workshopItem.isDownloaded {
-                PrimaryActionButton(title: "设为壁纸") { workshop.apply(workshopItem) }
+                ApplyWallpaperButton(item: item) { workshop.apply(workshopItem) }.id("apply-\(item.id)")
             } else {
-                PrimaryActionButton(title: "下载并应用") { workshop.apply(workshopItem) }
+                ApplyWallpaperButton(item: item, title: "下载并应用") { workshop.apply(workshopItem) }.id("apply-\(item.id)")
             }
 
             if workshop.isLoggedIn, workshopItem.workshopPageURL != nil {

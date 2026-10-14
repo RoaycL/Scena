@@ -16,6 +16,8 @@ struct Toast: Identifiable, Equatable {
     let style: Style
     /// 点击提示条时执行（如跳转到出问题的壁纸）；为 nil 时点击只是关闭
     var action: (() -> Void)? = nil
+    /// 提示条右侧操作的文字，如「查看」「撤销」
+    var actionTitle = "查看"
 
     static func == (lhs: Toast, rhs: Toast) -> Bool { lhs.id == rhs.id }
 }
@@ -27,10 +29,10 @@ final class ToastCenter: ObservableObject {
     @Published private(set) var current: Toast?
     private var dismissTask: Task<Void, Never>?
 
-    func show(_ message: String, style: Toast.Style = .info, action: (() -> Void)? = nil) {
+    func show(_ message: String, style: Toast.Style = .info, actionTitle: String = "查看", action: (() -> Void)? = nil) {
         dismissTask?.cancel()
         withAnimation(Motion.toast) {
-            current = Toast(message: message, style: style, action: action)
+            current = Toast(message: message, style: style, action: action, actionTitle: actionTitle)
         }
         // progress 类型会一直保留，直到被下一条提示替换
         guard style != .progress else { return }

@@ -133,24 +133,43 @@ final class LocalMediaViewModel: ObservableObject {
 
     func delete(item: LocalMediaItem) {
         do {
-            // 移到废纸篓，可恢复
-            try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+            // 移到废纸篓，可恢复；提示条上直接给「撤销」，不用去 Finder 里找
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: item.url, resultingItemURL: &trashed)
             if LiveWallpaperController.shared.currentURL == item.url {
                 LiveWallpaperController.shared.stop()
             }
             items.removeAll { $0.id == item.id }
-            toast.show("已移到废纸篓", style: .info)
+            let original = item.url
+            toast.show("已移到废纸篓", style: .info, actionTitle: "撤销") { [weak self] in
+                self?.restore(trashed as URL?, to: original)
+            }
         } catch {
             toast.show(error.localizedDescription, style: .error)
         }
     }
 
+    /// 撤销删除：从废纸篓移回原位置
+    private func restore(_ trashed: URL?, to original: URL) {
+        do {
+            guard let trashed else { throw CocoaError(.fileNoSuchFile) }
+            try FileManager.default.moveItem(at: trashed, to: original)
+            loadMedia()
+        } catch {
+            toast.show("无法恢复：文件已不在废纸篓中", style: .error)
+        }
+    }
+
     func applyWallpaper(_ item: LocalMediaItem) {
         PlaylistManager.shared.userDidApplyManually()
+        let feedbackID = GalleryItem(origin: .local(item)).id
+        ApplyFeedback.shared.begin(feedbackID)
         do {
             try WallpaperManager.applyWallpaper(from: item.url)
-            toast.show(item.isVideo ? "动态壁纸已启用" : "壁纸已应用", style: .success)
+            // 成功反馈在「设为壁纸」按钮上，不再弹提示条
+            ApplyFeedback.shared.finish(feedbackID, success: true)
         } catch {
+            ApplyFeedback.shared.finish(feedbackID, success: false)
             toast.show(error.localizedDescription, style: .error)
         }
     }

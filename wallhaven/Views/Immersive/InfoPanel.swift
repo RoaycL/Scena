@@ -79,19 +79,60 @@ struct InfoPanel<Actions: View>: View {
     }
 }
 
-struct PrimaryActionButton: View {
-    let title: String
+/// 「设为壁纸」：按钮本身显示过程和结果——设置中（转圈）→ 已设为壁纸（对勾，2 秒）；
+/// 这张正是当前桌面壁纸时常驻显示「当前壁纸」
+struct ApplyWallpaperButton: View {
+    @ObservedObject private var feedback = ApplyFeedback.shared
+    let item: GalleryItem
+    var title = "设为壁纸"
     let action: () -> Void
 
+    private enum Phase { case idle, applying, applied, current }
+
+    private var phase: Phase {
+        if feedback.applying.contains(item.id) { return .applying }
+        if feedback.justApplied == item.id { return .applied }
+        return item.isOnDesktop ? .current : .idle
+    }
+
     var body: some View {
+        let phase = phase
         Button(action: action) {
-            Text(title).font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 5) {
+                switch phase {
+                case .applying:
+                    ProgressView().controlSize(.mini).environment(\.colorScheme, .light)
+                        .transition(.opacity)
+                case .applied, .current:
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .transition(Motion.reducesMotion ? .opacity : .scale(scale: 0.4).combined(with: .opacity))
+                case .idle:
+                    EmptyView()
+                }
+                Text(label(for: phase))
+                    .contentTransition(.opacity)
+            }
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.black)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.white, in: Capsule())
+            // 「当前壁纸」是常驻状态，略微收敛，和可操作的白色主按钮区分开
+            .background(.white.opacity(phase == .current ? 0.78 : 1), in: Capsule())
+            .animation(Motion.hover, value: phase)
         }
         .buttonStyle(PressableButtonStyle())
+        .disabled(phase == .applying)
+        .help(phase == .current ? "已是当前桌面壁纸（点击重新设置）" : title)
+    }
+
+    private func label(for phase: Phase) -> String {
+        switch phase {
+        case .idle: title
+        case .applying: "设置中"
+        case .applied: "已设为壁纸"
+        case .current: "当前壁纸"
+        }
     }
 }
 

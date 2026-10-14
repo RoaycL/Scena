@@ -187,13 +187,28 @@ final class WallpaperViewModel: ObservableObject {
             }
         } else {
             if favorites.contains(wallpaper.id) {
+                let index = favoriteWallpapers.firstIndex { $0.id == wallpaper.id }
                 favorites.remove(wallpaper.id)
                 favoriteWallpapers.removeAll(where: { $0.id == wallpaper.id })
+                // 取消收藏可撤销：放回原来的位置
+                ToastCenter.shared.show("已取消收藏", style: .info, actionTitle: "撤销") { [weak self] in
+                    self?.restoreFavorite(wallpaper, at: index)
+                }
             } else {
                 favorites.insert(wallpaper.id)
                 favoriteWallpapers.append(wallpaper)
             }
         }
+        UserDefaults.standard.set(Array(favorites), forKey: favoritesKey)
+        if let data = try? JSONEncoder().encode(favoriteWallpapers) {
+            UserDefaults.standard.set(data, forKey: favoriteObjectsKey)
+        }
+    }
+
+    private func restoreFavorite(_ wallpaper: WallhavenWallpaper, at index: Int?) {
+        guard !favorites.contains(wallpaper.id) else { return }
+        favorites.insert(wallpaper.id)
+        favoriteWallpapers.insert(wallpaper, at: min(index ?? favoriteWallpapers.count, favoriteWallpapers.count))
         UserDefaults.standard.set(Array(favorites), forKey: favoritesKey)
         if let data = try? JSONEncoder().encode(favoriteWallpapers) {
             UserDefaults.standard.set(data, forKey: favoriteObjectsKey)
@@ -458,10 +473,9 @@ final class WallpaperViewModel: ObservableObject {
         Task {
             defer { downloadingIDs.remove(wallpaper.id) }
             do {
-                ToastCenter.shared.show("正在下载…", style: .progress)
+                // 进度和完成都显示在下载按钮上（转圈 → 绿色对勾），不再弹提示条
                 _ = try await downloader.download(wallpaper)
                 downloadedIDs.insert(wallpaper.id)
-                ToastCenter.shared.show("已保存到本地", style: .success)
                 NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
                 ToastCenter.shared.show("下载失败：\(error.localizedDescription)", style: .error)
@@ -472,16 +486,19 @@ final class WallpaperViewModel: ObservableObject {
     func downloadAndApply(_ wallpaper: WallhavenWallpaper) {
         PlaylistManager.shared.userDidApplyManually()
         downloadingIDs.insert(wallpaper.id)
+        // 进度和结果显示在「设为壁纸」按钮上：设置中 → 已设为壁纸
+        let feedbackID = GalleryItem(origin: .remote(wallpaper)).id
+        ApplyFeedback.shared.begin(feedbackID)
         Task {
             defer { downloadingIDs.remove(wallpaper.id) }
             do {
-                ToastCenter.shared.show("正在下载并设为壁纸…", style: .progress)
                 let localURL = try await downloader.download(wallpaper)
                 downloadedIDs.insert(wallpaper.id)
                 try WallpaperManager.applyWallpaper(from: localURL)
-                ToastCenter.shared.show("壁纸已应用", style: .success)
+                ApplyFeedback.shared.finish(feedbackID, success: true)
                 NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
+                ApplyFeedback.shared.finish(feedbackID, success: false)
                 ToastCenter.shared.show("设置失败：\(error.localizedDescription)", style: .error)
             }
         }

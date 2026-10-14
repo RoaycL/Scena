@@ -383,13 +383,16 @@ final class WorkshopViewModel: ObservableObject {
         if unsubscribe { setSubscribed(item, false) }
         guard let folder = item.localFolder else { return }
         do {
-            try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: folder, resultingItemURL: &trashed)
             if LiveWallpaperController.shared.currentURL?.standardizedFileURL == folder.standardizedFileURL {
                 LiveWallpaperController.shared.stop()
             }
             libraryItems.removeAll { $0.id == item.id }
             mergeDownloadState()
-            toast.show("已移到废纸篓", style: .info)
+            toast.show(unsubscribe ? "已移到废纸篓并取消订阅" : "已移到废纸篓", style: .info, actionTitle: "撤销") { [weak self] in
+                self?.restoreFromTrash(trashed as URL?, to: folder, item: item, resubscribe: unsubscribe)
+            }
         } catch {
             toast.show(error.localizedDescription, style: .error)
         }
@@ -966,16 +969,32 @@ final class WorkshopViewModel: ObservableObject {
         }
     }
 
+    /// 撤销删除：文件夹从废纸篓移回，删除时一起取消的订阅也恢复
+    private func restoreFromTrash(_ trashed: URL?, to folder: URL, item: WorkshopItem, resubscribe: Bool) {
+        do {
+            guard let trashed else { throw CocoaError(.fileNoSuchFile) }
+            try FileManager.default.moveItem(at: trashed, to: folder)
+            if resubscribe { setSubscribed(item, true, quiet: true) }
+            refreshLibrary()
+        } catch {
+            toast.show("无法恢复：文件夹已不在废纸篓中", style: .error)
+        }
+    }
+
     func apply(_ item: WorkshopItem) {
         PlaylistManager.shared.userDidApplyManually()
         guard item.isDownloaded else {
             download(item, applyWhenDone: true)
             return
         }
+        let feedbackID = GalleryItem(origin: .workshop(item)).id
+        ApplyFeedback.shared.begin(feedbackID)
         do {
             try LiveWallpaperController.shared.start(workshop: item)
-            toast.show("动态壁纸已启用：\(item.title)", style: .success)
+            // 成功反馈在「设为壁纸」按钮上，不再弹提示条
+            ApplyFeedback.shared.finish(feedbackID, success: true)
         } catch {
+            ApplyFeedback.shared.finish(feedbackID, success: false)
             toast.show(error.localizedDescription, style: .error)
         }
     }
