@@ -116,8 +116,9 @@ final class WorkshopViewModel: ObservableObject {
     private var forcedValidation: Set<String> = []
     private let api = SteamWorkshopAPI()
     private let toast = ToastCenter.shared
-    private var cursor: String?
-    private var webPage = 1
+    /// 在线浏览的翻页状态。多选题材时每个题材单独查询（题材之间是「任选其一」，
+    /// Steam 一次请求只能整体选「全部满足」或「任一满足」），key 是题材标签；单个查询的 key 是空字符串
+    private var pageStates: [String: OnlinePageState] = [:]
     /// 在线浏览是否还有下一页（网格底部据此显示「加载更多」或「已经到底了」）
     @Published private(set) var canLoadMore = true
     /// 连续几页去重后没有新条目：自动再拉下一页，避免停在底部没有新格子出现、再也不触发加载
@@ -403,8 +404,7 @@ final class WorkshopViewModel: ObservableObject {
             searchTask?.cancel()
             searchGeneration = UUID()
             isLoading = false
-            cursor = nil
-            webPage = 1
+            pageStates = [:]
             canLoadMore = true
             emptyPageStreak = 0
             onlineItems = []
@@ -415,8 +415,8 @@ final class WorkshopViewModel: ObservableObject {
         let requestQuery = query
         let requestFilters = filters
         let requestKey = apiKey.trimmingCharacters(in: .whitespaces)
-        let requestCursor = cursor
-        let requestPage = webPage
+        let groups = OnlinePageState.groups(for: requestFilters)
+        let requestStates = groups.map { (group: $0, state: pageStates[$0] ?? OnlinePageState()) }.filter { !$0.state.isDone }
         isLoading = true
         searchTask = Task {
             defer {
@@ -424,36 +424,45 @@ final class WorkshopViewModel: ObservableObject {
             }
             do {
                 let newItems: [WorkshopItem]
-                var nextCursor = requestCursor
-                var nextPage = requestPage
-                let hasMore: Bool
+                var nextStates: [String: OnlinePageState] = [:]
                 if isIDLookup {
                     newItems = try await api.details(ids: ids)
-                    hasMore = false
-                } else if !requestKey.isEmpty {
-                    // 有 API Key：官方 QueryFiles 接口，更快更稳定
-                    let page = try await api.query(
-                        apiKey: requestKey,
-                        text: requestQuery,
-                        filters: requestFilters,
-                        cursor: requestCursor
-                    )
-                    newItems = page.items
-                    hasMore = page.nextCursor != nil && page.nextCursor != requestCursor
-                    nextCursor = page.nextCursor
+                    nextStates[""] = OnlinePageState(isDone: true)
                 } else {
-                    // 无 API Key：解析工坊网页
-                    newItems = try await api.browseWeb(
-                        text: requestQuery,
-                        filters: requestFilters,
-                        page: requestPage
-                    )
-                    nextPage += 1
-                    hasMore = !newItems.isEmpty
+                    // 各题材并行取下一页，结果交错合并
+                    let api = self.api
+                    let pages = try await withThrowingTaskGroup(of: (Int, String, [WorkshopItem], OnlinePageState).self) { group in
+                        for (index, entry) in requestStates.enumerated() {
+                            var groupFilters = requestFilters
+                            if !entry.group.isEmpty { groupFilters.genres = [entry.group] }
+                            group.addTask {
+                                var state = entry.state
+                                let items: [WorkshopItem]
+                                if !requestKey.isEmpty {
+                                    // 有 API Key：官方 QueryFiles 接口，更快更稳定
+                                    let page = try await api.query(apiKey: requestKey, text: requestQuery, filters: groupFilters, cursor: state.cursor)
+                                    items = page.items
+                                    state.isDone = page.nextCursor == nil || page.nextCursor == state.cursor
+                                    state.cursor = page.nextCursor
+                                } else {
+                                    // 无 API Key：解析工坊网页
+                                    items = try await api.browseWeb(text: requestQuery, filters: groupFilters, page: state.page)
+                                    state.page += 1
+                                    state.isDone = items.isEmpty
+                                }
+                                return (index, entry.group, items, state)
+                            }
+                        }
+                        var results: [(Int, String, [WorkshopItem], OnlinePageState)] = []
+                        for try await result in group { results.append(result) }
+                        return results.sorted { $0.0 < $1.0 }
+                    }
+                    for page in pages { nextStates[page.1] = page.3 }
+                    newItems = OnlinePageState.interleave(pages.map(\.2))
                 }
                 guard searchGeneration == generation, !Task.isCancelled else { return }
-                cursor = nextCursor
-                webPage = nextPage
+                pageStates.merge(nextStates) { _, new in new }
+                let hasMore = isIDLookup ? false : groups.contains { !(pageStates[$0]?.isDone ?? false) }
                 canLoadMore = hasMore
                 var existing = Set(onlineItems.map(\.id))
                 let fresh = newItems.filter { existing.insert($0.id).inserted }
@@ -1028,6 +1037,29 @@ final class WorkshopDownloadProgress: ObservableObject {
                 }
             }
             result[id] = total
+        }
+        return result
+    }
+}
+
+/// 在线浏览某一组查询的翻页进度
+nonisolated struct OnlinePageState: Sendable, Equatable {
+    var cursor: String?
+    var page = 1
+    var isDone = false
+
+    /// 多选题材时每个题材一组，否则只有一组（空字符串）
+    static func groups(for filters: WorkshopFilters) -> [String] {
+        let genres = filters.genres.filter { $0 != "Anime" }.sorted()
+        return genres.count > 1 ? genres : [""]
+    }
+
+    /// 轮流从每组取一个，保持各题材均匀出现
+    static func interleave(_ lists: [[WorkshopItem]]) -> [WorkshopItem] {
+        var result: [WorkshopItem] = []
+        let longest = lists.map(\.count).max() ?? 0
+        for index in 0..<longest {
+            for list in lists where index < list.count { result.append(list[index]) }
         }
         return result
     }

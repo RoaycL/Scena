@@ -222,6 +222,26 @@ struct wallhavenTests {
         #expect(text == "标题\n4K 60fps\n\n作者主页\n• 昼夜切换\n\n结尾")
     }
 
+    @Test func multipleGenresMatchAnyOfThem() {
+        var filters = WorkshopFilters()
+        filters.genres = ["Girls", "Landscape"]
+        let girl = WorkshopItem(id: "1", title: "A", type: .scene, tags: ["Girls"])
+        let landscape = WorkshopItem(id: "2", title: "B", type: .scene, tags: ["Landscape"])
+        let nature = WorkshopItem(id: "3", title: "C", type: .scene, tags: ["Nature"])
+        #expect(filters.matches(girl, query: ""))
+        #expect(filters.matches(landscape, query: ""))
+        #expect(!filters.matches(nature, query: ""))
+        #expect(OnlinePageState.groups(for: filters) == ["Girls", "Landscape"])
+        filters.genres = ["Girls"]
+        #expect(OnlinePageState.groups(for: filters) == [""])
+    }
+
+    @Test func onlineResultsInterleaveGenres() {
+        let a = (1...3).map { WorkshopItem(id: "a\($0)", title: "", type: .scene, tags: []) }
+        let b = (1...1).map { WorkshopItem(id: "b\($0)", title: "", type: .scene, tags: []) }
+        #expect(OnlinePageState.interleave([a, b]).map(\.id) == ["a1", "b1", "a2", "a3"])
+    }
+
     @Test func updateVersionComparisonIsNumeric() {
         #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
         #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))

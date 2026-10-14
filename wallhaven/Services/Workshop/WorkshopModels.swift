@@ -314,7 +314,10 @@ nonisolated struct WorkshopFilters: Equatable, Codable, Sendable {
         if !ratings.contains(rating) { return false }
         let tags = Set(item.tags)
         if hideAnime && tags.contains("Anime") { return false }
-        if !genres.isSubset(of: tags) || !features.isSubset(of: tags) { return false }
+        // 题材之间任选其一（壁纸通常只有一个题材）；特性需全部满足
+        let selectedGenres = genres.subtracting(["Anime"])
+        if !selectedGenres.isEmpty && selectedGenres.isDisjoint(with: tags) { return false }
+        if !features.isSubset(of: tags) { return false }
 
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else { return true }

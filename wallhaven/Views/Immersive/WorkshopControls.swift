@@ -176,12 +176,7 @@ struct WorkshopFilterPanel: View {
                 }
                 .disabled(hasGenre)
                 .opacity(hasGenre ? 0.4 : 1)
-                Text(hasGenre
-                     ? "已选择题材：「动漫」本身也是一个题材，壁纸通常只属于其中一个，所以选了题材后结果里本来就没有动漫标签的内容。注意动漫画风的壁纸常被归为「女孩」等题材，无法按标签排除。"
-                     : "隐藏动漫时排除带有「动漫」标签的内容。动漫画风但被作者归为其他题材的壁纸不会被排除。")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .fixedSize(horizontal: false, vertical: true)
+                .help(hasGenre ? "已选择题材时不起作用：「动漫」本身也是一个题材" : "")
             }
 
             GlassSection(title: "仅显示") {
@@ -246,7 +241,7 @@ struct WorkshopFilterPanel: View {
                 }
             }
 
-            GlassSection(title: "标签", trailing: "多选时需同时包含") {
+            GlassSection(title: "标签", trailing: "多选时包含任意一个") {
                 FlowLayout {
                     ForEach(WorkshopTags.genres.filter { $0.tag != "Anime" }, id: \.tag) { genre in
                         GlassChip(title: genre.label, isOn: workshop.filters.genres.contains(genre.tag)) {
