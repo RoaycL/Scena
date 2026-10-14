@@ -264,6 +264,8 @@ enum MainWindow {
     static var requestedTab: MainTab?
     /// 要在主窗口里定位的工坊壁纸（下载任务点击跳转）
     static var requestedWorkshopItemID: String?
+    /// 要在「收藏 · 创意工坊」（已订阅）里定位的条目（订阅同步失败提示点击跳转）
+    static var requestedSubscribedItemID: String?
 
     /// SwiftUI 的 openWindow 只能在视图里拿到，主窗口出现时保存下来，供 Dock 图标重新打开窗口使用
     static var opener: (() -> Void)?
@@ -291,6 +293,13 @@ enum MainWindow {
     /// 打开主窗口并定位到这个工坊壁纸：本地还在就去资料库，已删除就到创意工坊按 ID 查出来
     static func reveal(workshopItemID id: String) {
         requestedWorkshopItemID = id
+        show()
+        NotificationCenter.default.post(name: navigationNotification, object: nil)
+    }
+
+    /// 打开主窗口并在已订阅列表里选中这个条目
+    static func reveal(subscribedWorkshopItemID id: String) {
+        requestedSubscribedItemID = id
         show()
         NotificationCenter.default.post(name: navigationNotification, object: nil)
     }

@@ -24,7 +24,17 @@ struct ToastView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.white)
                 .lineLimit(2)
+            if toast.action != nil {
+                HStack(spacing: 2) {
+                    Text("查看")
+                    Image(systemName: "chevron.right")
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize()
+            }
         }
+        .contentShape(Capsule())
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .sceneGlass(in: Capsule())

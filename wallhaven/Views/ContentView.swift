@@ -353,6 +353,11 @@ struct ContentView: View {
             revealWorkshopItem(id)
             return
         }
+        if let id = MainWindow.requestedSubscribedItemID {
+            MainWindow.requestedSubscribedItemID = nil
+            revealSubscribedItem(id)
+            return
+        }
         guard let tab = MainWindow.requestedTab else { return }
         MainWindow.requestedTab = nil
         switchTab(tab)
@@ -379,6 +384,21 @@ struct ContentView: View {
             workshop.query = id
             workshop.search(reset: true)
             workshopSelectionID = selectionID
+        }
+    }
+
+    /// 订阅同步失败提示点击跳转：到「收藏 · 创意工坊」（已订阅）选中这个条目，详情栏显示它的信息
+    private func revealSubscribedItem(_ id: String) {
+        immersive.userDidSelectThumbnail()
+        collectionSource = .workshop
+        switchTab(.collections)
+        syncWorkshopMode()
+        // 搜索词会过滤已订阅列表，清掉才能看到它
+        if !workshop.query.isEmpty { workshop.query = "" }
+        guard workshop.subscribedItems.contains(where: { $0.id == id }) else { return }
+        workshopSelectionID = GalleryItem(origin: .workshop(WorkshopItem(id: id, title: "", type: .unknown, tags: []))).id
+        if !workshop.items.contains(where: { $0.id == id }) {
+            toastCenter.show("当前筛选条件隐藏了这个条目，重置筛选后可见", style: .info)
         }
     }
 
@@ -447,7 +467,10 @@ struct ContentView: View {
                         ToastView(toast: toast)
                             .frame(maxWidth: 380, alignment: .trailing)
                             .transition(Motion.reducesMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
-                            .onTapGesture { toastCenter.dismiss() }
+                            .onTapGesture {
+                                toast.action?()
+                                toastCenter.dismiss()
+                            }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)

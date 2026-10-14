@@ -100,6 +100,8 @@ final class WorkshopViewModel: ObservableObject {
         static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
         static let maxConcurrentDownloads = "workshop.maxConcurrentDownloads"
+        /// 已经提示过「无法获取详情」的订阅：同一批失败不会每次后台同步都提示
+        static let notifiedUnavailable = "workshop.notifiedUnavailableSubscriptions"
         /// 记录凭据失效时对应的用户名，重新登录（凭据变化）前一直显示「已失效」
         static let steamCMDExpiredUser = "workshop.steamcmdExpiredUser"
         static let steamCMDExpiredAt = "workshop.steamcmdExpiredAt"
@@ -884,7 +886,6 @@ final class WorkshopViewModel: ObservableObject {
                         tags: []
                     )
                 }
-                let unavailable = list.entries.count - byID.count
                 subscribedIDs = Set(ids)
                 subscribedItems = details
                 lastSyncAt = Date()
@@ -897,12 +898,17 @@ final class WorkshopViewModel: ObservableObject {
                     let missing = details.filter { !localIDs.contains($0.id) && $0.type.isPlayable }
                     if !missing.isEmpty { enqueueDownloads(missing, automatic: true) }
                 }
-                if force || unavailable > 0 {
-                    var message = "已同步 \(ids.count) 个订阅"
-                    if unavailable > 0 { message += "（\(unavailable) 个无法获取详情，可能已被作者删除或隐藏）" }
-                    if let total = list.reportedTotal, total > ids.count { message += "，Steam 显示共 \(total) 个" }
-                    toast.show(message, style: unavailable > 0 ? .info : .success)
+                // 静默同步：全部成功不提示。有条目查不到详情时提示一次（点击跳到第一个），
+                // 之后同一批失败只在手动同步时再提示
+                let unavailableIDs = ids.filter { byID[$0] == nil }
+                let notified = Set(UserDefaults.standard.stringArray(forKey: Keys.notifiedUnavailable) ?? [])
+                if let first = unavailableIDs.first, force || !Set(unavailableIDs).isSubset(of: notified) {
+                    let message = unavailableIDs.count == 1
+                        ? "订阅「\(details.first { $0.id == first }?.title ?? first)」无法获取详情，可能已被作者删除或隐藏"
+                        : "\(unavailableIDs.count) 个订阅无法获取详情，可能已被作者删除或隐藏"
+                    toast.show(message, style: .info) { MainWindow.reveal(subscribedWorkshopItemID: first) }
                 }
+                UserDefaults.standard.set(unavailableIDs, forKey: Keys.notifiedUnavailable)
             } catch {
                 toast.show("同步订阅失败：\(error.localizedDescription)", style: .error)
             }
