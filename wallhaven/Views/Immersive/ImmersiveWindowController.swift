@@ -50,6 +50,9 @@ final class ImmersiveWindowController: ObservableObject {
         guard self.window !== window else { return }
         self.window = window
         window.acceptsMouseMovedEvents = true
+        // 原生磨砂占位需要透明窗口，壁纸就绪后由图片覆盖整张背景。
+        window.isOpaque = false
+        window.backgroundColor = .clear
         // 启动时不要让搜索框抢走焦点，保证快捷键和自动预览可用
         DispatchQueue.main.async { window.makeFirstResponder(nil) }
         installMonitor()

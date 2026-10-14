@@ -3,6 +3,7 @@
 //  wallhaven
 //
 
+import AppKit
 import Kingfisher
 import SwiftUI
 
@@ -159,7 +160,12 @@ struct FrostedBackdrop: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(white: 0.16), Color(white: 0.07)], startPoint: .top, endPoint: .bottom)
+            WindowFrostedGlass()
+            // 无缩略图时也有真实桌面透色，浅亮的上沿让加载占位保留玻璃质感。
+            LinearGradient(
+                colors: [.white.opacity(0.10), Color(red: 0.45, green: 0.55, blue: 0.68).opacity(0.05), .black.opacity(0.08)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
             if let item, let source = item.thumbnailSource {
                 KFImage(source: source)
                     .setProcessor(item.thumbnailProcessor)
@@ -178,4 +184,19 @@ struct FrostedBackdrop: View {
         .clipped()
         .animation(Motion.content, value: item?.id)
     }
+}
+
+
+/// 窗口后的原生磨砂材质，首次启动无需等待图片就能显示。
+private struct WindowFrostedGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .underWindowBackground
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .vibrantDark)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }

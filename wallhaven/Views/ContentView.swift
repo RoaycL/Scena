@@ -520,7 +520,7 @@ struct ContentView: View {
                 }
 
                 scrims(height: size.height)
-                    .opacity(immersive.isChromeHidden ? 0 : 1)
+                    .opacity(immersive.isChromeHidden ? 0 : (displayedBackgroundItem == nil ? 0.4 : 1))
                     .allowsHitTesting(false)
 
                 gallery(in: size)
