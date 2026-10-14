@@ -210,9 +210,9 @@ private struct OnlinePreviewShowcase: View {
                     }
                 }
                 .frame(width: side, height: side)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
                             .stroke(.white.opacity(0.15), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.45), radius: 30, y: 14)

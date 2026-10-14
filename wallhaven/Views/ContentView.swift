@@ -1104,9 +1104,9 @@ struct ContentView: View {
         if page == .playlists {
             PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)), onKeyboardHandler: { playlistKeyHandler = $0 })
                 .scrollContentBackground(.hidden)
-                .sceneGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: .black.opacity(0.35))
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
+                .sceneGlass(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: .black.opacity(0.35))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
                 .environment(\.colorScheme, .dark)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 78)

@@ -27,7 +27,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
     var downloadState: (GalleryItem) -> DownloadState = { _ in .none }
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
 
-    private let corner: CGFloat = 10
+    private let corner = Radius.card
     /// 鼠标悬停的缩略图：提亮并轻微放大
     @State private var hoveredID: String?
     private var thumbWidth: CGFloat { thumbHeight * 16 / 9 }

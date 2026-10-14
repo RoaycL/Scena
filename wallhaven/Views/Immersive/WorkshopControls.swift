@@ -14,7 +14,7 @@ struct GlassPanel<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 content()

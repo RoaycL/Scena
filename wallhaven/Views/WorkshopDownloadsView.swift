@@ -219,7 +219,7 @@ private struct DownloadsBackground: ViewModifier {
 
     func body(content: Content) -> some View {
         if inWindowPanel {
-            let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+            let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
             content
                 .sceneGlass(in: shape, tint: .black.opacity(0.4))
                 .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))

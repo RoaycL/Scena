@@ -161,7 +161,7 @@ private struct WorkshopTile: View {
 
     var body: some View {
         let gallery = GalleryItem(origin: .workshop(item))
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
 
         Color.clear
             .aspectRatio(1, contentMode: .fit)
@@ -290,7 +290,7 @@ private struct WorkshopDetailPanel: View {
                 }
             }
             .frame(width: 264, height: 264)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(item.type.label)")
@@ -298,7 +298,7 @@ private struct WorkshopDetailPanel: View {
                     .tracking(1.5)
                     .foregroundStyle(isLive ? .green : .white.opacity(0.55))
                 Text(item.title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)

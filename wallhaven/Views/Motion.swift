@@ -9,6 +9,13 @@
 import AppKit
 import SwiftUI
 
+/// 圆角档位：小封面 6、卡片和缩略图 10、浮层面板 18；按钮、标签用胶囊形
+enum Radius {
+    static let small: CGFloat = 6
+    static let card: CGFloat = 10
+    static let panel: CGFloat = 18
+}
+
 enum Motion {
     /// 悬停、按下、开关等即时反馈
     static var hover: Animation { resolved(.snappy(duration: 0.18)) }

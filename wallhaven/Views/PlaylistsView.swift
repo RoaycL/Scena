@@ -152,7 +152,7 @@ struct PlaylistsView: View {
                         .simultaneousGesture(TapGesture(count: 2).onEnded { manager.play(playlist.id) })
                         // 把下方队列里的壁纸拖到其他列表上：复制过去
                         .overlay {
-                            RoundedRectangle(cornerRadius: 9)
+                            RoundedRectangle(cornerRadius: Radius.card)
                                 .stroke(dragState.sidebarTargetID == playlist.id ? Color.accentColor : .clear, lineWidth: 2)
                         }
                         .playlistDragFrame("list-\(playlist.id.uuidString)")
@@ -250,7 +250,7 @@ struct PlaylistsView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(selectedPlaylist?.name ?? "播放列表")
-                    .font(.system(size: 23, weight: .semibold))
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
                     .lineLimit(1)
                 Text(selectedPlaylist.map { "\($0.entries.count) 张壁纸 · 拖到左侧其他列表可复制" } ?? "我的壁纸合集")
                     .font(.caption)
@@ -291,7 +291,7 @@ struct PlaylistsView: View {
                             .allowsHitTesting(false)
                         VStack(alignment: .leading, spacing: 6) {
                             Text(failedPreviewID == entry.id ? entry.title : (playlist.entries.first(where: { $0.id == displayedPreviewID })?.title ?? "加载中…"))
-                                .font(.system(size: 20, weight: .medium))
+                                .font(.system(size: 20, weight: .semibold, design: .rounded))
                                 .lineLimit(1)
                             HStack(spacing: 8) {
                                 Text(failedPreviewID == entry.id ? "加载失败" : (displayedPreviewID == entry.id ? entry.kindLabel : "加载中…"))
@@ -313,7 +313,7 @@ struct PlaylistsView: View {
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .background(.black.opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -357,7 +357,7 @@ struct PlaylistsView: View {
     private var emptyPreview: some View {
         VStack(spacing: 12) {
             Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 32, weight: .light))
+                .font(.system(size: 34, weight: .light))
             Text("还没有壁纸").font(.headline)
             Text("从发现或资料库选择壁纸，右键添加到这个列表。")
                 .font(.callout)
@@ -382,11 +382,26 @@ struct PlaylistsView: View {
                     manager.play(playlist.id, startAt: previewEntryID)
                 }
             } label: {
-                Label(isActive ? (manager.isPaused ? "继续播放" : "暂停播放") : "播放列表",
-                      systemImage: isActive && !manager.isPaused ? "pause.fill" : "play.fill")
+                let title = isActive ? (manager.isPaused ? "继续播放" : "暂停播放") : "播放列表"
+                let symbol = isActive && !manager.isPaused ? "pause.fill" : "play.fill"
+                if embedded {
+                    // 主界面里和「设为壁纸」同一种白色主按钮，不用系统蓝色按钮
+                    HStack(spacing: 6) {
+                        Image(systemName: symbol).contentTransition(.symbolEffect(.replace))
+                        Text(title)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.black)
                     .frame(minWidth: 88)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.white, in: Capsule())
+                    .animation(Motion.hover, value: symbol)
+                } else {
+                    Label(title, systemImage: symbol).frame(minWidth: 88)
+                }
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(PlayButtonStyle(embedded: embedded))
             Button { stepPreview(1, in: playlist) } label: {
                 Image(systemName: "forward.end.fill").frame(width: 22, height: 22)
             }
@@ -396,7 +411,38 @@ struct PlaylistsView: View {
         .disabled(playlist.entries.isEmpty)
     }
 
+    @ViewBuilder
     private func playbackSettings(_ playlist: Playlist) -> some View {
+        if embedded {
+            // 主界面里：间隔和随机播放用玻璃胶囊，和筛选面板的选项同一套样式
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(Playlist.intervals, id: \.seconds) { option in
+                        Toggle(option.label, isOn: Binding(
+                            get: { playlist.interval == option.seconds },
+                            set: { if $0 { manager.setInterval(option.seconds, for: playlist.id) } }
+                        ))
+                    }
+                } label: {
+                    GlassChipLabel(systemImage: "timer",
+                                   title: Playlist.intervals.first { $0.seconds == playlist.interval }?.label ?? "间隔",
+                                   showsChevron: true)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("切换间隔")
+                GlassChip(title: "随机播放", isOn: playlist.shuffle) {
+                    manager.setShuffle(!playlist.shuffle, for: playlist.id)
+                }
+            }
+        } else {
+            nativePlaybackSettings(playlist)
+        }
+    }
+
+    private func nativePlaybackSettings(_ playlist: Playlist) -> some View {
         HStack(spacing: 12) {
             Picker("间隔", selection: Binding(
                 get: { playlist.interval },
@@ -420,8 +466,13 @@ struct PlaylistsView: View {
             Button("从发现选择…") { MainWindow.show(tab: .discover) }
             Button("从资料库选择…") { MainWindow.show(tab: .library) }
         } label: {
-            Label("添加壁纸", systemImage: "plus")
+            if embedded {
+                GlassChipLabel(systemImage: "plus", title: "添加壁纸")
+            } else {
+                Label("添加壁纸", systemImage: "plus")
+            }
         }
+        .modifier(GlassMenuStyle(embedded: embedded))
         .fixedSize()
     }
 
@@ -540,9 +591,9 @@ struct PlaylistsView: View {
                             .padding(6)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: Radius.card)
                         .stroke(previewEntryID == entry.id ? Color.primary : (selectedEntries.contains(entry.id) ? Color.accentColor : .clear), lineWidth: 2)
                 }
             Text(entry.title)
@@ -637,7 +688,7 @@ private struct PlaylistSidebarRow: View {
         HStack(spacing: 10) {
             PlaylistCover(entries: Array(playlist.entries.prefix(4)))
                 .frame(width: 68, height: 42)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.small, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(playlist.name)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
@@ -657,7 +708,7 @@ private struct PlaylistSidebarRow: View {
         }
         .padding(6)
         .background {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.22) : (isHovered ? Color.primary.opacity(0.06) : .clear))
         }
         .contentShape(Rectangle())
@@ -938,7 +989,7 @@ private struct PlaylistDragPreviewLayer: View {
     let isCopying: Bool
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         ZStack {
             ForEach(Array(1..<min(payload.ids.count, 3)).reversed(), id: \.self) { depth in
                 shape.fill(Color(white: 0.22))
@@ -975,5 +1026,48 @@ private struct PlaylistDragPreviewLayer: View {
         .shadow(color: .black.opacity(0.45), radius: 16, y: 10)
         .animation(Motion.hover, value: isCopying)
         .position(x: pointer.location.x + grabOffset.width, y: pointer.location.y + grabOffset.height)
+    }
+}
+
+/// 主界面里的播放按钮用自定义白色胶囊；独立窗口跟随系统外观，保留系统按钮
+private struct PlayButtonStyle: ViewModifier {
+    let embedded: Bool
+    func body(content: Content) -> some View {
+        if embedded { content.buttonStyle(PressableButtonStyle()) } else { content.buttonStyle(.borderedProminent) }
+    }
+}
+
+/// 主界面里的菜单去掉系统按钮外观，只显示玻璃胶囊标签
+private struct GlassMenuStyle: ViewModifier {
+    let embedded: Bool
+    func body(content: Content) -> some View {
+        if embedded {
+            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        } else {
+            content
+        }
+    }
+}
+
+/// 玻璃胶囊标签：图标 + 文字（可带下拉箭头），样式同 GlassChip 未选中态
+struct GlassChipLabel: View {
+    let systemImage: String
+    let title: String
+    var showsChevron = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
+            Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+            if showsChevron {
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.7)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(Color.white.opacity(0.08)))
+        .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .contentShape(Capsule())
     }
 }
