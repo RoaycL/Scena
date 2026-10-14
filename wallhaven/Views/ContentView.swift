@@ -423,7 +423,7 @@ struct ContentView: View {
                 gallery(in: size)
                     .frame(width: size.width, height: size.height)
                     .opacity(immersive.isChromeHidden ? 0 : 1)
-                    .offset(y: immersive.isChromeHidden ? 24 : 0)
+                    .offset(y: immersive.isChromeHidden && !Motion.reducesMotion ? 24 : 0)
                     .allowsHitTesting(!immersive.isChromeHidden)
 
                 VStack(spacing: 12) {
@@ -433,7 +433,7 @@ struct ContentView: View {
                         // 只裁左右（防止窄窗口时把界面撑宽）；上下留出空间，按钮角标不会被切掉
                         .mask(Rectangle().padding(.vertical, -40))
                         .opacity(immersive.isChromeHidden ? 0 : 1)
-                        .offset(y: immersive.isChromeHidden ? -12 : 0)
+                        .offset(y: immersive.isChromeHidden && !Motion.reducesMotion ? -12 : 0)
                         .allowsHitTesting(!immersive.isChromeHidden)
                 }
                 .padding(.top, 10)
@@ -443,7 +443,7 @@ struct ContentView: View {
                     if let toast = toastCenter.current {
                         ToastView(toast: toast)
                             .frame(maxWidth: 380, alignment: .trailing)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .transition(Motion.reducesMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
                             .onTapGesture { toastCenter.dismiss() }
                     }
                 }
@@ -782,8 +782,8 @@ struct ContentView: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.85))
-                            .rotationEffect(.degrees(workshop.isSyncing ? 360 : 0))
-                            .animation(workshop.isSyncing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: workshop.isSyncing)
+                            .rotationEffect(.degrees(workshop.isSyncing && !Motion.reducesMotion ? 360 : 0))
+                            .animation(workshop.isSyncing ? Motion.syncing : Motion.hover, value: workshop.isSyncing)
                             .frame(width: 34, height: 34)
                             .sceneGlass(in: Circle(), interactive: true)
                     }

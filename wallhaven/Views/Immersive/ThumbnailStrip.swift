@@ -120,7 +120,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
                     .stroke(isSelected ? Color.white : Color.white.opacity(0.18), lineWidth: isSelected ? 2.5 : 1)
             )
             .opacity(isSelected || hoveredID == item.id ? 1 : 0.78)
-            .scaleEffect(isSelected ? 1.04 : (hoveredID == item.id ? 1.02 : 1))
+            .scaleEffect(Motion.reducesMotion ? 1 : (isSelected ? 1.04 : (hoveredID == item.id ? 1.02 : 1)))
             .shadow(color: .black.opacity(isSelected ? 0.45 : 0), radius: 10, y: 4)
             .animation(Motion.hover, value: isSelected)
             .animation(Motion.hover, value: hoveredID == item.id)

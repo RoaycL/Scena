@@ -189,7 +189,7 @@ struct PressableButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .scaleEffect(configuration.isPressed ? 0.92 : 1)
+                .scaleEffect(configuration.isPressed && !Motion.reducesMotion ? 0.92 : 1)
                 .brightness(isHovered && !configuration.isPressed ? 0.08 : 0)
                 .animation(Motion.hover, value: configuration.isPressed)
                 .animation(Motion.hover, value: isHovered)

@@ -25,7 +25,7 @@ final class ToastCenter: ObservableObject {
 
     func show(_ message: String, style: Toast.Style = .info) {
         dismissTask?.cancel()
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+        withAnimation(Motion.toast) {
             current = Toast(message: message, style: style)
         }
         // progress 类型会一直保留，直到被下一条提示替换
@@ -40,7 +40,7 @@ final class ToastCenter: ObservableObject {
 
     func dismiss() {
         dismissTask?.cancel()
-        withAnimation(.easeOut(duration: 0.25)) {
+        withAnimation(Motion.toastDismiss) {
             current = nil
         }
     }

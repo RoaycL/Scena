@@ -18,6 +18,11 @@ enum Motion {
     static var panel: Animation { resolved(.spring(response: 0.32, dampingFraction: 0.84)) }
     /// 图片、文字等内容替换（交叉淡化，不涉及位移）
     static var content: Animation { .smooth(duration: 0.35) }
+    /// 提示条进出：减少动态效果时只短暂淡化
+    static var toast: Animation { reducesMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85) }
+    static var toastDismiss: Animation { reducesMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.25) }
+    /// 同步状态的旋转指示；减少动态效果时用静态图标
+    static var syncing: Animation { reducesMotion ? .easeInOut(duration: 0.15) : .linear(duration: 1).repeatForever(autoreverses: false) }
     /// 滚动到选中项
     static var scroll: Animation { resolved(.smooth(duration: 0.35)) }
 

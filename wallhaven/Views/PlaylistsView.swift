@@ -61,7 +61,7 @@ struct PlaylistsView: View {
                     isCopying: dragState.sidebarTargetID != nil
                 )
                     .allowsHitTesting(false)
-                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    .transition(Motion.reducesMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
             }
         }
         .frame(width: embedded ? panelWidth : nil, height: embedded ? maximumHeight : nil)
@@ -439,7 +439,7 @@ struct PlaylistsView: View {
                                 manager.play(playlist.id, startAt: entry.id)
                             })
                             // 被拖起的卡片：微微缩小、变淡，像从队列里「提」了起来
-                            .scaleEffect(dragState.payload?.ids.contains(entry.id) == true ? 0.94 : 1)
+                            .scaleEffect(!Motion.reducesMotion && dragState.payload?.ids.contains(entry.id) == true ? 0.94 : 1)
                             .opacity(dragState.payload?.ids.contains(entry.id) == true ? 0.45 : 1)
                             .animation(Motion.hover, value: dragState.payload?.ids.contains(entry.id) == true)
                             .overlay(alignment: .leading) {
@@ -932,7 +932,7 @@ private struct PlaylistDragPreviewLayer: View {
                 shape.fill(Color(white: 0.22))
                     .overlay(shape.stroke(.white.opacity(0.15), lineWidth: 0.5))
                     .frame(width: 160, height: 90)
-                    .rotationEffect(.degrees(Double(depth) * 4))
+                    .rotationEffect(.degrees(Motion.reducesMotion ? 0 : Double(depth) * 4))
                     .offset(x: CGFloat(depth) * 5, y: CGFloat(depth) * -3)
             }
             KFImage(source: entry.flatMap { PlaylistsView.thumbnailSource(for: $0) })
@@ -958,8 +958,8 @@ private struct PlaylistDragPreviewLayer: View {
             }
         }
         // 拿起来的样子：略微放大、倾斜，投下较深的阴影
-        .scaleEffect(isCopying ? 0.8 : 1.04)
-        .rotationEffect(.degrees(-2))
+        .scaleEffect(Motion.reducesMotion ? 1 : (isCopying ? 0.8 : 1.04))
+        .rotationEffect(.degrees(Motion.reducesMotion ? 0 : -2))
         .shadow(color: .black.opacity(0.45), radius: 16, y: 10)
         .animation(Motion.hover, value: isCopying)
         .position(x: pointer.location.x + grabOffset.width, y: pointer.location.y + grabOffset.height)
