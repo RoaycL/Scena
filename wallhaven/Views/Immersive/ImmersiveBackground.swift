@@ -54,7 +54,8 @@ struct ImmersiveBackground: View {
                 .id("\(candidate.id)-\(attempt)")
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
                 // 新画面从略微放大、略带模糊过渡到清晰，像镜头对焦；减少动态效果时只淡入
-                .scaleEffect(displayedItem?.id == candidate.id || Motion.reducesMotion ? 1 : 1.035)
+                // 工坊动态壁纸不缩放：它先显示模糊的氛围底色，再由动态画面淡入，不需要也不应该有「对焦」缩放
+                .scaleEffect(displayedItem?.id == candidate.id || Motion.reducesMotion || candidate.playableWorkshopItem != nil ? 1 : 1.035)
                 .blur(radius: displayedItem?.id == candidate.id || Motion.reducesMotion ? 0 : 10)
                 .transition(.opacity)
             }
@@ -86,6 +87,7 @@ private struct BackgroundLayer: View {
     }
 
     @State private var isLiveReady = false
+    @State private var liveFailed = false
     @State private var hasSignalledReady = false
 
     /// 封面或动态画面任意一个先就绪，就通知外层切换到这一层
@@ -95,9 +97,32 @@ private struct BackgroundLayer: View {
         onReady()
     }
 
-    private func liveDidBecomeReady() {
-        withAnimation(Motion.content) { isLiveReady = true }
+    /// slow：从模糊底色过渡到动态画面时淡入慢一些，像逐渐对上焦
+    private func liveDidBecomeReady(slow: Bool = false) {
+        withAnimation(slow && !Motion.reducesMotion ? .smooth(duration: 0.7) : Motion.content) { isLiveReady = true }
         signalReady()
+    }
+
+    /// 工坊动态壁纸的预览图多为方形 GIF，铺满窗口会被大幅裁切放大，和随后淡入的动态画面构图不一致。
+    /// 因此只把它当作模糊的氛围底色：看不出裁切，动态画面渲染好后从模糊中清晰浮现；
+    /// 渲染失败时，在底色上按原始比例显示清晰的预览图
+    private func ambientPoster(size: CGSize) -> some View {
+        poster(size: size)
+            .blur(radius: 48, opaque: true)
+            .overlay(Color.black.opacity(0.2))
+            .overlay {
+                if liveFailed {
+                    let side = min(size.height * 0.56, size.width * 0.4, 560)
+                    KFImage(source: item.thumbnailSource)
+                        .setProcessor(item.thumbnailProcessor)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: side, maxHeight: side)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+                        .shadow(color: .black.opacity(0.45), radius: 30, y: 14)
+                        .transition(.opacity)
+                }
+            }
     }
 
     /// 动态壁纸的封面：清晰显示（不模糊），读取失败时什么也不显示，由外层保留上一张
@@ -132,18 +157,19 @@ private struct BackgroundLayer: View {
                 // 视频首帧要几百毫秒：先显示封面帧，视频就绪后淡入
                 poster(size: size)
                 if !staticOnly {
-                    LoopingVideoView(url: url, onReady: liveDidBecomeReady)
+                    LoopingVideoView(url: url, onReady: { liveDidBecomeReady() })
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
                 }
             } else if let workshopItem = item.playableWorkshopItem {
-                // 场景 / 网页渲染器启动要 1～5 秒：先显示壁纸自带的预览图，渲染出第一帧后淡入
-                poster(size: size)
+                // 场景 / 网页渲染器启动要 1～5 秒：先用预览图铺一层模糊底色，渲染出第一帧后动态画面淡入
+                ambientPoster(size: size)
                 if !staticOnly {
                     WorkshopPlayerView(item: workshopItem) { state in
                         if state == .ready {
-                            liveDidBecomeReady()
+                            liveDidBecomeReady(slow: true)
                         } else if case .failed = state {
+                            withAnimation(Motion.content) { liveFailed = true }
                             onFailure()
                         }
                     }
