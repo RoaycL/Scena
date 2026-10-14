@@ -61,8 +61,6 @@ struct ContentView: View {
     @State private var backgroundItem: GalleryItem?
     @State private var prefetcher: ImagePrefetcher?
     @State private var isFilterPresented = false
-    /// 页签上的来源下拉面板（自己绘制：系统菜单是透明玻璃，和深色界面色调不一致）
-    @State private var isSourcePickerPresented = false
     @FocusState private var isSearchFocused: Bool
 
     @State private var isShowingNewFolderAlert = false
@@ -372,12 +370,6 @@ struct ContentView: View {
                     .offset(y: immersive.isChromeHidden ? 24 : 0)
                     .allowsHitTesting(!immersive.isChromeHidden)
 
-                // 来源面板打开时，点击其他地方关闭
-                if isSourcePickerPresented {
-                    Color.black.opacity(0.001)
-                        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { isSourcePickerPresented = false } }
-                }
-
                 VStack(spacing: 12) {
                     topBar(width: size.width)
                         // 兜底：即使放不下也只裁掉边缘，不会撑宽父视图、把整个界面推歪露出白边
@@ -403,18 +395,6 @@ struct ContentView: View {
                 .padding(.trailing, 16)
 
                 filterOverlay(maxHeight: size.height - 90)
-            }
-        }
-        .overlayPreferenceValue(SourceTabAnchorKey.self) { anchor in
-            GeometryReader { proxy in
-                if isSourcePickerPresented, let anchor {
-                    let tab = proxy[anchor]
-                    SourcePickerPanel(options: sourceOptions(for: currentTab)) {
-                        withAnimation(.easeOut(duration: 0.15)) { isSourcePickerPresented = false }
-                    }
-                    .offset(x: tab.minX, y: tab.maxY + 8)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-                }
             }
         }
         .ignoresSafeArea()
@@ -485,8 +465,6 @@ struct ContentView: View {
         }
         .onChange(of: isSearchFocused) { _, focused in immersive.setHold("search", active: focused) }
         .onChange(of: isFilterPresented) { _, presented in immersive.setHold("filter", active: presented) }
-        .onChange(of: isSourcePickerPresented) { _, presented in immersive.setHold("menu", active: presented) }
-        .onChange(of: currentTab) { isSourcePickerPresented = false }
         .onChange(of: isShowingNewFolderAlert || isRenamingFolder) { _, shown in immersive.setHold("alert", active: shown) }
         .alert("新建收藏夹", isPresented: $isShowingNewFolderAlert) {
             TextField("收藏夹名称", text: $newFolderName)
@@ -604,8 +582,8 @@ struct ContentView: View {
         HStack(spacing: 2) {
             ForEach(MainTab.allCases) { tab in
                 if currentTab == tab, let source = sourceTitle(for: tab) {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.15)) { isSourcePickerPresented.toggle() }
+                    Menu {
+                        sourcePicker(for: tab)
                     } label: {
                         HStack(spacing: 5) {
                             Text(tab.rawValue)
@@ -616,15 +594,14 @@ struct ContentView: View {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.6))
-                                .rotationEffect(.degrees(isSourcePickerPresented ? 180 : 0))
                         }
                         .modifier(MainTabLabel(isSelected: true))
                     }
+                    .menuStyle(.button)
                     .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
                     .fixedSize()
                     .help("切换来源")
-                    // 面板画在顶部栏外面（顶部栏会裁剪超出范围的内容），这里只记录页签的位置
-                    .anchorPreference(key: SourceTabAnchorKey.self, value: .bounds) { $0 }
                 } else {
                     Button { switchTab(tab) } label: {
                         Text(tab.rawValue).modifier(MainTabLabel(isSelected: currentTab == tab))
@@ -649,17 +626,26 @@ struct ContentView: View {
         }
     }
 
-    /// 来源下拉面板的选项
-    private func sourceOptions(for tab: MainTab) -> [SourcePickerPanel.Option] {
+    @ViewBuilder
+    private func sourcePicker(for tab: MainTab) -> some View {
         switch tab {
         case .discover:
-            ContentSource.allCases.map { source in .init(title: source.rawValue, isSelected: discoverSource == source) { discoverSource = source } }
+            Picker("来源", selection: $discoverSource) {
+                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
         case .collections:
-            ContentSource.allCases.map { source in .init(title: source.rawValue, isSelected: collectionSource == source) { collectionSource = source } }
+            Picker("来源", selection: $collectionSource) {
+                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
         case .library:
-            LibrarySource.allCases.map { source in .init(title: source.rawValue, isSelected: librarySource == source) { librarySource = source } }
+            Picker("来源", selection: $librarySource) {
+                ForEach(LibrarySource.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
         case .playlists:
-            []
+            EmptyView()
         }
     }
 
@@ -1300,59 +1286,4 @@ private struct MainTabLabel: ViewModifier {
             .background(Capsule().fill(isSelected ? .white.opacity(0.2) : .clear))
             .contentShape(Capsule())
     }
-}
-
-/// 页签上的来源下拉面板：和筛选面板同样的深色磨砂玻璃
-struct SourcePickerPanel: View {
-    struct Option: Identifiable {
-        let title: String
-        let isSelected: Bool
-        let select: () -> Void
-        var id: String { title }
-    }
-
-    let options: [Option]
-    let onDismiss: () -> Void
-    @State private var hovered: String?
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(options) { option in
-                Button {
-                    option.select()
-                    onDismiss()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .opacity(option.isSelected ? 1 : 0)
-                        Text(option.title)
-                            .font(.system(size: 13, weight: option.isSelected ? .semibold : .regular))
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(.white.opacity(option.isSelected ? 1 : 0.8))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(minWidth: 140, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(hovered == option.id ? .white.opacity(0.14) : .clear))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovered = $0 ? option.id : (hovered == option.id ? nil : hovered) }
-            }
-        }
-        .padding(5)
-        .fixedSize()
-        .background(Color.black.opacity(0.45), in: shape)
-        .background(.ultraThinMaterial, in: shape)
-        .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
-        .environment(\.colorScheme, .dark)
-    }
-}
-
-private struct SourceTabAnchorKey: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
 }
