@@ -1,0 +1,24 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name-specializations" : [
+            {
+              "value" : "day.png"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "night.png"
+            }
+          ],
+          "name" : "Scena"
+        }
+      ]
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
