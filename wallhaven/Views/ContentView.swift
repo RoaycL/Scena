@@ -506,8 +506,8 @@ struct ContentView: View {
         .onChange(of: currentItems.map(\.id), initial: true) { oldIDs, _ in
             ensureValidSelection(previousIDs: oldIDs)
         }
+        .onChange(of: selectedItem?.id) { failedBackgroundID = nil }
         .onChange(of: selectedItem, initial: true) { _, item in
-            failedBackgroundID = nil
             guard let item else { return }
             backgroundItem = item
             prefetchNeighbors(of: item)

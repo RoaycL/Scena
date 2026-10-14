@@ -23,7 +23,8 @@ struct ImmersiveBackground: View {
 
     @State private var displayedItem: GalleryItem?
     @State private var requestedID: String?
-    @State private var requestedRetryToken = 0
+    /// 每层保留自己的重试编号；切换选择不能重建上一张清晰画面。
+    @State private var layerAttempts: [String: Int] = [:]
 
     private var layers: [GalleryItem] {
         if let displayedItem, let item, displayedItem.id != item.id { return [displayedItem, item] }
@@ -34,22 +35,23 @@ struct ImmersiveBackground: View {
         ZStack {
             if showsBlackBase { Color.black }
             ForEach(layers) { candidate in
+                let attempt = layerAttempts[candidate.id, default: 0]
                 BackgroundLayer(item: candidate, staticOnly: staticOnly, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard, onFailure: {
                     DispatchQueue.main.async {
-                        guard requestedID == candidate.id, requestedRetryToken == retryToken else { return }
+                        guard requestedID == candidate.id, layerAttempts[candidate.id, default: 0] == attempt else { return }
                         onFailed(candidate)
                     }
                 }) {
                     // 回调可能来自上一轮的加载任务，只提交当前请求的清晰画面。
                     DispatchQueue.main.async {
-                        guard requestedID == candidate.id, requestedRetryToken == retryToken else { return }
+                        guard requestedID == candidate.id, layerAttempts[candidate.id, default: 0] == attempt else { return }
                         withAnimation(Motion.content) {
                             displayedItem = candidate
                             onDisplayed(candidate)
                         }
                     }
                 }
-                .id("\(candidate.id)-\(candidate.id == item?.id ? retryToken : 0)")
+                .id("\(candidate.id)-\(attempt)")
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
                 // 新画面从略微放大、略带模糊过渡到清晰，像镜头对焦；减少动态效果时只淡入
                 .scaleEffect(displayedItem?.id == candidate.id || Motion.reducesMotion ? 1 : 1.035)
@@ -61,7 +63,10 @@ struct ImmersiveBackground: View {
             requestedID = item?.id
             if let displayedItem, displayedItem.id == item?.id { onDisplayed(displayedItem) }
         }
-        .onChange(of: retryToken) { requestedRetryToken = retryToken }
+        .onChange(of: retryToken) {
+            guard let item else { return }
+            layerAttempts[item.id, default: 0] += 1
+        }
         .clipped()
     }
 }
