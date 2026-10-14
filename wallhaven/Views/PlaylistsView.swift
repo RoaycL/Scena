@@ -20,6 +20,8 @@ struct PlaylistsView: View {
     @State private var removalHistory: [PlaylistRemoval] = []
     @State private var restoredSelection: PlaylistRemoval?
     @StateObject private var dragState = PlaylistDragState()
+    /// 按下点相对缩略图中心的偏移：拖动预览保持在手指抓住的位置，像直接拖着这张图
+    @State private var dragGrabOffset = CGSize.zero
     @StateObject private var interactionInput = PlaylistInteractionInput()
     var embedded = false
     var panelWidth: CGFloat = 1180
@@ -52,14 +54,10 @@ struct PlaylistsView: View {
         }
         .overlay(alignment: .topLeading) {
             if let payload = dragState.payload {
-                Label(dragState.sidebarTargetID != nil ? "复制 \(payload.ids.count) 张" : "\(payload.ids.count) 张壁纸",
-                      systemImage: dragState.sidebarTargetID != nil ? "plus.square.on.square" : "photo.stack")
-                    .font(.caption.weight(.medium)).padding(10)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-                    .position(x: dragState.location.x + 40, y: dragState.location.y - 24)
+                dragPreview(payload)
+                    .position(x: dragState.location.x + dragGrabOffset.width, y: dragState.location.y + dragGrabOffset.height)
                     .allowsHitTesting(false)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }
         .frame(width: embedded ? panelWidth : nil, height: embedded ? maximumHeight : nil)
@@ -450,6 +448,10 @@ struct PlaylistsView: View {
                                     guard !dragState.isCancelled else { return }
                                     if dragState.payload == nil {
                                         let selected = selectedEntries.contains(entry.id) ? selectedEntries : [entry.id]
+                                        if let frame = dragState.frames[entry.id] {
+                                            dragGrabOffset = CGSize(width: frame.midX - value.startLocation.x,
+                                                                    height: frame.minY + 45 - value.startLocation.y)
+                                        }
                                         withAnimation(Motion.hover) {
                                             dragState.begin(PlaylistDragPayload(playlistID: playlist.id,
                                                 ids: playlist.entries.map(\.id).filter { selected.contains($0) }))
@@ -511,6 +513,49 @@ struct PlaylistsView: View {
                 removeEntries(selectedEntries, from: playlist)
             }
         }
+    }
+
+    /// 拖动时跟随鼠标的缩略图：多选时后面叠着卡片并显示数量，悬停在其他列表上时显示「+」
+    private func dragPreview(_ payload: PlaylistDragPayload) -> some View {
+        let source = manager.playlists.first { $0.id == payload.playlistID }
+        let entry = source?.entries.first { $0.id == payload.ids.first }
+        let isCopying = dragState.sidebarTargetID != nil
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        return ZStack {
+            ForEach(Array(1..<min(payload.ids.count, 3)).reversed(), id: \.self) { depth in
+                shape.fill(Color(white: 0.22))
+                    .overlay(shape.stroke(.white.opacity(0.15), lineWidth: 0.5))
+                    .frame(width: 160, height: 90)
+                    .rotationEffect(.degrees(Double(depth) * 4))
+                    .offset(x: CGFloat(depth) * 5, y: CGFloat(depth) * -3)
+            }
+            KFImage(source: entry.flatMap { thumbnailSource(for: $0) })
+                .setProcessor(GIFPosterFrameProcessor(maxPixelSize: 480))
+                .placeholder { Color(white: 0.22) }
+                .resizable()
+                .scaledToFill()
+                .frame(width: 160, height: 90)
+                .clipShape(shape)
+                .overlay(shape.stroke(.white.opacity(0.25), lineWidth: 0.5))
+        }
+        .overlay(alignment: .topTrailing) {
+            if payload.ids.count > 1 || isCopying {
+                HStack(spacing: 3) {
+                    if isCopying { Image(systemName: "plus") }
+                    if payload.ids.count > 1 { Text("\(payload.ids.count)") }
+                }
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(isCopying ? Color.green : Color.accentColor, in: Capsule())
+                .offset(x: 8, y: -8)
+            }
+        }
+        // 拿起来的样子：略微放大、倾斜，投下较深的阴影
+        .scaleEffect(isCopying ? 0.8 : 1.04)
+        .rotationEffect(.degrees(-2))
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 10)
+        .animation(Motion.hover, value: isCopying)
     }
 
     private func entryCard(_ entry: PlaylistEntry, isCurrent: Bool) -> some View {
