@@ -54,6 +54,8 @@ struct ContentView: View {
     @State private var topBarTrailingWidth: CGFloat = 0
     /// 只有主动选择/导航才要求缩略图滚动；删除后的邻项选择保留当前视口。
     @State private var selectionWithoutScrollingID: String?
+    /// 自动轮播切换的选中项：缩略图条把它滚到正中；手动点选和键盘浏览只在看不到时才滚动
+    @State private var centersSelection = false
     @State private var workshopSelectionID: String?
     @State private var isWorkshopFilterPresented = false
     @State private var workshopColumns = 4
@@ -153,6 +155,7 @@ struct ContentView: View {
     private func select(_ item: GalleryItem, isUserInitiated: Bool = false) {
         if isUserInitiated { immersive.userDidSelectThumbnail() }
         selectionWithoutScrollingID = nil
+        centersSelection = false
         switch page {
         case .home: viewModel.selectedWallpaper = item.remote
         case .favorites: favoriteSelectionID = item.id
@@ -479,6 +482,7 @@ struct ContentView: View {
                   currentItems.count > 1 else { return }
             let index = selectedItem.flatMap { currentItems.firstIndex(of: $0) } ?? -1
             select(currentItems[(index + 1) % currentItems.count])
+            centersSelection = true
         }
         .onReceive(NotificationCenter.default.publisher(for: MainWindow.navigationNotification)) { _ in
             handleMenuNavigation()
@@ -1106,6 +1110,7 @@ struct ContentView: View {
                     items: items,
                     selectedID: selectedItem?.id,
                     selectionWithoutScrollingID: selectionWithoutScrollingID,
+                    centersSelection: centersSelection,
                     isLoading: isLoading,
                     thumbHeight: max(72, min(130, size.height * 0.13)),
                     onSelect: { select($0, isUserInitiated: true) },

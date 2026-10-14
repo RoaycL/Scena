@@ -10,6 +10,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
     let items: [GalleryItem]
     let selectedID: String?
     let selectionWithoutScrollingID: String?
+    /// 自动轮播时把选中项滚到正中；否则只在选中项不可见时滚动最小距离
+    var centersSelection = false
     let isLoading: Bool
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
@@ -74,7 +76,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .onChange(of: selectedID) { _, newID in
                 guard let newID, newID != selectionWithoutScrollingID else { return }
                 withAnimation(Motion.scroll) {
-                    proxy.scrollTo(newID)
+                    proxy.scrollTo(newID, anchor: centersSelection ? .center : nil)
                 }
             }
         }
