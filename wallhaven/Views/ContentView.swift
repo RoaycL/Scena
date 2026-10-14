@@ -61,6 +61,7 @@ struct ContentView: View {
     @State private var backgroundItem: GalleryItem?
     @State private var prefetcher: ImagePrefetcher?
     @State private var isFilterPresented = false
+    @State private var isDownloadsPresented = false
     @FocusState private var isSearchFocused: Bool
 
     @State private var isShowingNewFolderAlert = false
@@ -423,7 +424,9 @@ struct ContentView: View {
                 .padding(.top, topBarInset + 8)
                 .padding(.trailing, 16)
 
-                filterOverlay(maxHeight: size.height - 90)
+            }
+            .overlayPreferenceValue(PanelTriggerKey.self) { triggers in
+                panelOverlay(triggers: triggers, size: size)
             }
         }
         .ignoresSafeArea()
@@ -462,7 +465,7 @@ struct ContentView: View {
                 workshop.refreshLibrary()
                 workshop.syncSubscriptions()
             }
-            closeFilterPanels()
+            closeAllPanels()
             ensureValidSelection()
         }
         .onChange(of: workshop.mode) {
@@ -525,31 +528,46 @@ struct ContentView: View {
         }
     }
 
-    /// 筛选面板浮层：点击面板外部关闭
+    /// 筛选 / 下载面板浮层：从触发按钮的位置「长」出来，点击面板外部关闭
     @ViewBuilder
-    private func filterOverlay(maxHeight: CGFloat) -> some View {
-        if isFilterPresented || isWorkshopFilterPresented {
-            ZStack(alignment: .topTrailing) {
-                Color.black.opacity(0.001)
-                    .onTapGesture { closeFilterPanels() }
-                Group {
-                    if isWorkshopFilterPresented {
-                        WorkshopFilterPanel(maxHeight: maxHeight)
-                    } else {
-                        FilterPanel()
+    private func panelOverlay(triggers: [PanelTrigger: Anchor<CGRect>], size: CGSize) -> some View {
+        GeometryReader { proxy in
+            let open: (kind: PanelTrigger, width: CGFloat)? =
+                isDownloadsPresented ? (.downloads, 440)
+                : isWorkshopFilterPresented ? (.workshopFilter, 360)
+                : isFilterPresented ? (.filter, 300) : nil
+            if let open {
+                let button = triggers[open.kind].map { proxy[$0] }
+                    ?? CGRect(x: size.width - 40, y: 16, width: 34, height: 34)
+                let top = button.maxY + 10
+                let panelMinX = size.width - 16 - open.width
+                // 缩放锚点落在按钮正下方，面板像从按钮里伸展出来
+                let anchor = UnitPoint(x: min(max((button.midX - panelMinX) / open.width, 0), 1), y: 0)
+                ZStack(alignment: .topTrailing) {
+                    Color.black.opacity(0.001)
+                        .onTapGesture { closeAllPanels() }
+                    Group {
+                        switch open.kind {
+                        case .downloads: WorkshopDownloadsView(onNavigate: { closeAllPanels() })
+                        case .workshopFilter: WorkshopFilterPanel(maxHeight: size.height - top - 24)
+                        case .filter: FilterPanel()
+                        }
                     }
+                    .padding(.top, top)
+                    .padding(.trailing, 16)
+                    .transition(.panelGrow(from: anchor))
+                    .id(open.kind)
                 }
-                .padding(.top, 58)
-                .padding(.trailing, 16)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
+                .transition(.identity)
             }
         }
     }
 
-    private func closeFilterPanels() {
+    private func closeAllPanels() {
         withAnimation(Motion.panel) {
             isFilterPresented = false
             isWorkshopFilterPresented = false
+            isDownloadsPresented = false
         }
     }
 
@@ -699,7 +717,14 @@ struct ContentView: View {
     private var topBarTrailing: some View {
         HStack(spacing: 10) {
             LiveWallpaperStatus(controller: liveController)
-            WorkshopDownloadsButton()
+            WorkshopDownloadsButton(isPresented: Binding(
+                get: { isDownloadsPresented },
+                set: { open in
+                    isDownloadsPresented = open
+                    if open { isFilterPresented = false; isWorkshopFilterPresented = false }
+                }
+            ))
+            .anchorPreference(key: PanelTriggerKey.self, value: .bounds) { [.downloads: $0] }
 
             switch page {
             case .home:
@@ -858,7 +883,10 @@ struct ContentView: View {
     private var workshopFilterButton: some View {
         // 工坊页顶栏元素较多，筛选按钮只显示图标
         Button {
-            withAnimation(Motion.panel) { isWorkshopFilterPresented.toggle() }
+            withAnimation(Motion.panel) {
+                isWorkshopFilterPresented.toggle()
+                isDownloadsPresented = false
+            }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .semibold))
@@ -879,11 +907,15 @@ struct ContentView: View {
             }
         }
         .help("筛选：类型、分级、题材、分辨率、排序")
+        .anchorPreference(key: PanelTriggerKey.self, value: .bounds) { [.workshopFilter: $0] }
     }
 
     private var filterButton: some View {
         Button {
-            withAnimation(Motion.panel) { isFilterPresented.toggle() }
+            withAnimation(Motion.panel) {
+                isFilterPresented.toggle()
+                isDownloadsPresented = false
+            }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
@@ -897,6 +929,7 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .help("筛选与排序")
+        .anchorPreference(key: PanelTriggerKey.self, value: .bounds) { [.filter: $0] }
     }
 
     private var folderMenu: some View {
@@ -1335,6 +1368,40 @@ private struct MainTabLabel: ViewModifier {
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
             .contentShape(Capsule())
+    }
+}
+
+/// 顶部栏里会弹出面板的按钮
+enum PanelTrigger: Hashable { case filter, workshopFilter, downloads }
+
+/// 各面板触发按钮的位置，面板据此决定从哪里「长」出来
+private struct PanelTriggerKey: PreferenceKey {
+    static let defaultValue: [PanelTrigger: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [PanelTrigger: Anchor<CGRect>], nextValue: () -> [PanelTrigger: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// 面板出现：从按钮处的小尺寸弹性伸展，同时由模糊变清晰；减少动态效果时只淡入淡出
+private struct PanelGrowModifier: ViewModifier {
+    let collapsed: Bool
+    let anchor: UnitPoint
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(collapsed ? 0.18 : 1, anchor: anchor)
+            .blur(radius: collapsed ? 8 : 0)
+            .opacity(collapsed ? 0 : 1)
+    }
+}
+
+extension AnyTransition {
+    static func panelGrow(from anchor: UnitPoint) -> AnyTransition {
+        if Motion.reducesMotion { return .opacity }
+        return .modifier(
+            active: PanelGrowModifier(collapsed: true, anchor: anchor),
+            identity: PanelGrowModifier(collapsed: false, anchor: anchor)
+        )
     }
 }
 

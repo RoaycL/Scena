@@ -4,11 +4,11 @@ import SwiftUI
 enum DownloadsWindow { static let id = "workshop-downloads" }
 
 struct WorkshopDownloadsButton: View {
-    @EnvironmentObject private var workshop: WorkshopViewModel
-    @State private var isPresented = false
+    /// 面板由主界面绘制（从按钮位置「长」出来），这里只负责开关
+    @Binding var isPresented: Bool
 
     var body: some View {
-        Button { isPresented.toggle() } label: {
+        Button { withAnimation(Motion.panel) { isPresented.toggle() } } label: {
             Image(systemName: "arrow.down.circle")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
@@ -17,31 +17,25 @@ struct WorkshopDownloadsButton: View {
         }
         .buttonStyle(.plain)
         .help("下载任务")
-        .popover(isPresented: $isPresented) {
-            WorkshopDownloadsView(isPopover: true)
-                .environmentObject(workshop)
-        }
     }
 }
 
 struct WorkshopDownloadsView: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
-    /// 弹出面板里点击任务跳转后收起面板；独立窗口保持打开
-    var isPopover = false
+    /// 主界面浮层里点击任务跳转后收起面板；独立窗口不传，保持打开
+    var onNavigate: (() -> Void)? = nil
 
     var body: some View {
         // 进度每秒刷新，单独放在子视图里观察
-        WorkshopDownloadsList(progress: workshop.progress, isPopover: isPopover)
+        WorkshopDownloadsList(progress: workshop.progress, onNavigate: onNavigate)
             .environmentObject(workshop)
     }
 }
 
 private struct WorkshopDownloadsList: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
-    /// 在弹出面板里时，跳转后收起面板
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject var progress: WorkshopDownloadProgress
-    var isPopover = false
+    var onNavigate: (() -> Void)?
 
     /// 进行中的排在前面，已完成的放到最后
     private var sortedJobs: [WorkshopDownloadJob] {
@@ -108,8 +102,7 @@ private struct WorkshopDownloadsList: View {
         }
         .padding(16)
         .frame(width: 440, height: 420)
-        .background(Color.black.opacity(0.28))
-        .background(DownloadsGlassBackground())
+        .modifier(DownloadsBackground(inWindowPanel: onNavigate != nil))
         .environment(\.colorScheme, .dark)
     }
 
@@ -118,7 +111,7 @@ private struct WorkshopDownloadsList: View {
         return HStack(alignment: .center, spacing: 10) {
             Button {
                 MainWindow.reveal(workshopItemID: job.id)
-                if isPopover { dismiss() }
+                onNavigate?()
             } label: {
                 rowText(job, entry: entry)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -132,7 +125,7 @@ private struct WorkshopDownloadsList: View {
         .contextMenu {
             Button("在 Scena 中查看") {
                 MainWindow.reveal(workshopItemID: job.id)
-                if isPopover { dismiss() }
+                onNavigate?()
             }
             if let url = URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(job.id)") {
                 Button("在 Steam 中打开") { NSWorkspace.shared.open(url) }
@@ -201,7 +194,27 @@ private struct WorkshopDownloadsList: View {
     }
 }
 
-/// 窗口和弹出面板共用原生磨砂背景，叠加深色底保证文字可读。
+/// 主界面浮层用和筛选面板一致的玻璃卡片；独立窗口用原生磨砂背景
+private struct DownloadsBackground: ViewModifier {
+    let inWindowPanel: Bool
+
+    func body(content: Content) -> some View {
+        if inWindowPanel {
+            let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+            content
+                .sceneGlass(in: shape, tint: .black.opacity(0.4))
+                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
+                .clipShape(shape)
+                .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+        } else {
+            content
+                .background(Color.black.opacity(0.28))
+                .background(DownloadsGlassBackground())
+        }
+    }
+}
+
+/// 独立窗口的原生磨砂背景，叠加深色底保证文字可读。
 private struct DownloadsGlassBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
