@@ -133,7 +133,12 @@ struct wallhavenApp: App {
         .windowResizability(.contentMinSize)
 
         // 状态栏图标（可在设置中关闭）
-        MenuBarExtra(isInserted: $showStatusItem) {
+        // 系统会反复把显示状态写回这个绑定；值不变也写会触发 UserDefaults 变更通知，
+        // 让所有使用 @AppStorage 的界面不停重绘（打开的右键菜单会一直闪烁），所以只在真正变化时写入
+        MenuBarExtra(isInserted: Binding(
+            get: { showStatusItem },
+            set: { if $0 != showStatusItem { showStatusItem = $0 } }
+        )) {
             StatusMenuContent(liveController: liveController)
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
