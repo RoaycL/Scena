@@ -532,15 +532,8 @@ struct ContentView: View {
 
     // MARK: - Top bar
 
-    /// 「发现」「收藏」「资料库」页签下有二级切换（来源），顶部栏为两行
-    private var hasSubNavigation: Bool {
-        currentTab != .playlists
-    }
-
-    /// 顶部栏占用的高度，供贴着顶部栏排列的内容使用
-    private var topBarInset: CGFloat {
-        hasSubNavigation ? 92 : 58
-    }
+    /// 顶部栏占用的高度，供贴着顶部栏排列的内容使用（来源切换已并入主页签，顶部栏只有一行）
+    private var topBarInset: CGFloat { 58 }
 
     /// 顶部栏：主页签和下方的二级切换一起居中；窗口太窄放不下时回退为靠左排列，避免与右侧工具重叠
     private func topBar(width: CGFloat) -> some View {
@@ -569,76 +562,78 @@ struct ContentView: View {
         .onHover { immersive.setHold("topbar", active: $0) }
     }
 
-    /// 主页签 + 正下方的二级切换
-    private var navigation: some View {
-        VStack(spacing: 6) {
-            mainTabs
-            subNavigation
-        }
-    }
+    private var navigation: some View { mainTabs }
 
+    /// 主页签。选中的页签如果有来源（发现、收藏、资料库），显示成「资料库 · 创意工坊 ▾」，点击弹出来源菜单
     private var mainTabs: some View {
         HStack(spacing: 2) {
             ForEach(MainTab.allCases) { tab in
-                Button { switchTab(tab) } label: {
-                    Text(tab.rawValue)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                        .fixedSize()
-                        .foregroundStyle(currentTab == tab ? .white : .white.opacity(0.6))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(currentTab == tab ? .white.opacity(0.2) : .clear))
-                        .contentShape(Capsule())
+                if currentTab == tab, let source = sourceTitle(for: tab) {
+                    Menu {
+                        sourcePicker(for: tab)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(tab.rawValue)
+                            if !source.isEmpty {
+                                Text("·").foregroundStyle(.white.opacity(0.45))
+                                Text(source).foregroundStyle(.white.opacity(0.85))
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .modifier(MainTabLabel(isSelected: true))
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("切换来源")
+                } else {
+                    Button { switchTab(tab) } label: {
+                        Text(tab.rawValue).modifier(MainTabLabel(isSelected: currentTab == tab))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(4)
         .background(.ultraThinMaterial, in: Capsule())
         .measureWidth($topBarTabsWidth)
+        .animation(.easeInOut(duration: 0.2), value: currentTab)
     }
 
-    /// 二级导航：「发现」「收藏」切换 Wallhaven / 创意工坊，资料库切换来源
+    /// 页签上显示的当前来源；nil 表示这个页签没有来源可选
+    private func sourceTitle(for tab: MainTab) -> String? {
+        switch tab {
+        case .discover: discoverSource.rawValue
+        case .collections: collectionSource.rawValue
+        case .library: librarySource == .all ? "" : librarySource.rawValue
+        case .playlists: nil
+        }
+    }
+
     @ViewBuilder
-    private var subNavigation: some View {
-        if currentTab == .discover {
-            subSegmented(ContentSource.allCases, selection: $discoverSource)
-        } else if currentTab == .collections {
-            subSegmented(ContentSource.allCases, selection: $collectionSource)
-        } else if currentTab == .library {
-            subSegmented(LibrarySource.allCases, selection: $librarySource)
-        }
-    }
-
-    /// 二级分段控件：比主页签小一号、颜色更淡，主次分明
-    private func subSegmented<Option: Identifiable & RawRepresentable & Hashable>(
-        _ options: [Option],
-        selection: Binding<Option>
-    ) -> some View where Option.RawValue == String {
-        HStack(spacing: 2) {
-            ForEach(options) { option in
-                let isOn = selection.wrappedValue == option
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { selection.wrappedValue = option }
-                } label: {
-                    Text(option.rawValue)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .fixedSize()
-                        .foregroundStyle(isOn ? .white : .white.opacity(0.55))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(isOn ? .white.opacity(0.16) : .clear))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
+    private func sourcePicker(for tab: MainTab) -> some View {
+        switch tab {
+        case .discover:
+            Picker("来源", selection: $discoverSource) {
+                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.inline)
+        case .collections:
+            Picker("来源", selection: $collectionSource) {
+                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+        case .library:
+            Picker("来源", selection: $librarySource) {
+                ForEach(LibrarySource.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+        case .playlists:
+            EmptyView()
         }
-        .padding(2)
-        .background(.black.opacity(0.18), in: Capsule())
-        .background(.ultraThinMaterial.opacity(0.6), in: Capsule())
-        .transition(.opacity)
     }
 
     @ViewBuilder
@@ -1246,5 +1241,22 @@ private extension View {
     /// 测量视图宽度（用于顶部栏判断是否放得下居中布局）
     func measureWidth(_ width: Binding<CGFloat>) -> some View {
         onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.wrappedValue = $0 }
+    }
+}
+
+/// 主页签的文字样式：选中时白字 + 半透明底
+private struct MainTabLabel: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 13, weight: .medium))
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(isSelected ? .white.opacity(0.2) : .clear))
+            .contentShape(Capsule())
     }
 }
