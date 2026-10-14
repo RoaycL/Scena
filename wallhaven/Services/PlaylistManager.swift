@@ -206,6 +206,14 @@ final class PlaylistManager: ObservableObject {
         }
     }
 
+    /// 拖动调整播放列表（分组）的顺序：把 id 移到 target 所在的位置
+    func movePlaylist(_ id: UUID, to target: UUID) {
+        guard id != target, let from = playlists.firstIndex(where: { $0.id == id }),
+              let to = playlists.firstIndex(where: { $0.id == target }) else { return }
+        playlists.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        save()
+    }
+
     func move(in id: UUID, from source: IndexSet, to destination: Int) {
         update(id) { $0.entries.move(fromOffsets: source, toOffset: destination) }
         if activeID == id { rebuildOrder() }

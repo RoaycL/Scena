@@ -46,6 +46,24 @@ struct PlaylistPersistenceTests {
         #expect(PlaylistManager(storageURL: url).playlists.first?.name == "exit")
     }
 
+    @Test func playlistsReorderInBothDirections() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let manager = PlaylistManager(storageURL: folder.appendingPathComponent("playlists.json"))
+        let a = manager.create(name: "a"), b = manager.create(name: "b"), c = manager.create(name: "c")
+        manager.movePlaylist(c.id, to: a.id)
+        #expect(manager.playlists.map(\.name) == ["c", "a", "b"])
+        manager.movePlaylist(c.id, to: b.id)
+        #expect(manager.playlists.map(\.name) == ["a", "b", "c"])
+        manager.movePlaylist(a.id, to: b.id)
+        #expect(manager.playlists.map(\.name) == ["b", "a", "c"])
+        manager.movePlaylist(a.id, to: a.id)
+        #expect(manager.playlists.map(\.name) == ["b", "a", "c"])
+        manager.flushPendingSave()
+        #expect(PlaylistManager(storageURL: folder.appendingPathComponent("playlists.json")).playlists.map(\.name) == ["b", "a", "c"])
+    }
+
     @Test func lightweightWorkshopLoadPreservesPlaybackMetadata() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

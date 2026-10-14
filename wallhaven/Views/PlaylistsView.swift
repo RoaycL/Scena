@@ -5,6 +5,7 @@
 
 import Kingfisher
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum PlaylistsWindow {
     static let id = "playlists"
@@ -20,6 +21,8 @@ struct PlaylistsView: View {
     @State private var removalHistory: [PlaylistRemoval] = []
     @State private var restoredSelection: PlaylistRemoval?
     @StateObject private var dragState = PlaylistDragState()
+    /// 正在拖动排序的播放列表（侧栏分组）
+    @State private var draggingPlaylistID: UUID?
     /// 按下点相对缩略图中心的偏移：拖动预览保持在手指抓住的位置，像直接拖着这张图
     @State private var dragGrabOffset = CGSize.zero
     @StateObject private var interactionInput = PlaylistInteractionInput()
@@ -138,6 +141,7 @@ struct PlaylistsView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 10)
 
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 4) {
                     ForEach(manager.playlists) { playlist in
@@ -147,6 +151,15 @@ struct PlaylistsView: View {
                             isActive: playlist.id == manager.activeID,
                             isPaused: manager.isPaused
                         )
+                        .id(playlist.id)
+                        // 拖动排序：拖起的行变淡，经过其他行时实时让位
+                        .opacity(draggingPlaylistID == playlist.id ? 0.4 : 1)
+                        .onDrag {
+                            draggingPlaylistID = playlist.id
+                            return NSItemProvider(object: "scena-playlist:\(playlist.id.uuidString)" as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: PlaylistReorderDropDelegate(
+                            target: playlist.id, dragging: $draggingPlaylistID, manager: manager))
                         // 单击立即响应；双击另外识别（先写 count: 2 会让单击等待双击判定）
                         .onTapGesture { selectedID = playlist.id }
                         .simultaneousGesture(TapGesture(count: 2).onEnded { manager.play(playlist.id) })
@@ -170,6 +183,31 @@ struct PlaylistsView: View {
                         }
                     }
                 }
+            }
+            // 鼠标滚轮 / 触控板在侧栏上滚动：切换上一个、下一个播放列表
+            .background(ScrollWheelSwitcher { step in
+                let ids = manager.playlists.map(\.id)
+                guard !ids.isEmpty else { return }
+                let index = selectedID.flatMap { ids.firstIndex(of: $0) } ?? 0
+                let next = ids[min(max(index + step, 0), ids.count - 1)]
+                guard next != selectedID else { return }
+                withAnimation(Motion.hover) { selectedID = next }
+                withAnimation(Motion.scroll) { proxy.scrollTo(next) }
+            })
+            .onDrop(of: [.text], isTargeted: nil) { _ in
+                // 拖到行之间的空隙或列表外松手：结束拖动
+                draggingPlaylistID = nil
+                return false
+            }
+            // 拖到窗口外取消时系统不会回调：松开鼠标后恢复被拖行的样子
+            .task(id: draggingPlaylistID) {
+                guard draggingPlaylistID != nil else { return }
+                while !Task.isCancelled, NSEvent.pressedMouseButtons & 1 != 0 {
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+                guard !Task.isCancelled else { return }
+                draggingPlaylistID = nil
+            }
             }
 
             Divider().padding(.vertical, 8)
@@ -299,7 +337,7 @@ struct PlaylistsView: View {
                                     Text("\(index + 1) / \(playlist.entries.count)")
                                 }
                                 if isActive && manager.currentEntryID == displayedPreviewID {
-                                    Label(manager.isPaused ? "已暂停" : "正在播放", systemImage: manager.isPaused ? "pause.fill" : "speaker.wave.2.fill")
+                                    Label { Text(manager.isPaused ? "已暂停" : "正在桌面播放") } icon: { PlaybackStateIcon(isPaused: manager.isPaused) }
                                 }
                             }
                             .font(.caption)
@@ -584,7 +622,7 @@ struct PlaylistsView: View {
                 .clipped()
                 .overlay(alignment: .bottomTrailing) {
                     if isCurrent {
-                        Image(systemName: "speaker.wave.2.fill")
+                        PlaybackStateIcon(isPaused: manager.isPaused)
                             .font(.caption)
                             .padding(6)
                             .background(.regularMaterial, in: Circle())
@@ -700,10 +738,10 @@ private struct PlaylistSidebarRow: View {
             }
             Spacer(minLength: 0)
             if isActive {
-                Image(systemName: isPaused ? "pause.circle.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 12))
+                PlaybackStateIcon(isPaused: isPaused)
+                    .font(.system(size: 13))
                     .foregroundStyle(isPaused ? Color.secondary : Color.accentColor)
-                    .help(isPaused ? "已暂停" : "正在播放")
+                    .help(isPaused ? "已暂停" : "正在桌面轮播")
             }
         }
         .padding(6)
@@ -713,7 +751,7 @@ private struct PlaylistSidebarRow: View {
         }
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
-        .help("单击查看 · 双击播放")
+        .help("单击查看 · 双击播放 · 拖动排序 · 滚动切换")
     }
 }
 
@@ -1069,5 +1107,90 @@ struct GlassChipLabel: View {
         .background(Capsule().fill(Color.white.opacity(0.08)))
         .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
         .contentShape(Capsule())
+    }
+}
+
+/// 播放列表正在桌面轮播的标识：「画面 + 播放」而不是声音图标；播放时轻轻呼吸，暂停时静止
+struct PlaybackStateIcon: View {
+    let isPaused: Bool
+
+    var body: some View {
+        Image(systemName: isPaused ? "pause.rectangle.fill" : "play.rectangle.fill")
+            .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.pulse, options: .repeating, isActive: !isPaused && !Motion.reducesMotion)
+    }
+}
+
+/// 侧栏拖动排序：经过哪一行就把被拖的列表移到那里，松手即完成
+private struct PlaylistReorderDropDelegate: DropDelegate {
+    let target: UUID
+    @Binding var dragging: UUID?
+    let manager: PlaylistManager
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging != target else { return }
+        withAnimation(Motion.hover) { manager.movePlaylist(dragging, to: target) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let handled = dragging != nil
+        dragging = nil
+        return handled
+    }
+
+    func validateDrop(info: DropInfo) -> Bool { dragging != nil }
+}
+
+/// 在所在区域上滚动鼠标滚轮或触控板时回调 ±1。触控板按累计距离触发，惯性滚动不触发，避免一甩跳好几个
+private struct ScrollWheelSwitcher: NSViewRepresentable {
+    let onStep: (Int) -> Void
+
+    func makeNSView(context: Context) -> Probe { Probe(onStep: onStep) }
+    func updateNSView(_ view: Probe, context: Context) { view.onStep = onStep }
+
+    final class Probe: NSView {
+        var onStep: (Int) -> Void
+        private var monitor: Any?
+        private var accumulated: CGFloat = 0
+
+        init(onStep: @escaping (Int) -> Void) {
+            self.onStep = onStep
+            super.init(frame: .zero)
+        }
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let window = self.window, event.window === window,
+                      self.convert(self.bounds, to: nil).contains(event.locationInWindow) else { return event }
+                return self.handle(event) ? nil : event
+            }
+        }
+
+        private func handle(_ event: NSEvent) -> Bool {
+            // 惯性阶段直接吞掉，不再切换
+            guard event.momentumPhase.isEmpty else { return true }
+            if event.phase == .began { accumulated = 0 }
+            let delta = event.scrollingDeltaY
+            guard abs(delta) > abs(event.scrollingDeltaX) else { return false }
+            if event.hasPreciseScrollingDeltas {
+                accumulated += delta
+                guard abs(accumulated) >= 36 else { return true }
+                let step = accumulated > 0 ? -1 : 1
+                accumulated = 0
+                onStep(step)
+            } else if delta != 0 {
+                // 鼠标滚轮：每一格切换一个
+                onStep(delta > 0 ? -1 : 1)
+            }
+            return true
+        }
+
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 }
