@@ -163,6 +163,9 @@ struct WorkshopFilterPanel: View {
             }
 
             GlassSection(title: "内容偏好") {
+                // 「动漫」本身是一个题材，和女孩、风景等并列，一个壁纸通常只有一个题材标签：
+                // 选了其他题材时结果里本来就没有动漫，这个开关不起作用
+                let hasGenre = !workshop.filters.genres.isEmpty
                 HStack(spacing: 8) {
                     GlassChip(title: "显示动漫", isOn: !workshop.filters.hideAnime) {
                         workshop.filters.hideAnime = false
@@ -171,9 +174,14 @@ struct WorkshopFilterPanel: View {
                         workshop.filters.hideAnime = true
                     }
                 }
-                Text("显示动漫时保留其他题材；隐藏动漫时排除带有动漫标签的内容。")
+                .disabled(hasGenre)
+                .opacity(hasGenre ? 0.4 : 1)
+                Text(hasGenre
+                     ? "已选择题材：「动漫」本身也是一个题材，壁纸通常只属于其中一个，所以选了题材后结果里本来就没有动漫标签的内容。注意动漫画风的壁纸常被归为「女孩」等题材，无法按标签排除。"
+                     : "隐藏动漫时排除带有「动漫」标签的内容。动漫画风但被作者归为其他题材的壁纸不会被排除。")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             GlassSection(title: "仅显示") {
