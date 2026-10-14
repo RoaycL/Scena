@@ -356,7 +356,7 @@ struct ContentView: View {
     }
 
     private func switchTab(_ tab: MainTab) {
-        withAnimation(.easeInOut(duration: 0.2)) { currentTab = tab }
+        withAnimation(Motion.navigation) { currentTab = tab }
     }
 
     // MARK: - Body
@@ -544,7 +544,7 @@ struct ContentView: View {
     }
 
     private func closeFilterPanels() {
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(Motion.panel) {
             isFilterPresented = false
             isWorkshopFilterPresented = false
         }
@@ -596,7 +596,7 @@ struct ContentView: View {
 
             if canCenter { navigation }
         }
-        .animation(.easeInOut(duration: 0.2), value: canCenter)
+        .animation(Motion.navigation, value: canCenter)
         .environment(\.colorScheme, .dark)
         .onHover { immersive.setHold("topbar", active: $0) }
     }
@@ -628,18 +628,35 @@ struct ContentView: View {
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .help("切换来源")
+                    // 不做交叉淡化：新旧标签叠在一起会出现重影，由底色滑动表现切换
+                    .transition(.identity)
+                    .anchorPreference(key: SelectedTabAnchorKey.self, value: .bounds) { $0 }
                 } else {
                     Button { switchTab(tab) } label: {
                         Text(tab.rawValue).modifier(MainTabLabel(isSelected: currentTab == tab))
                     }
                     .buttonStyle(.plain)
+                    .transition(.identity)
+                    .anchorPreference(key: SelectedTabAnchorKey.self, value: .bounds) { currentTab == tab ? $0 : nil }
+                }
+            }
+        }
+        // 选中底色画在页签行的背景里，跟随选中页签的位置和宽度滑动、伸缩
+        .backgroundPreferenceValue(SelectedTabAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let frame = proxy[anchor]
+                    Capsule()
+                        .fill(.white.opacity(0.2))
+                        .frame(width: frame.width, height: frame.height)
+                        .offset(x: frame.minX, y: frame.minY)
                 }
             }
         }
         .padding(4)
         .background(.ultraThinMaterial, in: Capsule())
         .measureWidth($topBarTabsWidth)
-        .animation(.easeInOut(duration: 0.2), value: currentTab)
+        .animation(Motion.navigation, value: currentTab)
     }
 
     /// 页签上显示的当前来源；nil 表示这个页签没有来源可选
@@ -747,7 +764,7 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+        .animation(Motion.panel, value: isSearchFocused)
     }
 
     private var libraryAddMenu: some View {
@@ -798,7 +815,7 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+        .animation(Motion.panel, value: isSearchFocused)
     }
 
     private var workshopSearchField: some View {
@@ -832,13 +849,13 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule())
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSearchFocused)
+        .animation(Motion.panel, value: isSearchFocused)
     }
 
     private var workshopFilterButton: some View {
         // 工坊页顶栏元素较多，筛选按钮只显示图标
         Button {
-            withAnimation(.easeOut(duration: 0.18)) { isWorkshopFilterPresented.toggle() }
+            withAnimation(Motion.panel) { isWorkshopFilterPresented.toggle() }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .semibold))
@@ -863,7 +880,7 @@ struct ContentView: View {
 
     private var filterButton: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.18)) { isFilterPresented.toggle() }
+            withAnimation(Motion.panel) { isFilterPresented.toggle() }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "line.3.horizontal.decrease")
@@ -1309,7 +1326,12 @@ private struct MainTabLabel: ViewModifier {
             .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
-            .background(Capsule().fill(isSelected ? .white.opacity(0.2) : .clear))
             .contentShape(Capsule())
     }
+}
+
+/// 当前选中页签的位置，供页签行背景里的选中底色定位
+private struct SelectedTabAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
 }

@@ -68,7 +68,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
             .onChange(of: selectedID) { _, newID in
                 guard let newID, newID != selectionWithoutScrollingID else { return }
-                withAnimation(.easeInOut(duration: 0.3)) {
+                withAnimation(Motion.scroll) {
                     proxy.scrollTo(newID, anchor: .center)
                 }
             }
@@ -116,7 +116,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             )
             .opacity(isSelected ? 1 : 0.78)
             .scaleEffect(isSelected ? 1.04 : 1)
-            .animation(.spring(response: 0.3), value: isSelected)
+            .animation(Motion.hover, value: isSelected)
             .contentShape(Rectangle())
     }
 }

@@ -381,7 +381,7 @@ struct PlaylistsView: View {
             .frame(height: 152)
             .onChange(of: previewEntryID) { _, newID in
                 if let newID {
-                    withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(newID, anchor: .center) }
+                    withAnimation(Motion.scroll) { proxy.scrollTo(newID, anchor: .center) }
                 }
             }
             .focusable()

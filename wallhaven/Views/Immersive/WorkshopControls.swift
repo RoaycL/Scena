@@ -84,7 +84,7 @@ struct GlassChip: View {
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.4 : 1)
-        .animation(.easeOut(duration: 0.15), value: isOn)
+        .animation(Motion.hover, value: isOn)
     }
 }
 
@@ -302,7 +302,7 @@ struct WorkshopModePicker: View {
         HStack(spacing: 2) {
             ForEach(WorkshopViewModel.Mode.allCases) { mode in
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { workshop.mode = mode }
+                    withAnimation(Motion.navigation) { workshop.mode = mode }
                 } label: {
                     Text(mode.rawValue)
                         .font(.system(size: 12, weight: .semibold))

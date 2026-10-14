@@ -75,7 +75,7 @@ struct InfoPanel<Actions: View>: View {
             .padding(.top, 4)
         }
         .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
-        .animation(.easeInOut(duration: 0.25), value: tags)
+        .animation(Motion.content, value: tags)
     }
 }
 

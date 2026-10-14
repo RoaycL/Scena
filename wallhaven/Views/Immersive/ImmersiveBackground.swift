@@ -37,7 +37,7 @@ struct ImmersiveBackground: View {
                     // 回调可能来自上一轮的加载任务，只提交当前请求的清晰画面。
                     DispatchQueue.main.async {
                         guard requestedID == candidate.id else { return }
-                        withAnimation(.easeInOut(duration: 0.25)) { displayedItem = candidate }
+                        withAnimation(Motion.content) { displayedItem = candidate }
                     }
                 }
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
@@ -73,7 +73,7 @@ private struct BackgroundLayer: View {
     }
 
     private func liveDidBecomeReady() {
-        withAnimation(.easeInOut(duration: 0.3)) { isLiveReady = true }
+        withAnimation(Motion.content) { isLiveReady = true }
         signalReady()
     }
 
@@ -195,8 +195,8 @@ private struct OnlinePreviewShowcase: View {
             }
             .position(x: size.width * (centered ? 0.5 : 0.68), y: size.height * (centered ? 0.5 : 0.4))
             .opacity(showsCard ? 1 : 0)
-            .animation(.easeInOut(duration: 0.4), value: showsCard)
-            .animation(.easeInOut(duration: 0.4), value: centered)
+            .animation(Motion.panel, value: showsCard)
+            .animation(Motion.panel, value: centered)
         }
         .frame(width: size.width, height: size.height)
         .clipped()

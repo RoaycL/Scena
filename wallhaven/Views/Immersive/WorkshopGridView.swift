@@ -81,7 +81,7 @@ struct WorkshopGridView<MenuItems: View>: View {
                 .onChange(of: selectedID) { _, id in
                     guard let id else { return }
                     // anchor 为 nil：只在选中项不可见时滚动最小距离
-                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id) }
+                    withAnimation(Motion.scroll) { proxy.scrollTo(id) }
                 }
             }
             .frame(maxWidth: .infinity)
@@ -212,8 +212,8 @@ private struct WorkshopTile: View {
             .brightness(isHovered && !isSelected ? 0.05 : 0)
             .contentShape(shape)
             .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.15), value: isHovered)
-            .animation(.easeOut(duration: 0.15), value: isSelected)
+            .animation(Motion.hover, value: isHovered)
+            .animation(Motion.hover, value: isSelected)
     }
 
     private var typeBadge: some View {
@@ -589,7 +589,7 @@ private struct WorkshopExtraInfoSection: View {
                 .textSelection(.enabled)
             if text.count > 160 || text.filter({ $0 == "\n" }).count > 6 {
                 Button(isExpanded ? "收起" : "展开全部") {
-                    withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+                    withAnimation(Motion.panel) { isExpanded.toggle() }
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .semibold))
