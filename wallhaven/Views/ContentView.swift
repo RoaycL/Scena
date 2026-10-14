@@ -66,6 +66,8 @@ struct ContentView: View {
     /// 删除动画：正在收起的缩略图；被删除、正在淡出的大图（下一张显示出来后清除）
     @State private var removingIDs: Set<String> = []
     @State private var dismissedBackgroundID: String?
+    /// 页面级加载提示（统一显示在顶部栏下方）；加载很快时不显示，避免闪一下
+    @State private var showsPageLoading = false
     @State private var backgroundRetryToken = 0
     @State private var playlistKeyHandler: ((ImmersiveWindowController.Key) -> Bool)?
     @State private var prefetcher: ImagePrefetcher?
@@ -265,6 +267,17 @@ struct ContentView: View {
         }
     }
 
+    /// 当前页面在加载数据（wallhaven 搜索 / 翻页，创意工坊在线搜索 / 翻页）
+    private var isPageLoading: Bool {
+        (page == .home && viewModel.isLoading) || (page == .workshop && workshop.mode == .online && workshop.isLoading)
+    }
+
+    private var isPageRefreshing: Bool {
+        // 已有旧结果时才算「刷新」；第一次加载显示「正在加载」
+        (page == .home && viewModel.isRefreshing && !viewModel.wallpapers.isEmpty)
+            || (page == .workshop && workshop.isRefreshing && !workshop.onlineItems.isEmpty)
+    }
+
     private var hasOpenPanel: Bool { isFilterPresented || isWorkshopFilterPresented || isDownloadsPresented }
 
     private func handleKey(_ key: ImmersiveWindowController.Key) -> Bool {
@@ -436,10 +449,18 @@ struct ContentView: View {
             let size = proxy.size
             ZStack(alignment: .top) {
                 // 未下载的工坊条目：网格页的预览在详情栏里；沉浸式页面平时把卡片放在右上，隐藏界面后居中
+                // 大图还没显示（刚打开、删除后的间隙）时垫在下面的磨砂底，代替纯黑
+                FrostedBackdrop(item: backgroundItem)
+                    .frame(width: size.width, height: size.height)
+                    .opacity(displayedBackgroundItem == nil || dismissedBackgroundID != nil ? 1 : 0)
+                    .animation(Motion.content, value: displayedBackgroundItem == nil || dismissedBackgroundID != nil)
+                    .allowsHitTesting(false)
+
                 ImmersiveBackground(
                     item: backgroundItem,
                     showsPreviewCard: isWorkshopGrid ? immersive.isChromeHidden : true,
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden,
+                    showsBlackBase: false,
                     onDisplayed: {
                         displayedBackgroundItem = $0
                         failedBackgroundID = nil
@@ -496,6 +517,27 @@ struct ContentView: View {
                 .padding(.top, 10)
 
                 // 提示条放在右上角顶部栏下方，不随界面隐藏
+                // 页面级加载（搜索、筛选、翻页）统一显示在顶部栏下方居中
+                VStack {
+                    if showsPageLoading {
+                        PageLoadingCapsule(title: isPageRefreshing ? "正在刷新" : "正在加载")
+                            .transition(Motion.reducesMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, topBarInset + 8)
+                .opacity(immersive.isChromeHidden ? 0 : 1)
+                .allowsHitTesting(false)
+                .task(id: isPageLoading) {
+                    guard isPageLoading else {
+                        withAnimation(Motion.content) { showsPageLoading = false }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled, isPageLoading else { return }
+                    withAnimation(Motion.content) { showsPageLoading = true }
+                }
+
                 VStack {
                     if let toast = toastCenter.current {
                         ToastView(toast: toast)
@@ -1171,7 +1213,6 @@ struct ContentView: View {
                     selectionWithoutScrollingID: selectionWithoutScrollingID,
                     centersSelection: centersSelection,
                     removingIDs: removingIDs,
-                    isLoading: isLoading,
                     thumbHeight: max(72, min(130, size.height * 0.13)),
                     onSelect: { select($0, isUserInitiated: true) },
                     onItemAppear: { item in
@@ -1188,6 +1229,9 @@ struct ContentView: View {
                     downloadState: { $0.workshop.map(workshop.downloadState(of:)) ?? .none },
                     contextMenu: { contextMenu(for: $0) }
                 )
+                // 重新搜索时旧结果保留并变暗，新结果到了再替换
+                .opacity(page == .home && viewModel.isRefreshing ? 0.45 : 1)
+                .animation(Motion.content, value: page == .home && viewModel.isRefreshing)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
                 .onHover { immersive.setHold("strip", active: $0) }

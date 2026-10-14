@@ -58,6 +58,9 @@ struct WorkshopGridView<MenuItems: View>: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    // 重新搜索时旧结果保留并变暗，新结果到了再替换
+                    .opacity(workshop.isRefreshing ? 0.45 : 1)
+                    .animation(Motion.content, value: workshop.isRefreshing)
 
                     if workshop.mode == .online {
                         onlineFooter
@@ -108,10 +111,9 @@ struct WorkshopGridView<MenuItems: View>: View {
     @ViewBuilder
     private var onlineFooter: some View {
         Group {
+            // 加载中的提示统一显示在顶部栏下方，网格底部只在空闲时给出「加载更多 / 到底了」
             if workshop.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white)
+                Color.clear
             } else if workshop.canLoadMore {
                 Button("加载更多") { workshop.loadMore() }
                     .buttonStyle(.borderless)

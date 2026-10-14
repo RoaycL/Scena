@@ -3,6 +3,7 @@
 //  wallhaven
 //
 
+import Kingfisher
 import SwiftUI
 
 struct ToastView: View {
@@ -130,3 +131,51 @@ struct LiveWallpaperStatus: View {
     }
 }
 
+
+/// 页面级加载提示：搜索、筛选、翻页时统一显示在顶部栏下方居中的玻璃胶囊
+struct PageLoadingCapsule: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small).tint(.white)
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .sceneGlass(in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+/// 大图还没显示时的背景：用当前壁纸的缩略图做成强模糊的磨砂底，颜色和即将出现的画面一致；
+/// 还没有缩略图时是深色渐变
+struct FrostedBackdrop: View {
+    let item: GalleryItem?
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(white: 0.16), Color(white: 0.07)], startPoint: .top, endPoint: .bottom)
+            if let item, let source = item.thumbnailSource {
+                KFImage(source: source)
+                    .setProcessor(item.thumbnailProcessor)
+                    .scaleFactor(ImageSizing.scale)
+                    .cancelOnDisappear(true)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .blur(radius: 60, opaque: true)
+                    .saturation(1.15)
+                    .overlay(Color.black.opacity(0.3))
+                    .id(item.id)
+                    .transition(.opacity)
+            }
+        }
+        .clipped()
+        .animation(Motion.content, value: item?.id)
+    }
+}

@@ -14,7 +14,6 @@ struct ThumbnailStrip<MenuItems: View>: View {
     var centersSelection = false
     /// 正在删除的条目：缩小淡出，宽度收为 0，两侧卡片合拢
     var removingIDs: Set<String> = []
-    let isLoading: Bool
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
     var onItemAppear: (GalleryItem) -> Void = { _ in }
@@ -54,12 +53,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
                             }
                             .onAppear { onItemAppear(item) }
                     }
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.white)
-                            .frame(width: thumbWidth * 0.4, height: thumbHeight)
-                    } else if let loadError {
+                    // 加载中的提示统一显示在顶部栏下方，这里只保留失败后的重试
+                    if let loadError {
                         Button(action: onRetry) {
                             VStack(spacing: 6) {
                                 Image(systemName: "arrow.clockwise")

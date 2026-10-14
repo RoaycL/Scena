@@ -66,6 +66,8 @@ final class WallpaperViewModel: ObservableObject {
     private var searchGeneration = UUID()
     private var committedSearch: WallhavenSearchRequest?
     private var needsReplacement = false
+    /// 重新搜索中（旧结果保留、等待替换），界面据此把旧内容变暗
+    var isRefreshing: Bool { isLoading && needsReplacement }
     private let searchLoader: (@MainActor (WallhavenSearchRequest, Int) async throws -> [WallhavenWallpaper])?
     private let downloader = DownloadService()
     private let favoritesKey = "wallper.favorites.ids"

@@ -36,6 +36,8 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var libraryItems: [WorkshopItem] = []
     @Published private(set) var onlineItems: [WorkshopItem] = []
     @Published private(set) var isLoading = false
+    /// 重新搜索（换关键词、筛选）中：旧结果保留并变暗，新结果到了再整体替换，不会先清空成一片空白
+    @Published private(set) var isRefreshing = false
     @Published private(set) var downloadJobs: [WorkshopDownloadJob] = [] {
         didSet { persistDownloads() }
     }
@@ -412,9 +414,10 @@ final class WorkshopViewModel: ObservableObject {
             pageStates = [:]
             canLoadMore = true
             emptyPageStreak = 0
-            onlineItems = []
+            isRefreshing = true
         }
         guard canLoadMore, !isLoading else { return }
+        let replacing = reset
 
         let generation = searchGeneration
         let requestQuery = query
@@ -425,7 +428,10 @@ final class WorkshopViewModel: ObservableObject {
         isLoading = true
         searchTask = Task {
             defer {
-                if searchGeneration == generation { isLoading = false }
+                if searchGeneration == generation {
+                    isLoading = false
+                    isRefreshing = false
+                }
             }
             do {
                 let newItems: [WorkshopItem]
@@ -469,9 +475,9 @@ final class WorkshopViewModel: ObservableObject {
                 pageStates.merge(nextStates) { _, new in new }
                 let hasMore = isIDLookup ? false : groups.contains { !(pageStates[$0]?.isDone ?? false) }
                 if canLoadMore != hasMore { canLoadMore = hasMore }
-                var existing = Set(onlineItems.map(\.id))
+                var existing = replacing ? [] : Set(onlineItems.map(\.id))
                 let fresh = newItems.filter { existing.insert($0.id).inserted }
-                onlineItems.append(contentsOf: fresh)
+                if replacing { onlineItems = fresh } else { onlineItems.append(contentsOf: fresh) }
                 mergeDownloadState()
                 if fresh.isEmpty && hasMore && emptyPageStreak < 3 {
                     emptyPageStreak += 1
