@@ -165,13 +165,13 @@ final class PlaylistManager: ObservableObject {
         } else {
             toast.show("已添加到「\(playlist.name)」", style: .success)
         }
-        if activeID == id { rebuildOrder() }
+        if activeID == id { syncOrder() }
     }
 
     func remove(_ entryIDs: Set<String>, from id: UUID) {
         update(id) { $0.entries.removeAll { entryIDs.contains($0.id) } }
         if activeID == id {
-            rebuildOrder()
+            syncOrder()
             if activePlaylist?.entries.isEmpty == true { stop() }
         }
     }
@@ -299,6 +299,26 @@ final class PlaylistManager: ObservableObject {
             nextIndex = order.count - 1
         }
         applyEntry(order[nextIndex], attemptsLeft: order.count)
+    }
+
+    /// 列表内容增删后更新播放顺序，不打乱当前进度：
+    /// 顺序播放直接跟随列表；随机播放保留已排好的顺序，新加的壁纸随机插到还没播放的部分（这一轮内就会轮到）
+    private func syncOrder() {
+        guard let playlist = activePlaylist else { order = []; return }
+        guard playlist.shuffle else { order = playlist.entries.map(\.id); return }
+        order = Self.mergedShuffleOrder(order, entries: playlist.entries.map(\.id), current: currentEntryID)
+    }
+
+    nonisolated static func mergedShuffleOrder(_ order: [String], entries: [String], current: String?) -> [String] {
+        let present = Set(entries)
+        var result = order.filter { present.contains($0) }
+        let known = Set(result)
+        let currentIndex = current.flatMap { result.firstIndex(of: $0) } ?? -1
+        for id in entries where !known.contains(id) {
+            let position = Int.random(in: (currentIndex + 1)...result.count)
+            result.insert(id, at: position)
+        }
+        return result
     }
 
     private func rebuildOrder(keepCurrentFirst: Bool = true) {

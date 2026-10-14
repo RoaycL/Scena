@@ -242,6 +242,17 @@ struct wallhavenTests {
         #expect(OnlinePageState.interleave([a, b]).map(\.id) == ["a1", "b1", "a2", "a3"])
     }
 
+    @Test func shuffledPlaylistPlaysNewEntriesThisRound() {
+        let order = ["a", "b", "c", "d"]
+        for _ in 0..<50 {
+            let merged = PlaylistManager.mergedShuffleOrder(order, entries: ["a", "b", "c", "d", "e"], current: "b")
+            // 已排好的顺序不变，新条目一定排在当前项之后
+            #expect(merged.filter { $0 != "e" } == order)
+            #expect(merged.firstIndex(of: "e")! > merged.firstIndex(of: "b")!)
+        }
+        #expect(PlaylistManager.mergedShuffleOrder(order, entries: ["a", "c", "d"], current: "c") == ["a", "c", "d"])
+    }
+
     @Test func updateVersionComparisonIsNumeric() {
         #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
         #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))
