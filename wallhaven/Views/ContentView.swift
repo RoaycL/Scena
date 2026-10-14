@@ -768,12 +768,17 @@ struct ContentView: View {
         }
     }
 
+    /// 搜索框占位文字：系统默认的灰色在浅色玻璃和亮壁纸上看不清，统一用半透明白色
+    private func searchPrompt(_ text: String) -> Text {
+        Text(text).foregroundStyle(.white.opacity(0.55))
+    }
+
     private var librarySearchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
-            TextField("搜索资料库", text: $libraryQuery)
+            TextField("搜索资料库", text: $libraryQuery, prompt: searchPrompt("搜索资料库"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
@@ -818,7 +823,7 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
-            TextField("搜索壁纸", text: $viewModel.query)
+            TextField("搜索壁纸", text: $viewModel.query, prompt: searchPrompt("搜索壁纸"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
@@ -851,7 +856,8 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.7))
-            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅", text: $workshop.query)
+            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅", text: $workshop.query,
+                      prompt: searchPrompt(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
