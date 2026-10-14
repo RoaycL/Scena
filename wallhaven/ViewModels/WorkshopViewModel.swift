@@ -527,7 +527,8 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func loadMoreIfNeeded(current item: WorkshopItem) {
-        guard mode == .online, let index = onlineItems.firstIndex(where: { $0.id == item.id }), index >= onlineItems.count - 6 else { return }
+        // 剩下约 3 行时就预加载
+        guard mode == .online, let index = onlineItems.firstIndex(where: { $0.id == item.id }), index >= onlineItems.count - 15 else { return }
         search(reset: false)
     }
 

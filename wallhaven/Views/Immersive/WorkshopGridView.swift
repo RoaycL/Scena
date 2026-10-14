@@ -23,6 +23,8 @@ struct WorkshopGridView<MenuItems: View>: View {
     @ViewBuilder let contextMenu: (WorkshopItem) -> MenuItems
     /// 顶部栏占用的高度（顶部栏有二级切换时更高）
     var topInset: CGFloat = 58
+    /// 网格底部是否已经露出来（用户滑到底在等下一页）；只有这时才显示顶部的加载提示
+    var onFooterVisibleChange: (Bool) -> Void = { _ in }
 
     private let spacing: CGFloat = 10
     private let panelWidth: CGFloat = 300
@@ -137,9 +139,17 @@ struct WorkshopGridView<MenuItems: View>: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var isNearBottom = false
 
+    @State private var isFooterVisible = false
+
+    /// 离底部还有约 1.5 屏时就预加载下一页（每页 30 条、要 1 秒左右），通常滑不到底就已经加载好了
     private func updateNearBottom(footerY: CGFloat) {
         guard viewportHeight > 0 else { return }
-        let near = footerY < viewportHeight + 400
+        let visible = footerY < viewportHeight
+        if visible != isFooterVisible {
+            isFooterVisible = visible
+            onFooterVisibleChange(visible)
+        }
+        let near = footerY < viewportHeight * 2.5
         guard near != isNearBottom else { return }
         isNearBottom = near
         if near { workshop.loadMore() }

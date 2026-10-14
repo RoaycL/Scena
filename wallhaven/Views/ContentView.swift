@@ -68,6 +68,8 @@ struct ContentView: View {
     @State private var dismissedBackgroundID: String?
     /// 页面级加载提示（统一显示在顶部栏下方）；加载很快时不显示，避免闪一下
     @State private var showsPageLoading = false
+    /// 创意工坊网格的底部是否露出（用户滑到底、在等下一页）
+    @State private var isWorkshopFooterVisible = false
     @State private var backgroundRetryToken = 0
     @State private var playlistKeyHandler: ((ImmersiveWindowController.Key) -> Bool)?
     @State private var prefetcher: ImagePrefetcher?
@@ -267,9 +269,16 @@ struct ContentView: View {
         }
     }
 
-    /// 当前页面在加载数据（wallhaven 搜索 / 翻页，创意工坊在线搜索 / 翻页）
+    /// 需要告诉用户「在加载」的时候：第一次加载、刷新，或者已经滑到底在等下一页。
+    /// 后台预加载下一页不打扰（每页约 1 秒，否则往下翻时提示会一个接一个出现）
     private var isPageLoading: Bool {
-        (page == .home && viewModel.isLoading) || (page == .workshop && workshop.mode == .online && workshop.isLoading)
+        if page == .home, viewModel.isLoading {
+            return viewModel.wallpapers.isEmpty || viewModel.isRefreshing
+        }
+        if page == .workshop, workshop.mode == .online, workshop.isLoading {
+            return workshop.onlineItems.isEmpty || workshop.isRefreshing || isWorkshopFooterVisible
+        }
+        return false
     }
 
     private var isPageRefreshing: Bool {
@@ -530,6 +539,9 @@ struct ContentView: View {
                 .allowsHitTesting(false)
                 .task(id: isPageLoading) {
                     guard isPageLoading else {
+                        // 稍后再收起：紧接着的下一次加载（如首屏铺不满时自动加载第二页）连成一次，不会一闪一闪
+                        try? await Task.sleep(for: .milliseconds(400))
+                        guard !Task.isCancelled else { return }
                         withAnimation(Motion.content) { showsPageLoading = false }
                         return
                     }
@@ -1173,7 +1185,8 @@ struct ContentView: View {
                 onSelect: { select(GalleryItem(origin: .workshop($0)), isUserInitiated: true) },
                 onHover: { reason, active in immersive.setHold(reason, active: active) },
                 contextMenu: { contextMenu(for: GalleryItem(origin: .workshop($0))) },
-                topInset: topBarInset
+                topInset: topBarInset,
+                onFooterVisibleChange: { isWorkshopFooterVisible = $0 }
             )
         } else {
             VStack(alignment: .leading, spacing: 18) {
