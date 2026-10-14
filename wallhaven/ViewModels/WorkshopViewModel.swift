@@ -572,15 +572,40 @@ final class WorkshopViewModel: ObservableObject {
         downloadJobs[index].state = .completed
         downloadJobs[index].error = nil
         activeDownloads.remove(id)
-        if downloadJobs[index].applyWhenDone {
-            // 「下载并应用」：这一个下载完就立即应用，不等整批结束
+        if downloadJobs[index].applyWhenDone || pendingPlaylistAdds[id] != nil {
+            // 「下载并应用」「下载并添加到播放列表」：这一个下载完就立即处理，不等整批结束
             Task {
                 await refreshLibraryAndWait()
                 applyIfRequested(id)
+                addToPendingPlaylists(id)
             }
         } else {
             scheduleLibraryRefresh()
         }
+    }
+
+    /// 未下载的工坊壁纸选择了「下载并添加到播放列表」：下载完成后加入这些列表
+    private var pendingPlaylistAdds: [String: [UUID]] = [:]
+
+    func downloadAndAddToPlaylist(_ item: WorkshopItem, playlistID: UUID) {
+        guard item.type.isPlayable else {
+            toast.show("「应用」类型的壁纸是 Windows 程序，无法在 macOS 上运行", style: .error)
+            return
+        }
+        if !(pendingPlaylistAdds[item.id]?.contains(playlistID) ?? false) {
+            pendingPlaylistAdds[item.id, default: []].append(playlistID)
+        }
+        download(item)
+        let name = PlaylistManager.shared.playlists.first { $0.id == playlistID }?.name ?? "播放列表"
+        toast.show("正在下载，完成后加入「\(name)」", style: .progress)
+    }
+
+    private func addToPendingPlaylists(_ id: String) {
+        guard let playlistIDs = pendingPlaylistAdds[id],
+              let item = libraryItems.first(where: { $0.id == id }),
+              let entry = PlaylistEntry(GalleryItem(origin: .workshop(item))) else { return }
+        pendingPlaylistAdds[id] = nil
+        for playlistID in playlistIDs { PlaylistManager.shared.add([entry], to: playlistID) }
     }
 
     /// 下载完成且用户点过「下载并应用」的条目：应用一次并清除这个意图
@@ -748,6 +773,7 @@ final class WorkshopViewModel: ObservableObject {
             }
             await refreshLibraryAndWait()
             if let id = shouldApply { applyIfRequested(id) }
+            for id in result.downloaded.keys { addToPendingPlaylists(id) }
             downloadJobs = downloadJobs.map {
                 var job = $0
                 if job.state == .completed { job.applyWhenDone = false }

@@ -60,6 +60,19 @@ struct FilterPanel: View {
                 }
             }
 
+            GlassSection(title: "分辨率", trailing: "可多选") {
+                FlowLayout {
+                    GlassChip(title: "不限", isOn: viewModel.resolutions.isEmpty) {
+                        viewModel.toggleResolution(nil)
+                    }
+                    ForEach(WallpaperViewModel.resolutionOptions, id: \.self) { resolution in
+                        GlassChip(title: resolution.replacingOccurrences(of: "x", with: "×"), isOn: viewModel.resolutions.contains(resolution)) {
+                            viewModel.toggleResolution(resolution)
+                        }
+                    }
+                }
+            }
+
             GlassSection(title: "排序") {
                 FlowLayout {
                     ForEach(SortOrder.allCases) { option in

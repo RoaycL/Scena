@@ -35,9 +35,14 @@ final class LocalMediaViewModel: ObservableObject {
 
     private let toast = ToastCenter.shared
     private var storageObserver: NSObjectProtocol?
+    private var mediaObserver: NSObjectProtocol?
 
     init() {
         storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.loadMedia() }
+        }
+        // 设为壁纸、加入播放列表时下载的 wallhaven 图片：刷新资料库
+        mediaObserver = NotificationCenter.default.addObserver(forName: .localMediaDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.loadMedia() }
         }
     }

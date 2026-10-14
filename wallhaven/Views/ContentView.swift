@@ -91,7 +91,10 @@ struct ContentView: View {
     private var libraryItems: [GalleryItem] {
         let local = localViewModel.items.map { GalleryItem(origin: .local($0)) }
         let workshopItems = workshop.libraryItems.map { GalleryItem(origin: .workshop($0)) }
-        return (local.filter { $0.local?.source == .wallhaven } + workshopItems + local.filter { $0.local?.source == .imported }).filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+        // 按下载 / 导入时间排序，最新的在最前
+        return (local + workshopItems)
+            .filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+            .sorted { $0.addedDate > $1.addedDate }
     }
 
     private func items(for page: GalleryPage) -> [GalleryItem] {
@@ -100,7 +103,8 @@ struct ContentView: View {
             return viewModel.wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .favorites:
             let wallpapers = viewModel.selectedFolderID.map(viewModel.wallpapersInFolder) ?? viewModel.favoriteWallpapers
-            return wallpapers.map { GalleryItem(origin: .remote($0)) }
+            // 收藏按加入顺序保存，最新收藏的排在最前
+            return wallpapers.reversed().map { GalleryItem(origin: .remote($0)) }
         case .workshop:
             return workshop.items.map { GalleryItem(origin: .workshop($0)) }
         case .library:
@@ -340,6 +344,12 @@ struct ContentView: View {
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden
                 )
                     .frame(width: size.width, height: size.height)
+                    // 沉浸式页面双击图片：隐藏 / 显示界面，只看图片细节（同空格键）
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        guard !isWorkshopGrid, page != .playlists else { return }
+                        immersive.toggleChrome()
+                    }
 
                 // 网格类页面整体压暗，保证缩略图和文字清晰
                 if isWorkshopGrid || page == .playlists {
@@ -958,6 +968,9 @@ struct ContentView: View {
                             workshop.loadMoreIfNeeded(current: workshopItem)
                         }
                     },
+                    onActivate: { apply($0) },
+                    loadError: page == .home ? viewModel.loadError : nil,
+                    onRetry: { viewModel.retryLoading() },
                     downloadState: { $0.workshop.map(workshop.downloadState(of:)) ?? .none },
                     contextMenu: { contextMenu(for: $0) }
                 )

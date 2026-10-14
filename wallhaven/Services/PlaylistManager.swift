@@ -140,7 +140,25 @@ final class PlaylistManager: ObservableObject {
         let playlist = Playlist(id: UUID(), name: trimmedName.flatMap { $0.isEmpty ? nil : $0 } ?? "播放列表 \(playlists.count + 1)", entries: entries)
         playlists.append(playlist)
         save()
+        downloadLocalCopies(of: entries)
         return playlist
+    }
+
+    /// wallhaven 壁纸加入播放列表时立即下载到本地（和「设为壁纸」一样存进 Scena/Wallhaven）：
+    /// 轮到时不用再等下载，离线也能播放，也会出现在资料库里
+    private func downloadLocalCopies(of entries: [PlaylistEntry]) {
+        let wallpapers = entries.compactMap(\.wallhaven)
+        guard !wallpapers.isEmpty else { return }
+        Task {
+            var failed = 0
+            for wallpaper in wallpapers {
+                do { _ = try await DownloadService().download(wallpaper) } catch { failed += 1 }
+            }
+            if failed > 0 {
+                toast.show("\(failed) 张壁纸下载失败，轮到时会再试", style: .error)
+            }
+            NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
+        }
     }
 
     func rename(_ id: UUID, to name: String) {
@@ -164,6 +182,7 @@ final class PlaylistManager: ObservableObject {
             toast.show("「\(playlist.name)」中已有该壁纸", style: .info)
         } else {
             toast.show("已添加到「\(playlist.name)」", style: .success)
+            downloadLocalCopies(of: fresh)
         }
         if activeID == id { syncOrder() }
     }
@@ -386,4 +405,9 @@ final class PlaylistManager: ObservableObject {
         defaults.set(activeID?.uuidString, forKey: Keys.activeID)
         defaults.set(currentEntryID, forKey: Keys.currentEntryID)
     }
+}
+
+extension Notification.Name {
+    /// 本地图片 / 视频有新增（资料库需要刷新）
+    static let localMediaDidChange = Notification.Name("scena.localMediaDidChange")
 }

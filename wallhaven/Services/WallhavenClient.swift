@@ -59,7 +59,7 @@ struct WallhavenClient: Sendable {
         return try JSONDecoder().decode(WallhavenCollectionWallpapersResponse.self, from: data)
     }
 
-    func search(query: String, page: Int, sorting: SortOrder, categories: String, purity: String, apiKey: String?) async throws -> [WallhavenWallpaper] {
+    func search(query: String, page: Int, sorting: SortOrder, categories: String, purity: String, resolutions: [String] = [], apiKey: String?) async throws -> [WallhavenWallpaper] {
         var components = URLComponents(string: "https://wallhaven.cc/api/v1/search")!
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var items: [URLQueryItem] = [
@@ -70,6 +70,10 @@ struct WallhavenClient: Sendable {
         ]
         if !trimmed.isEmpty {
             items.append(.init(name: "q", value: trimmed))
+        }
+        // 精确分辨率，多个用逗号分隔（wallhaven API 的 resolutions 参数）
+        if !resolutions.isEmpty {
+            items.append(.init(name: "resolutions", value: resolutions.joined(separator: ",")))
         }
         if let apiKey, !apiKey.isEmpty {
             items.append(.init(name: "apikey", value: apiKey))
@@ -82,6 +86,9 @@ struct WallhavenClient: Sendable {
         }
         if httpResponse.statusCode == 401 {
             throw WallperError.network("未授权。请检查您的 Wallhaven 登录状态。")
+        }
+        if httpResponse.statusCode == 429 {
+            throw WallhavenRateLimited()
         }
         guard (200...299).contains(httpResponse.statusCode) else {
             throw WallperError.network("加载壁纸失败。")
@@ -124,4 +131,9 @@ nonisolated extension URLComponents {
         copy.percentEncodedQuery = percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return copy.url
     }
+}
+
+/// wallhaven API 每分钟最多 45 次请求，超出返回 429
+nonisolated struct WallhavenRateLimited: LocalizedError {
+    var errorDescription: String? { "请求太频繁（wallhaven 每分钟最多 45 次），请稍后再试" }
 }

@@ -46,6 +46,8 @@ nonisolated struct WorkshopItem: Identifiable, Hashable, Sendable {
     var subscriptions: Int = 0
     var favorited: Int = 0
     var authorID: String?
+    /// 下载到本地的时间（文件夹创建时间），资料库按它排序
+    var downloadedAt: Date?
     /// 已下载 / 导入时的本地文件夹
     var localFolder: URL?
     /// project.json 的 file 字段（场景包 / 视频文件 / 网页入口）
@@ -341,18 +343,21 @@ nonisolated enum WorkshopLibrary {
 
         for root in roots {
             // 根目录本身就是一个条目（导入单个壁纸文件夹时）
-            if let item = WorkshopItem.load(from: root) {
+            if var item = WorkshopItem.load(from: root) {
+                item.downloadedAt = (try? root.resourceValues(forKeys: [.creationDateKey]))?.creationDate
                 if seen.insert(item.id).inserted { items.append(item) }
                 continue
             }
-            guard let children = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles) else { continue }
+            guard let children = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .creationDateKey], options: .skipsHiddenFiles) else { continue }
             for child in children {
                 guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
-                      let item = WorkshopItem.load(from: child),
+                      var item = WorkshopItem.load(from: child),
                       seen.insert(item.id).inserted else { continue }
+                item.downloadedAt = (try? child.resourceValues(forKeys: [.creationDateKey]))?.creationDate
                 items.append(item)
             }
         }
-        return items.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        // 最新下载的在最前
+        return items.sorted { ($0.downloadedAt ?? .distantPast) > ($1.downloadedAt ?? .distantPast) }
     }
 }

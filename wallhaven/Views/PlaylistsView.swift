@@ -630,6 +630,28 @@ struct AddToPlaylistItems: View {
     }
 }
 
+/// 未下载的工坊壁纸：先下载，完成后加入选择的播放列表
+struct DownloadThenAddToPlaylistItems: View {
+    @ObservedObject private var manager = PlaylistManager.shared
+    @EnvironmentObject private var workshop: WorkshopViewModel
+    let item: WorkshopItem
+
+    var body: some View {
+        ForEach(manager.playlists) { playlist in
+            Button(MenuText.compact(playlist.name)) {
+                workshop.downloadAndAddToPlaylist(item, playlistID: playlist.id)
+            }
+        }
+        if !manager.playlists.isEmpty { Divider() }
+        Button("新建播放列表…") {
+            PlaylistNamePrompt.shared.present(title: "新建播放列表", name: "播放列表 \(manager.playlists.count + 1)", confirm: "创建") { name in
+                let playlist = manager.create(name: name)
+                workshop.downloadAndAddToPlaylist(item, playlistID: playlist.id)
+            }
+        }
+    }
+}
+
 /// 右键菜单里的「添加到播放列表」子菜单
 struct AddToPlaylistMenu: View {
     let item: GalleryItem
@@ -639,9 +661,10 @@ struct AddToPlaylistMenu: View {
             Menu("添加到播放列表") {
                 AddToPlaylistItems(entry: entry)
             }
-        } else {
-            Button("添加到播放列表（需先下载）") {}
-                .disabled(true)
+        } else if let workshopItem = item.workshop, workshopItem.type.isPlayable {
+            Menu("下载并添加到播放列表") {
+                DownloadThenAddToPlaylistItems(item: workshopItem)
+            }
         }
     }
 }
@@ -654,6 +677,10 @@ struct AddToPlaylistButton: View {
         Menu {
             if let entry = PlaylistEntry(item) {
                 AddToPlaylistItems(entry: entry)
+            } else if let workshopItem = item.workshop, workshopItem.type.isPlayable {
+                Section("下载完成后加入") {
+                    DownloadThenAddToPlaylistItems(item: workshopItem)
+                }
             }
         } label: {
             CircleIconLabel(systemImage: "text.badge.plus")

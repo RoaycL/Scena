@@ -94,3 +94,14 @@ nonisolated enum SelectionFallback {
             ?? previousIDs[..<oldIndex].last(where: remaining.contains)
     }
 }
+
+extension GalleryItem {
+    /// 加入资料库的时间：本地文件的创建时间、工坊壁纸文件夹的下载时间
+    var addedDate: Date {
+        switch origin {
+        case .local(let item): item.creationDate
+        case .workshop(let item): item.downloadedAt ?? .distantPast
+        case .remote: .distantPast
+        }
+    }
+}

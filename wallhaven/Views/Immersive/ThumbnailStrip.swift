@@ -14,6 +14,11 @@ struct ThumbnailStrip<MenuItems: View>: View {
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
     var onItemAppear: (GalleryItem) -> Void = { _ in }
+    /// 双击缩略图（设为壁纸）
+    var onActivate: (GalleryItem) -> Void = { _ in }
+    /// 加载失败时末尾显示「重试」
+    var loadError: String? = nil
+    var onRetry: () -> Void = {}
     /// 工坊条目的下载状态（显示「下载中 / 排队中」遮罩）
     var downloadState: (GalleryItem) -> DownloadState = { _ in .none }
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
@@ -28,7 +33,9 @@ struct ThumbnailStrip<MenuItems: View>: View {
                     ForEach(items) { item in
                         thumbnail(for: item)
                             .id(item.id)
+                            // 单击立即选中；双击另外识别，不让单击等待双击判定
                             .onTapGesture { onSelect(item) }
+                            .simultaneousGesture(TapGesture(count: 2).onEnded { onActivate(item) })
                             .contextMenu { contextMenu(item) }
                             .onAppear { onItemAppear(item) }
                     }
@@ -37,6 +44,21 @@ struct ThumbnailStrip<MenuItems: View>: View {
                             .controlSize(.small)
                             .tint(.white)
                             .frame(width: thumbWidth * 0.4, height: thumbHeight)
+                    } else if let loadError {
+                        Button(action: onRetry) {
+                            VStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 18, weight: .semibold))
+                                Text("加载失败，点击重试")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(width: thumbWidth * 0.8, height: thumbHeight)
+                            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: corner, style: .continuous))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(loadError)
                     }
                 }
                 .padding(.horizontal, 12)

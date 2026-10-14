@@ -19,6 +19,12 @@ final class WallpaperViewModel: ObservableObject {
     @Published var includeSFW = true { didSet { saveDiscoveryPreferences() } }
     @Published var includeSketchy = false { didSet { saveDiscoveryPreferences() } }
     @Published var includeNSFW = false { didSet { saveDiscoveryPreferences() } }
+    /// 分辨率筛选（精确匹配，可多选）；空集合表示不限
+    @Published private(set) var resolutions: Set<String> = [] { didSet { saveDiscoveryPreferences() } }
+    /// 加载失败的说明；有值时缩略图条末尾显示「重试」
+    @Published private(set) var loadError: String?
+
+    static let resolutionOptions = ["1920x1080", "2560x1440", "3440x1440", "3840x2160", "5120x2880"]
     @Published var apiKeyInput = ""
     @Published var usernameInput = ""
     @Published private(set) var isAuthenticated = false
@@ -64,6 +70,7 @@ final class WallpaperViewModel: ObservableObject {
             includeSFW = saved["sfw"] as? Bool ?? true
             includeSketchy = saved["sketchy"] as? Bool ?? false
             includeNSFW = saved["nsfw"] as? Bool ?? false
+            resolutions = Set(saved["resolutions"] as? [String] ?? [])
         }
         isRestoringDiscovery = false
         loadFavorites()
@@ -76,7 +83,8 @@ final class WallpaperViewModel: ObservableObject {
         discoveryDefaults.set([
             "query": query, "sortOrder": sortOrder.rawValue,
             "general": includeGeneral, "anime": includeAnime, "people": includePeople,
-            "sfw": includeSFW, "sketchy": includeSketchy, "nsfw": includeNSFW
+            "sfw": includeSFW, "sketchy": includeSketchy, "nsfw": includeNSFW,
+            "resolutions": resolutions.sorted()
         ], forKey: Self.discoveryKey)
     }
 
@@ -107,8 +115,31 @@ final class WallpaperViewModel: ObservableObject {
             canLoadMore = false
             return
         }
+        let previousPage = currentPage
         currentPage = nextPage
-        Task { await fetch() }
+        Task {
+            // 失败时退回原来的页码，重试时重新请求这一页（否则会跳过一页，或者之后再也不加载）
+            if await !fetch() { currentPage = previousPage }
+        }
+    }
+
+    /// 缩略图条末尾的「重试」
+    func retryLoading() {
+        if wallpapers.isEmpty {
+            search(reset: true)
+        } else {
+            loadNextPage()
+        }
+    }
+
+    /// nil 表示「不限」
+    func toggleResolution(_ resolution: String?) {
+        if let resolution {
+            resolutions.formSymmetricDifference([resolution])
+        } else {
+            resolutions = []
+        }
+        search(reset: true)
     }
 
     func toggleFavorite(_ wallpaper: WallhavenWallpaper, insertOnly: Bool = false) {
@@ -394,6 +425,7 @@ final class WallpaperViewModel: ObservableObject {
                 ToastCenter.shared.show("正在下载…", style: .progress)
                 _ = try await downloader.download(wallpaper)
                 ToastCenter.shared.show("已保存到本地", style: .success)
+                NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
                 ToastCenter.shared.show("下载失败：\(error.localizedDescription)", style: .error)
             }
@@ -408,6 +440,7 @@ final class WallpaperViewModel: ObservableObject {
                 let localURL = try await downloader.download(wallpaper)
                 try WallpaperManager.applyWallpaper(from: localURL)
                 ToastCenter.shared.show("壁纸已应用", style: .success)
+                NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
                 ToastCenter.shared.show("设置失败：\(error.localizedDescription)", style: .error)
             }
@@ -461,9 +494,12 @@ final class WallpaperViewModel: ObservableObject {
         NSWorkspace.shared.open(selectedWallpaper.url)
     }
 
-    private func fetch() async {
+    @discardableResult
+    private func fetch() async -> Bool {
         isLoading = true
         errorMessage = nil
+        loadError = nil
+        defer { isLoading = false }
         do {
             if sortOrder == .favorites {
                 // 读取本地收藏的图片数据并转换为 Array。由于 favorites 是 ID 集合，
@@ -482,14 +518,7 @@ final class WallpaperViewModel: ObservableObject {
             var appended = false
 
             while !appended, canLoadMore, pageToFetch <= maxPageLimit {
-                let result = try await client.search(
-                    query: query,
-                    page: pageToFetch,
-                    sorting: sortOrder,
-                    categories: categoriesValue,
-                    purity: purityValue,
-                    apiKey: storedAPIKey
-                )
+                let result = try await searchWithRetry(page: pageToFetch)
 
                 if result.isEmpty {
                     canLoadMore = false
@@ -517,10 +546,36 @@ final class WallpaperViewModel: ObservableObject {
                 selectedWallpaper = wallpapers.randomElement()
             }
             statusMessage = "已加载 \(wallpapers.count) 张壁纸"
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
+            return false
         }
-        isLoading = false
+    }
+
+    /// 请求太频繁或网络超时时自动等待重试两次（2 秒、5 秒），仍失败再交给用户手动重试
+    private func searchWithRetry(page: Int) async throws -> [WallhavenWallpaper] {
+        let delays: [UInt64] = [2, 5]
+        var attempt = 0
+        while true {
+            do {
+                return try await client.search(
+                    query: query,
+                    page: page,
+                    sorting: sortOrder,
+                    categories: categoriesValue,
+                    purity: purityValue,
+                    resolutions: resolutions.sorted(),
+                    apiKey: storedAPIKey
+                )
+            } catch {
+                let retryable = error is WallhavenRateLimited || (error as? URLError).map { [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost].contains($0.code) } == true
+                guard retryable, attempt < delays.count else { throw error }
+                try await Task.sleep(for: .seconds(delays[attempt]))
+                attempt += 1
+            }
+        }
     }
 
     private func loadFavorites() {
