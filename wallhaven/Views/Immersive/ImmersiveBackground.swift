@@ -62,6 +62,36 @@ private struct BackgroundLayer: View {
         return workshop
     }
 
+    @State private var isLiveReady = false
+    @State private var hasSignalledReady = false
+
+    /// 封面或动态画面任意一个先就绪，就通知外层切换到这一层
+    private func signalReady() {
+        guard !hasSignalledReady else { return }
+        hasSignalledReady = true
+        onReady()
+    }
+
+    private func liveDidBecomeReady() {
+        withAnimation(.easeInOut(duration: 0.3)) { isLiveReady = true }
+        signalReady()
+    }
+
+    /// 动态壁纸的封面：清晰显示（不模糊），读取失败时什么也不显示，由外层保留上一张
+    private func poster(size: CGSize) -> some View {
+        KFImage(source: item.thumbnailSource)
+            // 工坊预览图和缩略图条用同一个处理器，命中内存缓存、立即显示；本地视频的封面帧按窗口大小解码
+            .setProcessor(item.workshop != nil ? item.thumbnailProcessor : DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
+            .scaleFactor(ImageSizing.scale)
+            .loadDiskFileSynchronously(false)
+            .cancelOnDisappear(true)
+            .onSuccess { _ in signalReady() }
+            .resizable()
+            .scaledToFill()
+            .frame(width: size.width, height: size.height)
+            .clipped()
+    }
+
     var body: some View {
         GeometryReader { geo in
             if let workshop = onlinePreviewItem {
@@ -75,18 +105,23 @@ private struct BackgroundLayer: View {
     private func layers(in size: CGSize) -> some View {
         ZStack {
             if item.isVideo, let url = item.local?.url {
-                LoopingVideoView(url: url, onReady: onReady)
+                // 视频首帧要几百毫秒：先显示封面帧，视频就绪后淡入
+                poster(size: size)
+                LoopingVideoView(url: url, onReady: liveDidBecomeReady)
                     .frame(width: size.width, height: size.height)
+                    .opacity(isLiveReady ? 1 : 0)
             } else if let workshopItem = item.playableWorkshopItem {
-                // 首帧就绪前由外层保留上一张清晰画面。
+                // 场景 / 网页渲染器启动要 1～5 秒：先显示壁纸自带的预览图，渲染出第一帧后淡入
+                poster(size: size)
                 WorkshopPlayerView(item: workshopItem) { state in
                     if state == .ready {
-                        onReady()
+                        liveDidBecomeReady()
                     } else if case .failed = state {
                         onFailure()
                     }
                 }
                 .frame(width: size.width, height: size.height)
+                .opacity(isLiveReady ? 1 : 0)
             } else if let full = item.fullSource {
                 KFImage(source: full)
                     .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))

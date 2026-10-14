@@ -93,8 +93,9 @@ struct PlaylistsView: View {
                             isActive: playlist.id == manager.activeID,
                             isPaused: manager.isPaused
                         )
-                        .onTapGesture(count: 2) { manager.play(playlist.id) }
+                        // 单击立即响应；双击另外识别（先写 count: 2 会让单击等待双击判定）
                         .onTapGesture { selectedID = playlist.id }
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { manager.play(playlist.id) })
                         // 把下方队列里的壁纸拖到其他列表上：复制过去
                         .dropDestination(for: String.self) { ids, _ in
                             copyEntries(ids, to: playlist)
@@ -339,10 +340,6 @@ struct PlaylistsView: View {
                         entryCard(entry, isCurrent: manager.activeID == playlist.id && manager.currentEntryID == entry.id)
                             .frame(width: 160)
                             .id(entry.id)
-                            .onTapGesture(count: 2) {
-                                previewEntryID = entry.id
-                                manager.play(playlist.id, startAt: entry.id)
-                            }
                             .onTapGesture {
                                 previewEntryID = entry.id
                                 if NSEvent.modifierFlags.contains(.command) {
@@ -351,6 +348,10 @@ struct PlaylistsView: View {
                                     selectedEntries = [entry.id]
                                 }
                             }
+                            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                                previewEntryID = entry.id
+                                manager.play(playlist.id, startAt: entry.id)
+                            })
                             .draggable(entry.id)
                             .dropDestination(for: String.self) { ids, _ in
                                 guard let id = ids.first, ids.count == 1, id != entry.id,
