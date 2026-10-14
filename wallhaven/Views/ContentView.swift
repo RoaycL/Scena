@@ -454,6 +454,7 @@ struct ContentView: View {
             MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
             immersive.allowsChromeKeyboardShortcuts = { !hasOpenPanel && page != .playlists }
+            immersive.allowsDragScrolling = { page != .playlists }
             handleMenuNavigation()
             syncWorkshopMode()
             viewModel.search(reset: true)

@@ -17,6 +17,7 @@ final class ImmersiveWindowController: ObservableObject {
     }
 
     var allowsChromeKeyboardShortcuts: () -> Bool = { true }
+    var allowsDragScrolling: () -> Bool = { true }
 
     @Published private(set) var isChromeHidden = false
 
@@ -174,7 +175,7 @@ final class ImmersiveWindowController: ObservableObject {
             return nil
 
         case .leftMouseDown:
-            dragScrollView = horizontalScrollView(at: event.locationInWindow, in: window)
+            dragScrollView = allowsDragScrolling() ? horizontalScrollView(at: event.locationInWindow, in: window) : nil
             isDragScrolling = false
             dragStartX = event.locationInWindow.x
             dragOriginX = dragScrollView?.contentView.bounds.origin.x ?? 0

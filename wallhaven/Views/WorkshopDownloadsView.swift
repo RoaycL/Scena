@@ -37,8 +37,13 @@ private struct WorkshopDownloadsList: View {
     @ObservedObject var progress: WorkshopDownloadProgress
     var onNavigate: (() -> Void)?
 
+    /// 打开面板时已经完成的任务：折叠到底部。面板打开期间刚完成的留在原位，下次打开再折叠，避免按钮移位
+    @State private var foldedIDs: Set<String> = []
+    @State private var showsFolded = false
+
     // 始终保持入队顺序；暂停、完成与进度变化只更新原来的行，避免按钮移位。
-    private var sortedJobs: [WorkshopDownloadJob] { workshop.downloadJobs }
+    private var visibleJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { !foldedIDs.contains($0.id) } }
+    private var foldedJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { foldedIDs.contains($0.id) } }
 
     private var summary: String {
         let active = progress.entries.count
@@ -78,14 +83,41 @@ private struct WorkshopDownloadsList: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(sortedJobs) { job in
+                        ForEach(visibleJobs) { job in
                             row(job)
                                 .padding(.vertical, 9)
                             Divider()
                         }
+                        if !foldedJobs.isEmpty {
+                            Button {
+                                withAnimation(Motion.panel) { showsFolded.toggle() }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "chevron.right")
+                                        .rotationEffect(.degrees(showsFolded ? 90 : 0))
+                                    Text("已完成 \(foldedJobs.count) 项")
+                                    Spacer()
+                                }
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            if showsFolded {
+                                ForEach(foldedJobs) { job in
+                                    row(job)
+                                        .padding(.vertical, 9)
+                                    Divider()
+                                }
+                            }
+                        }
                     }
                 }
             }
+        }
+        .onAppear {
+            foldedIDs = Set(workshop.downloadJobs.filter { $0.state == .completed }.map(\.id))
         }
         .padding(16)
         .frame(width: 440, height: 420)

@@ -108,6 +108,7 @@ final class PlaylistManager: ObservableObject {
 
     var activePlaylist: Playlist? { playlists.first { $0.id == activeID } }
 
+    private let persistenceURL: URL
     private var timer: Timer?
     /// 当前播放顺序（随机模式下是打乱后的条目 ID）
     private var order: [String] = []
@@ -125,8 +126,9 @@ final class PlaylistManager: ObservableObject {
         return folder.appendingPathComponent("playlists.json")
     }
 
-    private init() {
-        if let data = try? Data(contentsOf: Self.storageURL),
+    init(storageURL: URL? = nil) {
+        persistenceURL = storageURL ?? Self.storageURL
+        if let data = try? Data(contentsOf: persistenceURL),
            let decoded = try? JSONDecoder().decode([Playlist].self, from: data) {
             playlists = decoded
         }
@@ -200,6 +202,25 @@ final class PlaylistManager: ObservableObject {
         if activeID == id { rebuildOrder() }
     }
 
+    func moveEntries(_ entryIDs: Set<String>, in id: UUID, before anchor: String?) {
+        update(id) { playlist in
+            let reordered = PlaylistEditing.moving(ids: playlist.entries.map(\.id), selected: entryIDs, before: anchor)
+            let entries = Dictionary(playlist.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            playlist.entries = reordered.compactMap { entries[$0] }
+        }
+        if activeID == id { syncOrder() }
+    }
+
+    func restore(_ removal: PlaylistRemoval) {
+        guard playlists.contains(where: { $0.id == removal.playlistID }) else { return }
+        update(removal.playlistID) { playlist in
+            let order = PlaylistEditing.restoring(current: playlist.entries.map(\.id), original: removal.original.map(\.id), removed: removal.removedIDs)
+            let entries = Dictionary((removal.original + playlist.entries).map { ($0.id, $0) }, uniquingKeysWith: { _, current in current })
+            playlist.entries = order.compactMap { entries[$0] }
+        }
+        if activeID == removal.playlistID { syncOrder() }
+    }
+
     func setInterval(_ interval: TimeInterval, for id: UUID) {
         update(id) { $0.interval = interval }
         if activeID == id { scheduleTimer() }
@@ -238,7 +259,7 @@ final class PlaylistManager: ObservableObject {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(playlists) else { return }
-        try? data.write(to: Self.storageURL, options: .atomic)
+        try? data.write(to: persistenceURL, options: .atomic)
     }
 
     // MARK: - Playback

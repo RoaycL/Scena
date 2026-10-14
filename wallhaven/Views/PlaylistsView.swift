@@ -16,6 +16,11 @@ struct PlaylistsView: View {
     @State private var selectedID: UUID?
     @State private var previewEntryID: String?
     @State private var selectedEntries = Set<String>()
+    @State private var selectionAnchorID: String?
+    @State private var removalHistory: [PlaylistRemoval] = []
+    @State private var restoredSelection: PlaylistRemoval?
+    @StateObject private var dragState = PlaylistDragState()
+    @StateObject private var interactionInput = PlaylistInteractionInput()
     var embedded = false
     var panelWidth: CGFloat = 1180
     var maximumHeight: CGFloat = 820
@@ -36,11 +41,39 @@ struct PlaylistsView: View {
             content
         }
         .padding(24)
+        .coordinateSpace(name: "playlistBoard")
+        .onPreferenceChange(PlaylistDragFramesKey.self) { frames in
+            MainActor.assumeIsolated {
+                dragState.frames = frames
+                if dragState.payload != nil, let playlist = selectedPlaylist {
+                    dragState.update(point: dragState.location, playlistID: playlist.id, ids: playlist.entries.map(\.id))
+                }
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if let payload = dragState.payload {
+                Label(dragState.sidebarTargetID != nil ? "复制 \(payload.ids.count) 张" : "\(payload.ids.count) 张壁纸",
+                      systemImage: dragState.sidebarTargetID != nil ? "plus.square.on.square" : "photo.stack")
+                    .font(.caption.weight(.medium)).padding(10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
+                    .position(x: dragState.location.x + 40, y: dragState.location.y - 24)
+                    .allowsHitTesting(false)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+        }
         .frame(width: embedded ? panelWidth : nil, height: embedded ? maximumHeight : nil)
         .frame(minWidth: embedded ? nil : 900, minHeight: embedded ? nil : 560)
         .onChange(of: selectedID) {
             selectedEntries.removeAll()
-            resetPreview()
+            selectionAnchorID = nil
+            dragState.end()
+            if let restoredSelection, restoredSelection.playlistID == selectedID {
+                selectedEntries = restoredSelection.removedIDs
+                previewEntryID = restoredSelection.previewID
+                selectionAnchorID = restoredSelection.previewID
+                self.restoredSelection = nil
+            } else { resetPreview() }
         }
         .onChange(of: manager.playlists) { old, new in
             // 移除正在预览的条目时选择原位置的下一张，避免队列回到开头。
@@ -51,6 +84,8 @@ struct PlaylistsView: View {
             if selectedID == nil { selectedID = new.first?.id }
             let entries = selectedPlaylist?.entries ?? []
             selectedEntries.formIntersection(Set(entries.map(\.id)))
+            if let selectionAnchorID, !entries.contains(where: { $0.id == selectionAnchorID }) { self.selectionAnchorID = nil }
+            removalHistory.removeAll { removal in !new.contains { $0.id == removal.playlistID } }
             if let previewEntryID, !entries.contains(where: { $0.id == previewEntryID }) {
                 let oldIndex = old.first(where: { $0.id == selectedID })?.entries.firstIndex(where: { $0.id == previewEntryID }) ?? 0
                 self.previewEntryID = entries.isEmpty ? nil : entries[min(oldIndex, entries.count - 1)].id
@@ -64,7 +99,7 @@ struct PlaylistsView: View {
                 previewEntryID = new
             }
         }
-        .onDisappear { onKeyboardHandler(nil) }
+        .onDisappear { onKeyboardHandler(nil); dragState.end(); interactionInput.stop() }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(keys: [.space, .leftArrow, .rightArrow, .return]) { press in
@@ -77,6 +112,7 @@ struct PlaylistsView: View {
             return handleKeyboard(key) ? .handled : .ignored
         }
         .onAppear {
+            interactionInput.start()
             onKeyboardHandler(handleKeyboard)
             if selectedID == nil { selectedID = manager.activeID ?? manager.playlists.first?.id }
             resetPreview()
@@ -112,9 +148,11 @@ struct PlaylistsView: View {
                         .onTapGesture { selectedID = playlist.id }
                         .simultaneousGesture(TapGesture(count: 2).onEnded { manager.play(playlist.id) })
                         // 把下方队列里的壁纸拖到其他列表上：复制过去
-                        .dropDestination(for: String.self) { ids, _ in
-                            copyEntries(ids, to: playlist)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9)
+                                .stroke(dragState.sidebarTargetID == playlist.id ? Color.accentColor : .clear, lineWidth: 2)
                         }
+                        .playlistDragFrame("list-\(playlist.id.uuidString)")
                         .contextMenu {
                             if manager.activeID == playlist.id {
                                 Button(manager.isPaused ? "继续播放" : "暂停播放") { manager.setPlaybackPaused(!manager.isPaused) }
@@ -144,13 +182,45 @@ struct PlaylistsView: View {
         .padding(.trailing, 16)
     }
 
-    private func copyEntries(_ ids: [String], to target: Playlist) -> Bool {
-        guard let source = selectedPlaylist, source.id != target.id else { return false }
-        let entries = source.entries.filter { ids.contains($0.id) || (ids.count == 1 && selectedEntries.contains(ids[0]) && selectedEntries.contains($0.id)) }
+    private func copyEntries(_ payload: PlaylistDragPayload, to target: Playlist) -> Bool {
+        guard let source = manager.playlists.first(where: { $0.id == payload.playlistID }), source.id != target.id else { return false }
+        let entries = source.entries.filter { payload.ids.contains($0.id) }
         guard !entries.isEmpty else { return false }
         manager.add(entries, to: target.id)
         ToastCenter.shared.show("已添加 \(entries.count) 张到「\(target.name)」", style: .success)
         return true
+    }
+
+    private func selectEntry(_ id: String, in playlist: Playlist) {
+        let flags = interactionInput.clickModifiers
+        let shift = flags.contains(.shift), command = flags.contains(.command)
+        selectedEntries = PlaylistEditing.selection(ids: playlist.entries.map(\.id), clicked: id,
+            anchor: selectionAnchorID ?? previewEntryID, current: selectedEntries, shift: shift, command: command)
+        if !shift { selectionAnchorID = id }
+        previewEntryID = id
+    }
+
+    private func removeEntries(_ ids: Set<String>, from playlist: Playlist) {
+        let removed = ids.intersection(Set(playlist.entries.map(\.id)))
+        guard !removed.isEmpty else { return }
+        removalHistory.append(PlaylistRemoval(playlistID: playlist.id, original: playlist.entries, removedIDs: removed, previewID: previewEntryID))
+        manager.remove(removed, from: playlist.id)
+        selectedEntries.subtract(removed)
+    }
+
+    private func undoRemoval() {
+        // 命名 sheet 等输入框的 ⌘Z 仍交给文本编辑器。
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+            editor.undoManager?.undo()
+            return
+        }
+        guard let removal = removalHistory.popLast() else { return }
+        manager.restore(removal)
+        if selectedID != removal.playlistID { restoredSelection = removal }
+        selectedID = removal.playlistID
+        selectedEntries = removal.removedIDs
+        previewEntryID = removal.previewID
+        selectionAnchorID = removal.previewID
     }
 
     @ViewBuilder
@@ -261,12 +331,17 @@ struct PlaylistsView: View {
             Divider().opacity(0.5)
             filmstrip(playlist)
             HStack(spacing: 6) {
-                Text("单击预览 · 双击播放 · 拖动排序 · ⌘ 点击多选")
+                Text("拖动排序 · ⌘ 多选 · ⇧ 连续选择")
                 Spacer()
+                if !removalHistory.isEmpty {
+                    Button("撤销移除", action: undoRemoval)
+                        .keyboardShortcut("z", modifiers: .command)
+                        .buttonStyle(.borderless)
+                        .help("撤销最近一次移除（⌘Z）")
+                }
                 if !selectedEntries.isEmpty {
                     Button("移除 \(selectedEntries.count) 项", role: .destructive) {
-                        manager.remove(selectedEntries, from: playlist.id)
-                        selectedEntries.removeAll()
+                        removeEntries(selectedEntries, from: playlist)
                     }
                     .buttonStyle(.borderless)
                 }
@@ -355,31 +430,60 @@ struct PlaylistsView: View {
                         entryCard(entry, isCurrent: manager.activeID == playlist.id && manager.currentEntryID == entry.id)
                             .frame(width: 160)
                             .id(entry.id)
-                            .onTapGesture {
-                                previewEntryID = entry.id
-                                if NSEvent.modifierFlags.contains(.command) {
-                                    if !selectedEntries.insert(entry.id).inserted { selectedEntries.remove(entry.id) }
-                                } else {
-                                    selectedEntries = [entry.id]
-                                }
-                            }
+                            .onTapGesture { selectEntry(entry.id, in: playlist) }
                             .simultaneousGesture(TapGesture(count: 2).onEnded {
                                 previewEntryID = entry.id
                                 manager.play(playlist.id, startAt: entry.id)
                             })
-                            .draggable(entry.id)
-                            .dropDestination(for: String.self) { ids, _ in
-                                guard let id = ids.first, ids.count == 1, id != entry.id,
-                                      let source = playlist.entries.firstIndex(where: { $0.id == id }),
-                                      let target = playlist.entries.firstIndex(where: { $0.id == entry.id }) else { return false }
-                                manager.move(in: playlist.id, from: IndexSet(integer: source), to: target > source ? target + 1 : target)
-                                return true
+                            // 被拖起的卡片：微微缩小、变淡，像从队列里「提」了起来
+                            .scaleEffect(dragState.payload?.ids.contains(entry.id) == true ? 0.94 : 1)
+                            .opacity(dragState.payload?.ids.contains(entry.id) == true ? 0.45 : 1)
+                            .animation(Motion.hover, value: dragState.payload?.ids.contains(entry.id) == true)
+                            .overlay(alignment: .leading) {
+                                if dragState.insertionPlaylistID == playlist.id && dragState.insertionBeforeID == entry.id {
+                                    Capsule().fill(Color.accentColor).frame(width: 3, height: 96).offset(x: -7)
+                                }
                             }
+                            .playlistDragFrame(entry.id)
+                            .simultaneousGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("playlistBoard"))
+                                .onChanged { value in
+                                    guard !dragState.isCancelled else { return }
+                                    if dragState.payload == nil {
+                                        let selected = selectedEntries.contains(entry.id) ? selectedEntries : [entry.id]
+                                        withAnimation(Motion.hover) {
+                                            dragState.begin(PlaylistDragPayload(playlistID: playlist.id,
+                                                ids: playlist.entries.map(\.id).filter { selected.contains($0) }))
+                                        }
+                                    }
+                                    dragState.update(point: value.location, playlistID: playlist.id, ids: playlist.entries.map(\.id))
+                                }
+                                .onEnded { value in
+                                    guard !dragState.isCancelled else { dragState.end(); return }
+                                    dragState.update(point: value.location, playlistID: playlist.id, ids: playlist.entries.map(\.id))
+                                    guard let payload = dragState.payload else { return }
+                                    if let targetID = dragState.sidebarTargetID,
+                                       let target = manager.playlists.first(where: { $0.id == targetID }) {
+                                        _ = copyEntries(payload, to: target)
+                                    } else if dragState.insertionPlaylistID == playlist.id {
+                                        withAnimation(Motion.hover) {
+                                            manager.moveEntries(Set(payload.ids), in: playlist.id, before: dragState.insertionBeforeID)
+                                        }
+                                    }
+                                    dragState.end()
+                                })
                             .contextMenu {
                                 Button("从这里开始播放") { manager.play(playlist.id, startAt: entry.id) }
                                 Divider()
                                 Button("移除", role: .destructive) {
-                                    manager.remove(selectedEntries.contains(entry.id) ? selectedEntries : [entry.id], from: playlist.id)
+                                    removeEntries(selectedEntries.contains(entry.id) ? selectedEntries : [entry.id], from: playlist)
+                                }
+                            }
+                    }
+                    if !playlist.entries.isEmpty {
+                        Color.clear.frame(width: 30, height: 112)
+                            .overlay(alignment: .leading) {
+                                if dragState.insertionPlaylistID == playlist.id && dragState.insertionBeforeID == nil {
+                                    Capsule().fill(Color.accentColor).frame(width: 3, height: 96)
                                 }
                             }
                     }
@@ -392,8 +496,10 @@ struct PlaylistsView: View {
                 }
                 .padding(.horizontal, 3)
                 .padding(.vertical, 14)
+                .background(PlaylistScrollAccessor(onResolve: dragState.attach))
             }
             .frame(height: 152)
+            .playlistDragFrame("viewport")
             .onChange(of: previewEntryID) { _, newID in
                 if let newID {
                     withAnimation(Motion.scroll) { proxy.scrollTo(newID) }
@@ -402,8 +508,7 @@ struct PlaylistsView: View {
             .focusable()
             .focusEffectDisabled()
             .onDeleteCommand {
-                manager.remove(selectedEntries, from: playlist.id)
-                selectedEntries.removeAll()
+                removeEntries(selectedEntries, from: playlist)
             }
         }
     }
@@ -453,13 +558,21 @@ struct PlaylistsView: View {
     }
 
     private func handleKeyboard(_ key: ImmersiveWindowController.Key) -> Bool {
+        if key == .escape, dragState.payload != nil { dragState.cancel(); return true }
         guard let playlist = selectedPlaylist, !playlist.entries.isEmpty else { return false }
         switch key {
         case .left, .right:
             let index = playlist.entries.firstIndex { $0.id == previewEntryID } ?? 0
             let offset = key == .left ? -1 : 1
             previewEntryID = playlist.entries[(index + offset + playlist.entries.count) % playlist.entries.count].id
-            selectedEntries = [previewEntryID!]
+            if let previewEntryID {
+                if NSEvent.modifierFlags.contains(.shift) {
+                    selectedEntries = PlaylistEditing.selection(ids: playlist.entries.map(\.id), clicked: previewEntryID,
+                        anchor: selectionAnchorID ?? playlist.entries[index].id, current: selectedEntries, shift: true,
+                        command: NSEvent.modifierFlags.contains(.command))
+                    if selectionAnchorID == nil { selectionAnchorID = playlist.entries[index].id }
+                } else { selectedEntries = [previewEntryID]; selectionAnchorID = previewEntryID }
+            }
         case .space:
             if manager.activeID == playlist.id { manager.setPlaybackPaused(!manager.isPaused) }
             else { manager.play(playlist.id, startAt: previewEntryID) }
