@@ -404,14 +404,16 @@ private struct WorkshopDetailPanel: View {
             }
 
             HStack(spacing: 8) {
-                if item.isDownloaded {
-                    DownloadedIndicator()
-                } else if item.type.isPlayable, !isDownloading {
-                    CircleIconButton(systemImage: "arrow.down.to.line", help: "仅下载") { workshop.download(item) }
+                if item.isDownloaded || item.type.isPlayable {
+                    DownloadActionButton(phase: item.isDownloaded ? .done : (isDownloading ? .downloading : .idle), help: "仅下载") {
+                        workshop.download(item)
+                    }
+                    .id("download-\(item.id)")
                 }
                 // 未下载的也能加：先下载，完成后加入选择的播放列表
                 if item.isDownloaded || item.type.isPlayable {
                     AddToPlaylistButton(item: GalleryItem(origin: .workshop(item)))
+                        .id("playlist-\(item.id)")
                 }
                 if item.workshopPageURL != nil {
                     CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开（可订阅）") { workshop.openInSteam(item) }

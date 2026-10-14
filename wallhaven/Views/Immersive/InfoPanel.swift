@@ -103,6 +103,12 @@ struct CircleIconLabel: View {
         Image(systemName: systemImage)
             .font(.system(size: 14, weight: .medium))
             .foregroundStyle(tint)
+            // 状态切换（收藏、下载完成、加入列表）：图标原地替换并轻弹一下，颜色同时过渡。
+            // 调用方用壁纸 id 作为视图身份，切换壁纸时直接换新视图，不会误播这段动画
+            .contentTransition(.symbolEffect(.replace))
+            .symbolEffect(.bounce, value: Motion.reducesMotion ? "" : systemImage)
+            .animation(Motion.hover, value: systemImage)
+            .animation(Motion.hover, value: tint)
             .frame(width: 32, height: 32)
             .sceneGlass(in: Circle(), interactive: true)
             .overlay(Circle().stroke(.white.opacity(0.2), lineWidth: 0.5))
@@ -128,6 +134,7 @@ struct CircleIconButton: View {
 struct FavoriteMenuButton: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     let wallpaper: WallhavenWallpaper
+    @State private var burst = 0
 
     var body: some View {
         let isFavorite = viewModel.isFavorite(wallpaper.id)
@@ -153,6 +160,7 @@ struct FavoriteMenuButton: View {
             }
         } label: {
             CircleIconLabel(systemImage: isFavorite ? "heart.fill" : "heart", tint: isFavorite ? .red : .white)
+                .overlay { StateBurst(trigger: burst, color: .red) }
         }
         // .button + .plain 才能保留自定义 label 的样式（borderlessButton 会把背景去掉）
         .menuStyle(.button)
@@ -160,6 +168,68 @@ struct FavoriteMenuButton: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("收藏")
+        .onChange(of: isFavorite) { _, now in if now { burst += 1 } }
+    }
+}
+
+/// 状态变成「已完成」时从按钮边缘扩散的一圈淡光（收藏、下载完成、加入列表共用）
+struct StateBurst: View {
+    let trigger: Int
+    let color: Color
+    @State private var expanded = false
+
+    var body: some View {
+        Circle()
+            .stroke(color.opacity(expanded ? 0 : 0.7), lineWidth: expanded ? 0.5 : 2)
+            .scaleEffect(expanded ? 1.7 : 1)
+            .opacity(trigger > 0 && !Motion.reducesMotion ? 1 : 0)
+            .allowsHitTesting(false)
+            .onChange(of: trigger) {
+                expanded = false
+                withAnimation(.easeOut(duration: 0.55)) { expanded = true }
+            }
+    }
+}
+
+/// 下载按钮：未下载 → 下载中（转圈）→ 已下载（绿色对勾），在同一个按钮里过渡
+struct DownloadActionButton: View {
+    enum Phase: Equatable { case idle, downloading, done }
+    let phase: Phase
+    var help = "下载 (D)"
+    let action: () -> Void
+    @State private var burst = 0
+
+    var body: some View {
+        Button(action: action) {
+            CircleIconLabel(systemImage: phase == .done ? "checkmark" : "arrow.down",
+                            tint: phase == .done ? .green : .white.opacity(phase == .downloading ? 0.45 : 1))
+                .overlay {
+                    if phase == .downloading { DownloadingRing().transition(.opacity) }
+                }
+                .overlay { StateBurst(trigger: burst, color: .green) }
+                .animation(Motion.hover, value: phase)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(phase != .idle)
+        .help(phase == .done ? "已下载到本地" : (phase == .downloading ? "正在下载…" : help))
+        .onChange(of: phase) { old, new in if old == .downloading, new == .done { burst += 1 } }
+    }
+}
+
+/// 下载中：沿按钮边缘旋转的一段弧线；减少动态效果时静止
+private struct DownloadingRing: View {
+    @State private var spinning = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.28)
+            .stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .padding(1)
+            .onAppear {
+                guard !Motion.reducesMotion else { return }
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spinning = true }
+            }
     }
 }
 

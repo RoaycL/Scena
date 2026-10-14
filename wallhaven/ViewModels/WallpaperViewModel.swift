@@ -49,6 +49,10 @@ final class WallpaperViewModel: ObservableObject {
     @Published var favoriteFolders: [FavoriteFolder] = []
     @Published var selectedFolderID: UUID? = nil  // nil = 显示全部收藏
     /// 壁纸标签（详情接口）：持久化到缓存目录，再次查看或切到收藏时无需重新请求
+    /// 正在下载 / 本次刚下载完成的壁纸：下载按钮据此在「下载中 → 已下载」之间过渡
+    /// （资料库扫描到新文件前，用 downloadedIDs 先显示为已下载，避免按钮闪回箭头）
+    @Published private(set) var downloadingIDs: Set<String> = []
+    @Published private(set) var downloadedIDs: Set<String> = []
     @Published private(set) var tagsByID: [String: [String]] = WallpaperViewModel.loadTagCache()
     private var tagCacheSave: Task<Void, Never>?
     private var tagRequests: Set<String> = []
@@ -450,10 +454,13 @@ final class WallpaperViewModel: ObservableObject {
     }
 
     func downloadImage(_ wallpaper: WallhavenWallpaper) {
+        guard downloadingIDs.insert(wallpaper.id).inserted else { return }
         Task {
+            defer { downloadingIDs.remove(wallpaper.id) }
             do {
                 ToastCenter.shared.show("正在下载…", style: .progress)
                 _ = try await downloader.download(wallpaper)
+                downloadedIDs.insert(wallpaper.id)
                 ToastCenter.shared.show("已保存到本地", style: .success)
                 NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
@@ -464,10 +471,13 @@ final class WallpaperViewModel: ObservableObject {
 
     func downloadAndApply(_ wallpaper: WallhavenWallpaper) {
         PlaylistManager.shared.userDidApplyManually()
+        downloadingIDs.insert(wallpaper.id)
         Task {
+            defer { downloadingIDs.remove(wallpaper.id) }
             do {
                 ToastCenter.shared.show("正在下载并设为壁纸…", style: .progress)
                 let localURL = try await downloader.download(wallpaper)
+                downloadedIDs.insert(wallpaper.id)
                 try WallpaperManager.applyWallpaper(from: localURL)
                 ToastCenter.shared.show("壁纸已应用", style: .success)
                 NotificationCenter.default.post(name: .localMediaDidChange, object: nil)

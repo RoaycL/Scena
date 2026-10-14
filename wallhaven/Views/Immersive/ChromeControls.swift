@@ -120,10 +120,3 @@ struct LiveWallpaperStatus: View {
     }
 }
 
-/// 信息面板按钮行里的「已下载」标识：和其他圆形按钮同样大小的绿色对勾
-struct DownloadedIndicator: View {
-    var body: some View {
-        CircleIconLabel(systemImage: "checkmark", tint: .green)
-            .help("已下载到本地")
-    }
-}

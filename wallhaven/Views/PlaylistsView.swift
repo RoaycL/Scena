@@ -845,9 +845,18 @@ struct AddToPlaylistMenu: View {
 
 /// 信息面板 / 详情栏里的「添加到播放列表」圆形按钮
 struct AddToPlaylistButton: View {
+    @ObservedObject private var manager = PlaylistManager.shared
     let item: GalleryItem
+    @State private var burst = 0
+
+    /// 已经在任意一个播放列表里：图标换成带对勾的样式
+    private var isInPlaylist: Bool {
+        guard let id = PlaylistEntry(item)?.id else { return false }
+        return manager.playlists.contains { $0.entries.contains { $0.id == id } }
+    }
 
     var body: some View {
+        let isInPlaylist = isInPlaylist
         Menu {
             if let entry = PlaylistEntry(item) {
                 AddToPlaylistItems(entry: entry)
@@ -857,13 +866,16 @@ struct AddToPlaylistButton: View {
                 }
             }
         } label: {
-            CircleIconLabel(systemImage: "text.badge.plus")
+            CircleIconLabel(systemImage: isInPlaylist ? "text.badge.checkmark" : "text.badge.plus",
+                            tint: isInPlaylist ? .accentColor : .white)
+                .overlay { StateBurst(trigger: burst, color: .accentColor) }
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("添加到播放列表")
+        .help(isInPlaylist ? "已在播放列表中（点击管理）" : "添加到播放列表")
+        .onChange(of: isInPlaylist) { _, now in if now { burst += 1 } }
     }
 }
 

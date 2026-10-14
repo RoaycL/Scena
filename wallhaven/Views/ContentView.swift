@@ -1228,13 +1228,16 @@ struct ContentView: View {
                 }
             ) {
                 PrimaryActionButton(title: "设为壁纸") { viewModel.downloadAndApply(wallpaper) }
+                // 以壁纸 id 作为按钮身份：切换壁纸时直接换新按钮，只有同一张壁纸的状态变化才播放过渡动画
                 FavoriteMenuButton(wallpaper: wallpaper)
-                if downloadedWallhavenIDs.contains(wallpaper.id) {
-                    DownloadedIndicator()
-                } else {
-                    CircleIconButton(systemImage: "arrow.down", help: "下载 (D)") { viewModel.downloadImage(wallpaper) }
+                    .id("favorite-\(wallpaper.id)")
+                DownloadActionButton(phase: downloadedWallhavenIDs.contains(wallpaper.id) || viewModel.downloadedIDs.contains(wallpaper.id)
+                                     ? .done : (viewModel.downloadingIDs.contains(wallpaper.id) ? .downloading : .idle)) {
+                    viewModel.downloadImage(wallpaper)
                 }
+                .id("download-\(wallpaper.id)")
                 AddToPlaylistButton(item: item)
+                    .id("playlist-\(item.id)")
                 CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
             }
 
@@ -1253,6 +1256,7 @@ struct ContentView: View {
                     NSWorkspace.shared.activateFileViewerSelecting([local.url])
                 }
                 AddToPlaylistButton(item: item)
+                    .id("playlist-\(item.id)")
                 CircleIconButton(systemImage: "trash", tint: .red.opacity(0.9), help: "移到废纸篓") { deleteLocal(local) }
             }
 
@@ -1309,16 +1313,20 @@ struct ContentView: View {
                     tint: isSubscribed ? .red : .white,
                     help: isSubscribed ? "已订阅（点击取消订阅）" : "订阅到 Steam 账号"
                 ) { workshop.toggleSubscription(workshopItem) }
+                .id("subscribe-\(item.id)")
+            }
+            // 下载状态：未下载 → 下载中 → 已下载（绿色对勾），在同一个按钮里过渡
+            if workshopItem.isDownloaded || workshopItem.type.isPlayable {
+                DownloadActionButton(
+                    phase: workshopItem.isDownloaded ? .done : (state == .queued || state == .downloading ? .downloading : .idle),
+                    help: "仅下载"
+                ) { workshop.download(workshopItem) }
+                .id("download-\(item.id)")
             }
             // 未下载的也能加：先下载，完成后加入选择的播放列表
-            // 下载状态：已下载是绿色对勾，未下载可以只下载不应用
-            if workshopItem.isDownloaded {
-                DownloadedIndicator()
-            } else if workshopItem.type.isPlayable, state != .queued, state != .downloading {
-                CircleIconButton(systemImage: "arrow.down", help: "仅下载") { workshop.download(workshopItem) }
-            }
             if workshopItem.isDownloaded || workshopItem.type.isPlayable {
                 AddToPlaylistButton(item: item)
+                    .id("playlist-\(item.id)")
             }
             if let folder = workshopItem.localFolder {
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
