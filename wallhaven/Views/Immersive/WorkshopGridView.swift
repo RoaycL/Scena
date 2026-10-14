@@ -49,8 +49,7 @@ struct WorkshopGridView<MenuItems: View>: View {
                                 item: item,
                                 isSelected: item.id == selectedID,
                                 downloadState: workshop.downloadState(of: item),
-                                isLive: isLive(item),
-                                isSubscribed: workshop.isSubscribed(item)
+                                isLive: isLive(item)
                             )
                             .id(item.id)
                             .onTapGesture { onSelect(item) }
@@ -157,7 +156,6 @@ private struct WorkshopTile: View {
     let isSelected: Bool
     let downloadState: DownloadState
     let isLive: Bool
-    var isSubscribed = false
 
     @State private var isHovered = false
 
@@ -247,8 +245,13 @@ private struct WorkshopTile: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.green, in: Capsule())
-        } else if item.isDownloaded || isSubscribed {
-            StatusBadges(isFavorite: isSubscribed, isDownloaded: item.isDownloaded, size: 20)
+        } else if item.isDownloaded {
+            Image(systemName: "checkmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(.green.opacity(0.85), in: Circle())
+                .help("已下载")
         }
     }
 }
@@ -404,7 +407,9 @@ private struct WorkshopDetailPanel: View {
             }
 
             HStack(spacing: 8) {
-                if !item.isDownloaded, item.type.isPlayable, !isDownloading {
+                if item.isDownloaded {
+                    DownloadedIndicator()
+                } else if item.type.isPlayable, !isDownloading {
                     CircleIconButton(systemImage: "arrow.down.to.line", help: "仅下载") { workshop.download(item) }
                 }
                 // 未下载的也能加：先下载，完成后加入选择的播放列表

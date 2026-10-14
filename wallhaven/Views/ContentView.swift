@@ -100,20 +100,6 @@ struct ContentView: View {
     /// 已下载到本地的 wallhaven 壁纸 ID（文件名就是 ID）。下载后资料库刷新，角标随之更新
     private var downloadedWallhavenIDs: Set<String> { localViewModel.wallhavenIDs }
 
-    /// 缩略图角标：红色爱心 = 已收藏 / 已订阅，绿色对勾 = 已下载。资料库里都已下载，不再重复显示对勾
-    private func badges(for item: GalleryItem) -> (favorite: Bool, downloaded: Bool) {
-        let showsDownloaded = page != .library
-        switch item.origin {
-        case .remote(let wallpaper):
-            return (viewModel.isFavorite(wallpaper.id), showsDownloaded && downloadedWallhavenIDs.contains(wallpaper.id))
-        case .local(let local):
-            let id = local.url.deletingPathExtension().lastPathComponent
-            return (local.source == .wallhaven && viewModel.isFavorite(id), false)
-        case .workshop(let workshopItem):
-            return (workshop.isSubscribed(workshopItem), showsDownloaded && workshopItem.isDownloaded)
-        }
-    }
-
     private func items(for page: GalleryPage) -> [GalleryItem] {
         switch page {
         case .home:
@@ -989,7 +975,6 @@ struct ContentView: View {
                     loadError: page == .home ? viewModel.loadError : nil,
                     onRetry: { viewModel.retryLoading() },
                     downloadState: { $0.workshop.map(workshop.downloadState(of:)) ?? .none },
-                    badges: badges(for:),
                     contextMenu: { contextMenu(for: $0) }
                 )
                 .padding(.horizontal, 20)
@@ -1094,7 +1079,7 @@ struct ContentView: View {
                 PrimaryActionButton(title: "设为壁纸") { viewModel.downloadAndApply(wallpaper) }
                 FavoriteMenuButton(wallpaper: wallpaper)
                 if downloadedWallhavenIDs.contains(wallpaper.id) {
-                    CircleIconButton(systemImage: "checkmark", tint: .green, help: "已下载到本地") { viewModel.downloadImage(wallpaper) }
+                    DownloadedIndicator()
                 } else {
                     CircleIconButton(systemImage: "arrow.down", help: "下载 (D)") { viewModel.downloadImage(wallpaper) }
                 }
@@ -1175,6 +1160,12 @@ struct ContentView: View {
                 ) { workshop.toggleSubscription(workshopItem) }
             }
             // 未下载的也能加：先下载，完成后加入选择的播放列表
+            // 下载状态：已下载是绿色对勾，未下载可以只下载不应用
+            if workshopItem.isDownloaded {
+                DownloadedIndicator()
+            } else if workshopItem.type.isPlayable, state != .queued, state != .downloading {
+                CircleIconButton(systemImage: "arrow.down", help: "仅下载") { workshop.download(workshopItem) }
+            }
             if workshopItem.isDownloaded || workshopItem.type.isPlayable {
                 AddToPlaylistButton(item: item)
             }

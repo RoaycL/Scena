@@ -86,6 +86,8 @@ struct GalleryItem: Identifiable, Equatable {
     var fullSource: Source? {
         switch origin {
         case .remote(let wallpaper):
+            // 已下载到本地的直接读本地文件：切换更快，离线也能看
+            if let local = wallpaper.localFileURL { return .provider(LocalFileImageDataProvider(fileURL: local)) }
             return wallpaper.path.convertToSource()
         case .local(let item):
             return item.isVideo ? nil : .provider(LocalFileImageDataProvider(fileURL: item.url))
@@ -166,5 +168,14 @@ nonisolated struct GIFPosterFrameProcessor: ImageProcessor {
             total += Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
         }
         return total / (64 * 3)
+    }
+}
+
+extension WallhavenWallpaper {
+    /// 已下载到 Scena/Wallhaven 的本地文件（下载时以壁纸 ID 命名）
+    var localFileURL: URL? {
+        let ext = path.pathExtension.isEmpty ? "jpg" : path.pathExtension
+        let url = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true).appendingPathComponent("\(id).\(ext)")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }

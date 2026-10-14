@@ -21,8 +21,6 @@ struct ThumbnailStrip<MenuItems: View>: View {
     var onRetry: () -> Void = {}
     /// 工坊条目的下载状态（显示「下载中 / 排队中」遮罩）
     var downloadState: (GalleryItem) -> DownloadState = { _ in .none }
-    /// 角标：是否已收藏 / 订阅、是否已下载
-    var badges: (GalleryItem) -> (favorite: Bool, downloaded: Bool) = { _ in (false, false) }
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
 
     private let corner: CGFloat = 10
@@ -93,11 +91,6 @@ struct ThumbnailStrip<MenuItems: View>: View {
                 if state == .queued || state == .downloading {
                     DownloadingOverlay(state: state)
                 }
-            }
-            .overlay(alignment: .topTrailing) {
-                let state = badges(item)
-                StatusBadges(isFavorite: state.favorite, isDownloaded: state.downloaded, size: 17)
-                    .padding(5)
             }
             .overlay(alignment: .bottomLeading) {
                 if item.isVideo {
