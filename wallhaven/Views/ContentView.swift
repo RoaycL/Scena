@@ -60,6 +60,8 @@ struct ContentView: View {
     /// 背景只在有新选中项时更新：搜索重置、列表清空期间保持上一张，不会跳到随机图
     @State private var backgroundItem: GalleryItem?
     @State private var displayedBackgroundItem: GalleryItem?
+    @State private var failedBackgroundID: String?
+    @State private var backgroundRetryToken = 0
     @State private var playlistKeyHandler: ((ImmersiveWindowController.Key) -> Bool)?
     @State private var prefetcher: ImagePrefetcher?
     @State private var isFilterPresented = false
@@ -137,7 +139,13 @@ struct ContentView: View {
         return currentItems.first { $0.id == id }
     }
 
+    private var actionableItem: GalleryItem? {
+        guard let selectedItem else { return nil }
+        return displayedBackgroundItem?.id == selectedItem.id || failedBackgroundID == selectedItem.id ? selectedItem : nil
+    }
+
     private var displayedInfoItem: GalleryItem? {
+        if let selectedItem, failedBackgroundID == selectedItem.id { return selectedItem }
         guard let displayedBackgroundItem else { return nil }
         return currentItems.first { $0.id == displayedBackgroundItem.id } ?? displayedBackgroundItem
     }
@@ -253,13 +261,13 @@ struct ContentView: View {
             guard let columns = gridColumns else { return false }
             moveSelection(by: columns)
         case .enter:
-            guard let item = displayedBackgroundItem, item.id == selectedItem?.id else { return false }
+            guard let item = actionableItem else { return false }
             apply(item)
         case .character("d"):
-            guard displayedBackgroundItem?.id == selectedItem?.id, let wallpaper = selectedItem?.remote else { return false }
+            guard let wallpaper = actionableItem?.remote else { return false }
             viewModel.downloadImage(wallpaper)
         case .character("l"):
-            guard displayedBackgroundItem?.id == selectedItem?.id, let wallpaper = selectedItem?.remote else { return false }
+            guard let wallpaper = actionableItem?.remote else { return false }
             viewModel.toggleFavorite(wallpaper)
         case .character("/"):
             guard hasSearch else { return false }
@@ -289,7 +297,7 @@ struct ContentView: View {
 
     /// 提供给顶部菜单栏的操作
     private var commandActions: GalleryCommandActions {
-        let item = displayedBackgroundItem?.id == selectedItem?.id ? selectedItem : nil
+        let item = actionableItem
         let canDownload: Bool = switch item?.origin {
         case .remote: true
         case .workshop(let workshopItem): !workshopItem.isDownloaded && workshopItem.type.isPlayable
@@ -306,13 +314,13 @@ struct ContentView: View {
             isChromeHidden: immersive.isChromeHidden,
             apply: { if let item { apply(item) } },
             download: {
-                switch selectedItem?.origin {
+                switch item?.origin {
                 case .remote(let wallpaper): viewModel.downloadImage(wallpaper)
                 case .workshop(let workshopItem): workshop.download(workshopItem)
                 default: break
                 }
             },
-            toggleFavorite: { if let wallpaper = selectedItem?.remote { viewModel.toggleFavorite(wallpaper) } },
+            toggleFavorite: { if let wallpaper = item?.remote { viewModel.toggleFavorite(wallpaper) } },
             move: { moveSelection(by: $0) },
             toggleChrome: { immersive.toggleChrome() },
             switchTab: { switchTab($0) },
@@ -321,7 +329,7 @@ struct ContentView: View {
                 isSearchFocused = true
             },
             openInBrowser: {
-                if let url = selectedItem?.remote?.url ?? selectedItem?.workshop?.workshopPageURL {
+                if let url = item?.remote?.url ?? item?.workshop?.workshopPageURL {
                     NSWorkspace.shared.open(url)
                 }
             },
@@ -386,7 +394,9 @@ struct ContentView: View {
                     item: backgroundItem,
                     showsPreviewCard: isWorkshopGrid ? immersive.isChromeHidden : true,
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden,
-                    onDisplayed: { displayedBackgroundItem = $0 }
+                    onDisplayed: { displayedBackgroundItem = $0; failedBackgroundID = nil },
+                    onFailed: { if $0.id == selectedItem?.id { failedBackgroundID = $0.id } },
+                    retryToken: backgroundRetryToken
                 )
                     .frame(width: size.width, height: size.height)
                     // 播放列表页：背景虚化，面板成为主体
@@ -496,6 +506,7 @@ struct ContentView: View {
             ensureValidSelection(previousIDs: oldIDs)
         }
         .onChange(of: selectedItem, initial: true) { _, item in
+            failedBackgroundID = nil
             guard let item else { return }
             backgroundItem = item
             prefetchNeighbors(of: item)
@@ -1064,17 +1075,27 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 0)
 
-                if let item = displayedInfoItem {
+                if let item = displayedInfoItem ?? selectedItem {
                     infoPanel(for: item)
-                        .opacity(item.id == selectedItem?.id ? 1 : 0.45)
-                        .allowsHitTesting(item.id == selectedItem?.id)
+                        .opacity(actionableItem != nil ? 1 : 0.45)
+                        .allowsHitTesting(actionableItem != nil)
                         .overlay(alignment: .topTrailing) {
-                            if item.id != selectedItem?.id {
+                            if failedBackgroundID == selectedItem?.id, selectedItem != nil {
+                                HStack(spacing: 8) {
+                                    Label("加载失败", systemImage: "exclamationmark.triangle")
+                                    Button("重试") {
+                                        failedBackgroundID = nil
+                                        backgroundRetryToken += 1
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                                .font(.caption).foregroundStyle(.white)
+                            } else if actionableItem == nil {
                                 Label("加载中", systemImage: "arrow.triangle.2.circlepath")
                                     .font(.caption).foregroundStyle(.white.opacity(0.8))
                             }
                         }
-                        .animation(Motion.content, value: item.id == selectedItem?.id)
+                        .animation(Motion.content, value: actionableItem?.id)
                         .frame(maxWidth: min(size.width * 0.6, 620), alignment: .leading)
                         .padding(.horizontal, 32)
                         .onHover { immersive.setHold("panel", active: $0) }

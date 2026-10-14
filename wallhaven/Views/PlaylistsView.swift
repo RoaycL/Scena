@@ -28,6 +28,7 @@ struct PlaylistsView: View {
     var maximumHeight: CGFloat = 820
     var onKeyboardHandler: (((ImmersiveWindowController.Key) -> Bool)?) -> Void = { _ in }
     @State private var displayedPreviewID: String?
+    @State private var failedPreviewID: String?
 
     private var selectedPlaylist: Playlist? {
         manager.playlists.first { $0.id == selectedID }
@@ -62,6 +63,7 @@ struct PlaylistsView: View {
         }
         .frame(width: embedded ? panelWidth : nil, height: embedded ? maximumHeight : nil)
         .frame(minWidth: embedded ? nil : 900, minHeight: embedded ? nil : 560)
+        .onChange(of: previewEntryID) { failedPreviewID = nil }
         .onChange(of: selectedID) {
             selectedEntries.removeAll()
             selectionAnchorID = nil
@@ -281,15 +283,15 @@ struct PlaylistsView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .bottomLeading) {
                     if let entry {
-                        PlaylistLargePreview(entry: entry, onDisplayed: { displayedPreviewID = $0 })
+                        PlaylistLargePreview(entry: entry, onDisplayed: { displayedPreviewID = $0; failedPreviewID = nil }, onFailed: { failedPreviewID = $0 })
                         LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
                             .allowsHitTesting(false)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(playlist.entries.first(where: { $0.id == displayedPreviewID })?.title ?? "加载中…")
+                            Text(failedPreviewID == entry.id ? entry.title : (playlist.entries.first(where: { $0.id == displayedPreviewID })?.title ?? "加载中…"))
                                 .font(.system(size: 20, weight: .medium))
                                 .lineLimit(1)
                             HStack(spacing: 8) {
-                                Text(displayedPreviewID == entry.id ? entry.kindLabel : "加载中…")
+                                Text(failedPreviewID == entry.id ? "加载失败" : (displayedPreviewID == entry.id ? entry.kindLabel : "加载中…"))
                                 if let index = playlist.entries.firstIndex(where: { $0.id == displayedPreviewID }) {
                                     Text("\(index + 1) / \(playlist.entries.count)")
                                 }
@@ -744,6 +746,7 @@ private struct PlaylistCover: View {
 private struct PlaylistLargePreview: View {
     let entry: PlaylistEntry
     var onDisplayed: (String) -> Void
+    var onFailed: (String) -> Void
     @State private var item: GalleryItem?
     @State private var isLoading = true
 
@@ -766,6 +769,15 @@ private struct PlaylistLargePreview: View {
                     default: false
                     }
                     if matches { onDisplayed(entry.id) }
+                }, onFailed: { failed in
+                    let matches: Bool = switch (entry.kind, failed.origin) {
+                    case (.wallhaven, .remote(let wallpaper)): wallpaper.id == entry.wallhaven?.id
+                    case (.local, .local(let local)): local.url.path == entry.path
+                    case (.workshop, .workshop(let workshop)): workshop.localFolder?.path == entry.path
+                    default: false
+                    }
+                    guard matches else { return }
+                    onFailed(entry.id)
                 })
             }
             if isLoading && item == nil {
@@ -793,6 +805,7 @@ private struct PlaylistLargePreview: View {
                 item = workshop.map { GalleryItem(origin: .workshop($0)) }
             }
             isLoading = false
+            if item == nil { onFailed(entry.id) }
         }
     }
 }
