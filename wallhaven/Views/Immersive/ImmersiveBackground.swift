@@ -15,6 +15,7 @@ struct ImmersiveBackground: View {
     var centersPreviewCard = true
     /// 首帧就绪前垫在下面的黑底；调用方自己提供占位图（如缩略图）时关掉
     var showsBlackBase = true
+    var onDisplayed: (GalleryItem) -> Void = { _ in }
 
     @State private var displayedItem: GalleryItem?
     @State private var requestedID: String?
@@ -37,7 +38,10 @@ struct ImmersiveBackground: View {
                     // 回调可能来自上一轮的加载任务，只提交当前请求的清晰画面。
                     DispatchQueue.main.async {
                         guard requestedID == candidate.id else { return }
-                        withAnimation(Motion.content) { displayedItem = candidate }
+                        withAnimation(Motion.content) {
+                            displayedItem = candidate
+                            onDisplayed(candidate)
+                        }
                     }
                 }
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
@@ -47,7 +51,10 @@ struct ImmersiveBackground: View {
                 .transition(.opacity)
             }
         }
-        .onChange(of: item?.id, initial: true) { requestedID = item?.id }
+        .onChange(of: item?.id, initial: true) {
+            requestedID = item?.id
+            if let displayedItem, displayedItem.id == item?.id { onDisplayed(displayedItem) }
+        }
         .clipped()
     }
 }

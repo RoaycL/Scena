@@ -9,6 +9,15 @@ import AppKit
 import Combine
 import SwiftUI
 
+struct WallhavenSearchRequest: Equatable {
+    let query: String
+    let sorting: SortOrder
+    let categories: String
+    let purity: String
+    let resolutions: [String]
+    let apiKey: String?
+}
+
 @MainActor
 final class WallpaperViewModel: ObservableObject {
     @Published var query = "" { didSet { saveDiscoveryPreferences() } }
@@ -49,6 +58,11 @@ final class WallpaperViewModel: ObservableObject {
     private static let discoveryKey = "wallper.discovery.preferences.v1"
 
     private let client = WallhavenClient()
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration = UUID()
+    private var committedSearch: WallhavenSearchRequest?
+    private var needsReplacement = false
+    private let searchLoader: (@MainActor (WallhavenSearchRequest, Int) async throws -> [WallhavenWallpaper])?
     private let downloader = DownloadService()
     private let favoritesKey = "wallper.favorites.ids"
     private let favoriteObjectsKey = "wallper.favorites.objects"
@@ -61,7 +75,9 @@ final class WallpaperViewModel: ObservableObject {
     private var storedAPIKey: String?
     private var storedUsername: String?
 
-    init(discoveryDefaults: UserDefaults = .standard) {
+    init(discoveryDefaults: UserDefaults = .standard,
+         searchLoader: (@MainActor (WallhavenSearchRequest, Int) async throws -> [WallhavenWallpaper])? = nil) {
+        self.searchLoader = searchLoader
         self.discoveryDefaults = discoveryDefaults
         isRestoringDiscovery = true
         if let saved = discoveryDefaults.dictionary(forKey: Self.discoveryKey) {
@@ -91,20 +107,43 @@ final class WallpaperViewModel: ObservableObject {
         ], forKey: Self.discoveryKey)
     }
 
-    func search(reset: Bool) {
-        Task {
-            if reset {
-                currentPage = 1
-                canLoadMore = true
-                wallpapers = []
-                selectedWallpaper = nil
+    private var searchRequest: WallhavenSearchRequest {
+        WallhavenSearchRequest(query: query, sorting: sortOrder, categories: categoriesValue,
+                               purity: purityValue, resolutions: resolutions.sorted(), apiKey: storedAPIKey)
+    }
+
+    func search(reset: Bool, debounce: Bool = false) {
+        if !reset { loadNextPage(); return }
+        needsReplacement = true
+        startSearch(request: searchRequest, page: 1, replacing: true, debounce: debounce)
+    }
+
+    private func startSearch(request: WallhavenSearchRequest, page: Int, replacing: Bool, debounce: Bool) {
+        searchTask?.cancel()
+        let generation = UUID()
+        searchGeneration = generation
+        // 从防抖开始即标记加载，保留旧内容，但阻止旧列表继续翻页。
+        isLoading = true
+        errorMessage = nil
+        loadError = nil
+        searchTask = Task {
+            do {
+                if debounce { try await Task.sleep(for: .milliseconds(300)) }
+                try Task.checkCancellation()
+                try await fetch(request: request, page: page, replacing: replacing, generation: generation)
+            } catch {
+                guard generation == searchGeneration, !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                loadError = error.localizedDescription
             }
-            await fetch()
+            guard generation == searchGeneration else { return }
+            isLoading = false
+            searchTask = nil
         }
     }
 
     func loadMoreIfNeeded(current item: WallhavenWallpaper) {
-        guard canLoadMore, !isLoading else { return }
+        guard canLoadMore, !isLoading, !needsReplacement else { return }
         let threshold = max(wallpapers.count - 8, 0)
         if let index = wallpapers.lastIndex(where: { $0.id == item.id }), index >= threshold {
             loadNextPage()
@@ -112,27 +151,15 @@ final class WallpaperViewModel: ObservableObject {
     }
 
     func loadNextPage() {
-        guard canLoadMore, !isLoading else { return }
+        guard canLoadMore, !isLoading, !needsReplacement else { return }
         let nextPage = currentPage + 1
-        guard nextPage <= maxPageLimit else {
-            canLoadMore = false
-            return
-        }
-        let previousPage = currentPage
-        currentPage = nextPage
-        Task {
-            // 失败时退回原来的页码，重试时重新请求这一页（否则会跳过一页，或者之后再也不加载）
-            if await !fetch() { currentPage = previousPage }
-        }
+        guard nextPage <= maxPageLimit else { canLoadMore = false; return }
+        startSearch(request: committedSearch ?? searchRequest, page: nextPage, replacing: false, debounce: false)
     }
 
-    /// 缩略图条末尾的「重试」
     func retryLoading() {
-        if wallpapers.isEmpty {
-            search(reset: true)
-        } else {
-            loadNextPage()
-        }
+        if needsReplacement || wallpapers.isEmpty { search(reset: true) }
+        else { loadNextPage() }
     }
 
     /// nil 表示「不限」
@@ -142,7 +169,7 @@ final class WallpaperViewModel: ObservableObject {
         } else {
             resolutions = []
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func toggleFavorite(_ wallpaper: WallhavenWallpaper, insertOnly: Bool = false) {
@@ -356,7 +383,7 @@ final class WallpaperViewModel: ObservableObject {
             includeGeneral = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func toggleAnime() {
@@ -365,7 +392,7 @@ final class WallpaperViewModel: ObservableObject {
             includeAnime = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func togglePeople() {
@@ -374,7 +401,7 @@ final class WallpaperViewModel: ObservableObject {
             includePeople = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func toggleSFW() {
@@ -383,7 +410,7 @@ final class WallpaperViewModel: ObservableObject {
             includeSFW = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func toggleSketchy() {
@@ -396,7 +423,7 @@ final class WallpaperViewModel: ObservableObject {
             includeSketchy = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func toggleNSFW() {
@@ -409,7 +436,7 @@ final class WallpaperViewModel: ObservableObject {
             includeNSFW = true
             return
         }
-        search(reset: true)
+        search(reset: true, debounce: true)
     }
 
     func openAPIKeyPage() {
@@ -531,83 +558,55 @@ final class WallpaperViewModel: ObservableObject {
         NSWorkspace.shared.open(selectedWallpaper.url)
     }
 
-    @discardableResult
-    private func fetch() async -> Bool {
-        isLoading = true
-        errorMessage = nil
-        loadError = nil
-        defer { isLoading = false }
-        do {
-            if sortOrder == .favorites {
-                // 读取本地收藏的图片数据并转换为 Array。由于 favorites 是 ID 集合，
-                // 我们直接利用 ID 信息搜索对应的详细图片数据会很慢（需要一一 fetch details）。
-                // 为了演示，我们将以 fallback 方式执行：如果没登入没绑定 apiKey，只能看本地 ID？
-                // 实际上我们可以通过传入已存储的 likes id 集合在 UI 上展示。
-                // 若不想太复杂，暂时先继续使用原有 API filter (如果 API 支持 favorites sort)，
-                // 然而目前 Wallhaven v1 的 search 接口支持 `sorting=favorites`。这会调用你在网站上的 collections/likes。
-                // 单向拉取已经合并到本地 `favorites` Set 了。如果想看到本地+线上的合并，
-                // 我们应该只拉取并展示已经缓存在本地 favorites 的那些，但 API 没提供通过 ID 列表批量查询的 endpoint。
-                // 所以我们还是按照常规 search 调用，使用 sorting=favorites 依旧会拉取官方算法给出的 favorites（可能包括别人的？或者你个人的，根据文档，如果是你的 apikey，会返回你的设定的？由于墙外文档，我们姑且照旧传 sortOrder）。
+    private func fetch(request: WallhavenSearchRequest, page: Int, replacing: Bool, generation: UUID) async throws {
+        var staged = replacing ? [] : wallpapers
+        var pageToFetch = page
+        var hasMore = true
+        var skippedDuplicatePages = 0
+        while hasMore, pageToFetch <= maxPageLimit {
+            let result = try await searchWithRetry(request: request, page: pageToFetch)
+            // 网络层即使不响应取消，过期结果也不能修改条目、页码或加载状态。
+            guard generation == searchGeneration, !Task.isCancelled else { throw CancellationError() }
+            if result.isEmpty { hasMore = false; break }
+            var seenIDs = Set(staged.map(\.id))
+            let unique = result.filter { seenIDs.insert($0.id).inserted }
+            if unique.isEmpty {
+                skippedDuplicatePages += 1
+                if skippedDuplicatePages >= 8 { hasMore = false; break }
+                pageToFetch += 1
+                continue
             }
-
-            var pageToFetch = currentPage
-            var skippedDuplicatePages = 0
-            var appended = false
-
-            while !appended, canLoadMore, pageToFetch <= maxPageLimit {
-                let result = try await searchWithRetry(page: pageToFetch)
-
-                if result.isEmpty {
-                    canLoadMore = false
-                    break
-                }
-
-                var seenIDs = Set(wallpapers.map(\.id))
-                let uniqueResult = result.filter { seenIDs.insert($0.id).inserted }
-                if uniqueResult.isEmpty {
-                    skippedDuplicatePages += 1
-                    if skippedDuplicatePages >= 8 {
-                        canLoadMore = false
-                        break
-                    }
-                    pageToFetch += 1
-                    continue
-                }
-
-                wallpapers.append(contentsOf: uniqueResult)
-                currentPage = pageToFetch
-                appended = true
-            }
-
-            if selectedWallpaper == nil {
-                selectedWallpaper = wallpapers.randomElement()
-            }
-            statusMessage = "已加载 \(wallpapers.count) 张壁纸"
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            loadError = error.localizedDescription
-            return false
+            staged.append(contentsOf: unique)
+            break
         }
+        guard generation == searchGeneration, !Task.isCancelled else { throw CancellationError() }
+        let previousSelection = selectedWallpaper?.id
+        wallpapers = staged
+        currentPage = min(pageToFetch, maxPageLimit)
+        canLoadMore = hasMore && pageToFetch < maxPageLimit
+        if replacing {
+            committedSearch = request
+            needsReplacement = false
+            selectedWallpaper = staged.first { $0.id == previousSelection } ?? staged.first
+        } else if selectedWallpaper == nil { selectedWallpaper = staged.first }
+        statusMessage = "已加载 \(staged.count) 张壁纸"
     }
 
-    /// 请求太频繁或网络超时时自动等待重试两次（2 秒、5 秒），仍失败再交给用户手动重试
-    private func searchWithRetry(page: Int) async throws -> [WallhavenWallpaper] {
-        let delays: [UInt64] = [2, 5]
+    private func searchWithRetry(request: WallhavenSearchRequest, page: Int) async throws -> [WallhavenWallpaper] {
+        let delays = [2, 5]
         var attempt = 0
         while true {
+            try Task.checkCancellation()
             do {
-                return try await client.search(
-                    query: query,
-                    page: page,
-                    sorting: sortOrder,
-                    categories: categoriesValue,
-                    purity: purityValue,
-                    resolutions: resolutions.sorted(),
-                    apiKey: storedAPIKey
-                )
+                if let searchLoader { return try await searchLoader(request, page) }
+                return try await client.search(query: request.query, page: page, sorting: request.sorting,
+                                               categories: request.categories, purity: request.purity,
+                                               resolutions: request.resolutions, apiKey: request.apiKey)
             } catch {
-                let retryable = error is WallhavenRateLimited || (error as? URLError).map { [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost].contains($0.code) } == true
+                try Task.checkCancellation()
+                let retryable = error is WallhavenRateLimited || (error as? URLError).map {
+                    [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost].contains($0.code)
+                } == true
                 guard retryable, attempt < delays.count else { throw error }
                 try await Task.sleep(for: .seconds(delays[attempt]))
                 attempt += 1

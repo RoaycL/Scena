@@ -19,6 +19,8 @@ struct PlaylistsView: View {
     var embedded = false
     var panelWidth: CGFloat = 1180
     var maximumHeight: CGFloat = 820
+    var onKeyboardHandler: (((ImmersiveWindowController.Key) -> Bool)?) -> Void = { _ in }
+    @State private var displayedPreviewID: String?
 
     private var selectedPlaylist: Playlist? {
         manager.playlists.first { $0.id == selectedID }
@@ -62,7 +64,20 @@ struct PlaylistsView: View {
                 previewEntryID = new
             }
         }
+        .onDisappear { onKeyboardHandler(nil) }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(keys: [.space, .leftArrow, .rightArrow, .return]) { press in
+            let key: ImmersiveWindowController.Key = switch press.key {
+            case .space: .space
+            case .leftArrow: .left
+            case .rightArrow: .right
+            default: .enter
+            }
+            return handleKeyboard(key) ? .handled : .ignored
+        }
         .onAppear {
+            onKeyboardHandler(handleKeyboard)
             if selectedID == nil { selectedID = manager.activeID ?? manager.playlists.first?.id }
             resetPreview()
         }
@@ -198,19 +213,19 @@ struct PlaylistsView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .bottomLeading) {
                     if let entry {
-                        PlaylistLargePreview(entry: entry)
+                        PlaylistLargePreview(entry: entry, onDisplayed: { displayedPreviewID = $0 })
                         LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
                             .allowsHitTesting(false)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(entry.title)
+                            Text(playlist.entries.first(where: { $0.id == displayedPreviewID })?.title ?? "加载中…")
                                 .font(.system(size: 20, weight: .medium))
                                 .lineLimit(1)
                             HStack(spacing: 8) {
-                                Text(entry.kindLabel)
-                                if let index = playlist.entries.firstIndex(where: { $0.id == entry.id }) {
+                                Text(displayedPreviewID == entry.id ? entry.kindLabel : "加载中…")
+                                if let index = playlist.entries.firstIndex(where: { $0.id == displayedPreviewID }) {
                                     Text("\(index + 1) / \(playlist.entries.count)")
                                 }
-                                if isActive && manager.currentEntryID == entry.id {
+                                if isActive && manager.currentEntryID == displayedPreviewID {
                                     Label(manager.isPaused ? "已暂停" : "正在播放", systemImage: manager.isPaused ? "pause.fill" : "speaker.wave.2.fill")
                                 }
                             }
@@ -381,7 +396,7 @@ struct PlaylistsView: View {
             .frame(height: 152)
             .onChange(of: previewEntryID) { _, newID in
                 if let newID {
-                    withAnimation(Motion.scroll) { proxy.scrollTo(newID, anchor: .center) }
+                    withAnimation(Motion.scroll) { proxy.scrollTo(newID) }
                 }
             }
             .focusable()
@@ -435,6 +450,24 @@ struct PlaylistsView: View {
             if MediaType.isVideo(url) { return .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1)) }
         }
         return entry.thumbnailURL.map { $0.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: $0)) : $0.convertToSource() }
+    }
+
+    private func handleKeyboard(_ key: ImmersiveWindowController.Key) -> Bool {
+        guard let playlist = selectedPlaylist, !playlist.entries.isEmpty else { return false }
+        switch key {
+        case .left, .right:
+            let index = playlist.entries.firstIndex { $0.id == previewEntryID } ?? 0
+            let offset = key == .left ? -1 : 1
+            previewEntryID = playlist.entries[(index + offset + playlist.entries.count) % playlist.entries.count].id
+            selectedEntries = [previewEntryID!]
+        case .space:
+            if manager.activeID == playlist.id { manager.setPlaybackPaused(!manager.isPaused) }
+            else { manager.play(playlist.id, startAt: previewEntryID) }
+        case .enter:
+            manager.play(playlist.id, startAt: previewEntryID)
+        default: return false
+        }
+        return true
     }
 
     private func resetPreview() {
@@ -552,6 +585,7 @@ private struct PlaylistCover: View {
 
 private struct PlaylistLargePreview: View {
     let entry: PlaylistEntry
+    var onDisplayed: (String) -> Void
     @State private var item: GalleryItem?
     @State private var isLoading = true
 
@@ -566,7 +600,15 @@ private struct PlaylistLargePreview: View {
                 .blur(radius: 6)
                 .clipped()
             if let item {
-                ImmersiveBackground(item: item, showsBlackBase: false)
+                ImmersiveBackground(item: item, showsBlackBase: false, onDisplayed: { displayed in
+                    let matches: Bool = switch (entry.kind, displayed.origin) {
+                    case (.wallhaven, .remote(let wallpaper)): wallpaper.id == entry.wallhaven?.id
+                    case (.local, .local(let local)): local.url.path == entry.path
+                    case (.workshop, .workshop(let workshop)): workshop.localFolder?.path == entry.path
+                    default: false
+                    }
+                    if matches { onDisplayed(entry.id) }
+                })
             }
             if isLoading && item == nil {
                 ProgressView().controlSize(.small)

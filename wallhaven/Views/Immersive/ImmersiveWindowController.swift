@@ -12,9 +12,11 @@ import SwiftUI
 ///  - 键盘快捷键
 ///  - 在横向缩略图条上，把垂直滚轮转换为水平滚动，并支持拖动滚动
 final class ImmersiveWindowController: ObservableObject {
-    enum Key {
+    enum Key: Equatable {
         case left, right, up, down, space, enter, escape, character(Character)
     }
+
+    var allowsChromeKeyboardShortcuts: () -> Bool = { true }
 
     @Published private(set) var isChromeHidden = false
 
@@ -216,8 +218,11 @@ final class ImmersiveWindowController: ObservableObject {
 
         guard let key else { return event }
 
+        // 页面和浮层先处理；全屏与沉浸快捷键仅作为兜底。
+        if keyHandler?(key) == true { return nil }
         switch key {
         case .space:
+            guard allowsChromeKeyboardShortcuts() else { return event }
             toggleChrome()
             return nil
         case .escape:
@@ -230,7 +235,7 @@ final class ImmersiveWindowController: ObservableObject {
             window.toggleFullScreen(nil)
             return nil
         default:
-            return keyHandler?(key) == true ? nil : event
+            return event
         }
     }
 

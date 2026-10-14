@@ -59,6 +59,8 @@ struct ContentView: View {
     @State private var workshopColumns = 4
     /// 背景只在有新选中项时更新：搜索重置、列表清空期间保持上一张，不会跳到随机图
     @State private var backgroundItem: GalleryItem?
+    @State private var displayedBackgroundItem: GalleryItem?
+    @State private var playlistKeyHandler: ((ImmersiveWindowController.Key) -> Bool)?
     @State private var prefetcher: ImagePrefetcher?
     @State private var isFilterPresented = false
     @State private var isDownloadsPresented = false
@@ -133,6 +135,11 @@ struct ContentView: View {
     private var selectedItem: GalleryItem? {
         guard let id = selectedID(for: page) else { return nil }
         return currentItems.first { $0.id == id }
+    }
+
+    private var displayedInfoItem: GalleryItem? {
+        guard let displayedBackgroundItem else { return nil }
+        return currentItems.first { $0.id == displayedBackgroundItem.id } ?? displayedBackgroundItem
     }
 
     private func select(_ item: GalleryItem, isUserInitiated: Bool = false) {
@@ -224,7 +231,15 @@ struct ContentView: View {
         }
     }
 
+    private var hasOpenPanel: Bool { isFilterPresented || isWorkshopFilterPresented || isDownloadsPresented }
+
     private func handleKey(_ key: ImmersiveWindowController.Key) -> Bool {
+        if hasOpenPanel {
+            if key == .escape { closeAllPanels(); return true }
+            return false
+        }
+        if page == .playlists, let playlistKeyHandler, playlistKeyHandler(key) { return true }
+        if page == .playlists, [.left, .right, .up, .down, .enter].contains(key) { return false }
         switch key {
         case .left:
             moveSelection(by: -1)
@@ -238,13 +253,13 @@ struct ContentView: View {
             guard let columns = gridColumns else { return false }
             moveSelection(by: columns)
         case .enter:
-            guard let item = selectedItem else { return false }
+            guard let item = displayedBackgroundItem, item.id == selectedItem?.id else { return false }
             apply(item)
         case .character("d"):
-            guard let wallpaper = selectedItem?.remote else { return false }
+            guard displayedBackgroundItem?.id == selectedItem?.id, let wallpaper = selectedItem?.remote else { return false }
             viewModel.downloadImage(wallpaper)
         case .character("l"):
-            guard let wallpaper = selectedItem?.remote else { return false }
+            guard displayedBackgroundItem?.id == selectedItem?.id, let wallpaper = selectedItem?.remote else { return false }
             viewModel.toggleFavorite(wallpaper)
         case .character("/"):
             guard hasSearch else { return false }
@@ -274,7 +289,7 @@ struct ContentView: View {
 
     /// 提供给顶部菜单栏的操作
     private var commandActions: GalleryCommandActions {
-        let item = selectedItem
+        let item = displayedBackgroundItem?.id == selectedItem?.id ? selectedItem : nil
         let canDownload: Bool = switch item?.origin {
         case .remote: true
         case .workshop(let workshopItem): !workshopItem.isDownloaded && workshopItem.type.isPlayable
@@ -289,7 +304,7 @@ struct ContentView: View {
             canOpenInBrowser: item?.remote != nil || item?.workshop?.workshopPageURL != nil,
             hasSearch: hasSearch,
             isChromeHidden: immersive.isChromeHidden,
-            apply: { if let item = selectedItem { apply(item) } },
+            apply: { if let item { apply(item) } },
             download: {
                 switch selectedItem?.origin {
                 case .remote(let wallpaper): viewModel.downloadImage(wallpaper)
@@ -370,7 +385,8 @@ struct ContentView: View {
                 ImmersiveBackground(
                     item: backgroundItem,
                     showsPreviewCard: isWorkshopGrid ? immersive.isChromeHidden : true,
-                    centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden
+                    centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden,
+                    onDisplayed: { displayedBackgroundItem = $0 }
                 )
                     .frame(width: size.width, height: size.height)
                     // 播放列表页：背景虚化，面板成为主体
@@ -437,6 +453,7 @@ struct ContentView: View {
         .onAppear {
             MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
+            immersive.allowsChromeKeyboardShortcuts = { !hasOpenPanel && page != .playlists }
             handleMenuNavigation()
             syncWorkshopMode()
             viewModel.search(reset: true)
@@ -446,7 +463,7 @@ struct ContentView: View {
             workshop.syncSubscriptions()
         }
         .onReceive(galleryTimer) { _ in
-            guard !isWorkshopGrid, page != .playlists, immersive.canAdvanceGallery,
+            guard !isWorkshopGrid, page != .playlists, !(page == .home && viewModel.isLoading), immersive.canAdvanceGallery,
                   currentItems.count > 1 else { return }
             let index = selectedItem.flatMap { currentItems.firstIndex(of: $0) } ?? -1
             select(currentItems[(index + 1) % currentItems.count])
@@ -496,7 +513,7 @@ struct ContentView: View {
                 await viewModel.loadTagsIfNeeded(for: next)
             }
         }
-        .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true) }
+        .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true, debounce: true) }
         .onChange(of: viewModel.errorMessage) { _, message in
             guard let message else { return }
             toastCenter.show(message, style: .error)
@@ -1011,7 +1028,7 @@ struct ContentView: View {
             || (page == .workshop && workshop.mode == .online && workshop.isLoading)
 
         if page == .playlists {
-            PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)))
+            PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)), onKeyboardHandler: { playlistKeyHandler = $0 })
                 .scrollContentBackground(.hidden)
                 .sceneGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: .black.opacity(0.35))
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1046,8 +1063,17 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 0)
 
-                if let item = selectedItem {
+                if let item = displayedInfoItem {
                     infoPanel(for: item)
+                        .opacity(item.id == selectedItem?.id ? 1 : 0.45)
+                        .allowsHitTesting(item.id == selectedItem?.id)
+                        .overlay(alignment: .topTrailing) {
+                            if item.id != selectedItem?.id {
+                                Label("加载中", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(.caption).foregroundStyle(.white.opacity(0.8))
+                            }
+                        }
+                        .animation(Motion.content, value: item.id == selectedItem?.id)
                         .frame(maxWidth: min(size.width * 0.6, 620), alignment: .leading)
                         .padding(.horizontal, 32)
                         .onHover { immersive.setHold("panel", active: $0) }

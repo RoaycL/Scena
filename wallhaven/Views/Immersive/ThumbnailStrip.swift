@@ -74,7 +74,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .onChange(of: selectedID) { _, newID in
                 guard let newID, newID != selectionWithoutScrollingID else { return }
                 withAnimation(Motion.scroll) {
-                    proxy.scrollTo(newID, anchor: .center)
+                    proxy.scrollTo(newID)
                 }
             }
         }

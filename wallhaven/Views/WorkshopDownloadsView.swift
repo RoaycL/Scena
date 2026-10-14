@@ -37,21 +37,8 @@ private struct WorkshopDownloadsList: View {
     @ObservedObject var progress: WorkshopDownloadProgress
     var onNavigate: (() -> Void)?
 
-    /// 进行中的排在前面，已完成的放到最后
-    private var sortedJobs: [WorkshopDownloadJob] {
-        func rank(_ job: WorkshopDownloadJob) -> Int {
-            switch job.state {
-            case .downloading: progress.entries[job.id] != nil ? 0 : 1
-            case .queued: 2
-            case .paused, .failed: 3
-            case .cancelled: 4
-            case .completed, .none: 5
-            }
-        }
-        return workshop.downloadJobs.enumerated()
-            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
-            .map(\.element)
-    }
+    // 始终保持入队顺序；暂停、完成与进度变化只更新原来的行，避免按钮移位。
+    private var sortedJobs: [WorkshopDownloadJob] { workshop.downloadJobs }
 
     private var summary: String {
         let active = progress.entries.count
