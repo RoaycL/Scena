@@ -28,6 +28,15 @@ enum ContentSource: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// 收藏的来源筛选：全部合并 Wallhaven 收藏与创意工坊订阅。
+enum CollectionSource: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case wallhaven = "Wallhaven"
+    case workshop = "创意工坊"
+
+    var id: String { rawValue }
+}
+
 /// 页签 + 来源决定实际显示的画廊页面
 private enum GalleryPage: Equatable {
     case home, favorites, workshop, library, playlists
@@ -45,7 +54,7 @@ struct ContentView: View {
 
     @State private var currentTab: MainTab = .discover
     @AppStorage("ui.discoverSource") private var discoverSource: ContentSource = .wallhaven
-    @AppStorage("ui.collectionSource") private var collectionSource: ContentSource = .wallhaven
+    @State private var collectionSource: CollectionSource = .all
     @State private var favoriteSelectionID: String?
     @State private var localSelectionID: String?
     @State private var librarySource: LibrarySource = .all
@@ -88,7 +97,7 @@ struct ContentView: View {
     private var page: GalleryPage {
         switch currentTab {
         case .discover: discoverSource == .wallhaven ? .home : .workshop
-        case .collections: collectionSource == .wallhaven ? .favorites : .workshop
+        case .collections: collectionSource == .workshop ? .workshop : .favorites
         case .library: .library
         case .playlists: .playlists
         }
@@ -96,7 +105,7 @@ struct ContentView: View {
 
     /// 工坊网格的数据随页签切换：发现 = 在线，收藏 = 已订阅
     private func syncWorkshopMode() {
-        guard page == .workshop else { return }
+        guard page == .workshop || currentTab == .collections else { return }
         let mode: WorkshopViewModel.Mode = currentTab == .discover ? .online : .subscribed
         if workshop.mode != mode { workshop.mode = mode }
     }
@@ -119,9 +128,13 @@ struct ContentView: View {
         case .home:
             return viewModel.wallpapers.map { GalleryItem(origin: .remote($0)) }
         case .favorites:
-            let wallpapers = viewModel.selectedFolderID.map(viewModel.wallpapersInFolder) ?? viewModel.favoriteWallpapers
-            // 收藏按加入顺序保存，最新收藏的排在最前
-            return wallpapers.reversed().map { GalleryItem(origin: .remote($0)) }
+            // 全部不受单个来源里保留的收藏夹、搜索词和工坊筛选影响。
+            let wallpapers = collectionSource == .all ? viewModel.favoriteWallpapers
+                : (viewModel.selectedFolderID.map(viewModel.wallpapersInFolder) ?? viewModel.favoriteWallpapers)
+            let favorites = wallpapers.reversed().map { GalleryItem(origin: .remote($0)) }
+            return collectionSource == .all
+                ? favorites + workshop.subscribedItems.map { GalleryItem(origin: .workshop($0)) }
+                : favorites
         case .workshop:
             return workshop.items.map { GalleryItem(origin: .workshop($0)) }
         case .library:
@@ -435,8 +448,8 @@ struct ContentView: View {
     /// 订阅同步失败提示点击跳转：到「收藏 · 创意工坊」（已订阅）选中这个条目，详情栏显示它的信息
     private func revealSubscribedItem(_ id: String) {
         immersive.userDidSelectThumbnail()
-        collectionSource = .workshop
         switchTab(.collections)
+        collectionSource = .workshop
         syncWorkshopMode()
         // 搜索词会过滤已订阅列表，清掉才能看到它
         if !workshop.query.isEmpty { workshop.query = "" }
@@ -448,7 +461,10 @@ struct ContentView: View {
     }
 
     private func switchTab(_ tab: MainTab) {
-        withAnimation(Motion.navigation) { currentTab = tab }
+        withAnimation(Motion.navigation) {
+            if tab == .collections, currentTab != .collections { collectionSource = .all }
+            currentTab = tab
+        }
     }
 
     // MARK: - Body
@@ -836,7 +852,7 @@ struct ContentView: View {
     private func sourceTitle(for tab: MainTab) -> String? {
         switch tab {
         case .discover: discoverSource.rawValue
-        case .collections: collectionSource.rawValue
+        case .collections: collectionSource == .all ? "" : collectionSource.rawValue
         case .library: librarySource == .all ? "" : librarySource.rawValue
         case .playlists: nil
         }
@@ -852,7 +868,7 @@ struct ContentView: View {
             .pickerStyle(.inline)
         case .collections:
             Picker("来源", selection: $collectionSource) {
-                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(CollectionSource.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.inline)
         case .library:
@@ -883,7 +899,7 @@ struct ContentView: View {
                 searchField
                 filterButton
             case .favorites:
-                folderMenu
+                if collectionSource == .wallhaven { folderMenu }
             case .library:
                 librarySearchField
                 libraryAddMenu
@@ -1262,7 +1278,15 @@ struct ContentView: View {
                 Button("调整筛选") { isFilterPresented = true }.buttonStyle(.bordered)
             case .favorites:
                 Image(systemName: "heart").font(.system(size: 34, weight: .light))
-                Text(viewModel.selectedFolderID == nil ? "还没有收藏，按 L 或点击心形即可收藏" : "该收藏夹中暂无壁纸")
+                if collectionSource == .all {
+                    Text(workshop.isSyncing ? "正在同步创意工坊订阅…" : "还没有收藏或创意工坊订阅")
+                    if !workshop.isLoggedIn {
+                        Button("登录 Steam，同步订阅") { openWindow(id: SteamLoginWindow.id) }
+                            .buttonStyle(.bordered)
+                    }
+                } else {
+                    Text(viewModel.selectedFolderID == nil ? "还没有收藏，按 L 或点击心形即可收藏" : "该收藏夹中暂无壁纸")
+                }
                 Button("去发现") {
                     discoverSource = .wallhaven
                     switchTab(.discover)
