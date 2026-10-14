@@ -488,6 +488,13 @@ struct ContentView: View {
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
             await viewModel.loadTagsIfNeeded(for: wallpaper)
+            // 顺带预取下一张的标签，切过去时标签和标题一起出现（详情接口有频率限制，只取一张）
+            let items = currentItems
+            if let index = items.firstIndex(where: { $0.remote?.id == wallpaper.id }), items.count > 1,
+               let next = items[(index + 1) % items.count].remote {
+                guard !Task.isCancelled else { return }
+                await viewModel.loadTagsIfNeeded(for: next)
+            }
         }
         .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true) }
         .onChange(of: viewModel.errorMessage) { _, message in

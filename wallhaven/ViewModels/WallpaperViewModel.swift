@@ -39,7 +39,10 @@ final class WallpaperViewModel: ObservableObject {
     @Published private(set) var statusMessage = "就绪"
     @Published var favoriteFolders: [FavoriteFolder] = []
     @Published var selectedFolderID: UUID? = nil  // nil = 显示全部收藏
-    @Published private(set) var tagsByID: [String: [String]] = [:]
+    /// 壁纸标签（详情接口）：持久化到缓存目录，再次查看或切到收藏时无需重新请求
+    @Published private(set) var tagsByID: [String: [String]] = WallpaperViewModel.loadTagCache()
+    private var tagCacheSave: Task<Void, Never>?
+    private var tagRequests: Set<String> = []
 
     private let discoveryDefaults: UserDefaults
     private var isRestoringDiscovery = false
@@ -474,12 +477,46 @@ final class WallpaperViewModel: ObservableObject {
 
     /// 按需加载壁纸标签（详情接口），结果缓存
     func loadTagsIfNeeded(for wallpaper: WallhavenWallpaper) async {
-        guard tagsByID[wallpaper.id] == nil else { return }
+        guard tagsByID[wallpaper.id] == nil, tagRequests.insert(wallpaper.id).inserted else { return }
+        defer { tagRequests.remove(wallpaper.id) }
         do {
             let tags = try await client.fetchWallpaperDetails(id: wallpaper.id, apiKey: storedAPIKey)
             tagsByID[wallpaper.id] = tags
+            scheduleTagCacheSave()
         } catch {
             // 标签只是锦上添花，失败时静默
+        }
+    }
+
+    private static let tagCacheLimit = 5000
+
+    private static var tagCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.roayc.wallhaven", isDirectory: true)
+            .appendingPathComponent("wallhaven-tags.json")
+    }
+
+    private static func loadTagCache() -> [String: [String]] {
+        guard let url = tagCacheURL, let data = try? Data(contentsOf: url),
+              let cache = try? JSONDecoder().decode([String: [String]].self, from: data) else { return [:] }
+        return cache
+    }
+
+    /// 合并短时间内的多次写入；超过上限时丢掉一部分旧条目（字典无序，只为控制体积）
+    private func scheduleTagCacheSave() {
+        tagCacheSave?.cancel()
+        tagCacheSave = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled, let url = Self.tagCacheURL else { return }
+            var cache = tagsByID
+            if cache.count > Self.tagCacheLimit {
+                for key in cache.keys.prefix(cache.count - Self.tagCacheLimit) { cache.removeValue(forKey: key) }
+            }
+            guard let data = try? JSONEncoder().encode(cache) else { return }
+            Task.detached(priority: .utility) {
+                try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: url, options: .atomic)
+            }
         }
     }
 
