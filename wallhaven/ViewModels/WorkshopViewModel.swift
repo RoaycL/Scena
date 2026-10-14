@@ -118,7 +118,10 @@ final class WorkshopViewModel: ObservableObject {
     private let toast = ToastCenter.shared
     private var cursor: String?
     private var webPage = 1
-    private var canLoadMore = true
+    /// 在线浏览是否还有下一页（网格底部据此显示「加载更多」或「已经到底了」）
+    @Published private(set) var canLoadMore = true
+    /// 连续几页去重后没有新条目：自动再拉下一页，避免停在底部没有新格子出现、再也不触发加载
+    private var emptyPageStreak = 0
     private var searchGeneration = UUID()
     private var libraryGeneration = UUID()
     private var searchTask: Task<Void, Never>?
@@ -403,6 +406,7 @@ final class WorkshopViewModel: ObservableObject {
             cursor = nil
             webPage = 1
             canLoadMore = true
+            emptyPageStreak = 0
             onlineItems = []
         }
         guard canLoadMore, !isLoading else { return }
@@ -452,13 +456,27 @@ final class WorkshopViewModel: ObservableObject {
                 webPage = nextPage
                 canLoadMore = hasMore
                 var existing = Set(onlineItems.map(\.id))
-                onlineItems.append(contentsOf: newItems.filter { existing.insert($0.id).inserted })
+                let fresh = newItems.filter { existing.insert($0.id).inserted }
+                onlineItems.append(contentsOf: fresh)
                 mergeDownloadState()
+                if fresh.isEmpty && hasMore && emptyPageStreak < 3 {
+                    emptyPageStreak += 1
+                    // 等 defer 把 isLoading 复位后再请求下一页
+                    Task { @MainActor in self.search(reset: false) }
+                } else {
+                    emptyPageStreak = 0
+                }
             } catch {
                 guard searchGeneration == generation, !Task.isCancelled else { return }
                 toast.show(error.localizedDescription, style: .error)
             }
         }
+    }
+
+    /// 网格滑到底部时调用
+    func loadMore() {
+        guard mode == .online else { return }
+        search(reset: false)
     }
 
     func loadMoreIfNeeded(current item: WorkshopItem) {

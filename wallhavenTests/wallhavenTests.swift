@@ -207,6 +207,15 @@ struct wallhavenTests {
         #expect(NSColor(hex: "#12345") == nil)
     }
 
+    @Test func queryPlusSignsAreEscaped() throws {
+        var components = URLComponents(string: "https://example.com/q")!
+        components.queryItems = [.init(name: "cursor", value: "AoJ4+ab/c="), .init(name: "q", value: "+anime -cat")]
+        let query = try #require(components.urlEncodingPlus?.query)
+        #expect(!query.contains("+"))
+        #expect(query.contains("cursor=AoJ4%2Bab/c%3D"))
+        #expect(query.contains("q=%2Banime%20-cat"))
+    }
+
     @Test func updateVersionComparisonIsNumeric() {
         #expect(UpdateManager.isNewer("1.0.10", than: "1.0.2"))
         #expect(UpdateManager.isNewer("1.1", than: "1.0.9"))

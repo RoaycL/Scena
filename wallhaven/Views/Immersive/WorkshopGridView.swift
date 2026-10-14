@@ -59,11 +59,8 @@ struct WorkshopGridView<MenuItems: View>: View {
                     }
                     .padding(.vertical, 4)
 
-                    if workshop.mode == .online && workshop.isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.white)
-                            .padding(.vertical, 16)
+                    if workshop.mode == .online {
+                        onlineFooter
                     }
                 }
                 .onChange(of: selectedID) { _, id in
@@ -90,6 +87,43 @@ struct WorkshopGridView<MenuItems: View>: View {
         .padding(.bottom, edgePadding)
         .onAppear { columnCount = columns }
         .onChange(of: columns) { _, newValue in columnCount = newValue }
+    }
+
+    /// 在线浏览的底部：滑到这里就加载下一页；每加载完一页（条目数变化）再检查一次，仍在屏幕上就继续加载
+    @ViewBuilder
+    private var onlineFooter: some View {
+        Group {
+            if workshop.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            } else if workshop.canLoadMore {
+                Button("加载更多") { workshop.loadMore() }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.white.opacity(0.7))
+            } else if !items.isEmpty {
+                Text("已经到底了")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .padding(.bottom, 8)
+        .onAppear {
+            isFooterVisible = true
+            workshop.loadMore()
+        }
+        .onDisappear { isFooterVisible = false }
+        .onChange(of: items.count) {
+            // 新的一页加载完后底部仍然可见（新增很少或被去重）：继续加载
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { footerCheck() }
+        }
+    }
+
+    @State private var isFooterVisible = false
+
+    private func footerCheck() {
+        if isFooterVisible { workshop.loadMore() }
     }
 
     private func isLive(_ item: WorkshopItem) -> Bool {

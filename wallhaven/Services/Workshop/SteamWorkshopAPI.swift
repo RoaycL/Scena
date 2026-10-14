@@ -58,7 +58,7 @@ struct SteamWorkshopAPI: Sendable {
         }
         components.queryItems = items
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let http = response as? HTTPURLResponse else { throw WallperError.network("无效的响应。") }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw WallperError.network("Steam Web API Key 无效，请在设置中检查。")
@@ -110,7 +110,7 @@ struct SteamWorkshopAPI: Sendable {
         items += filters.excludedTags.map { .init(name: "excludedtags[]", value: $0) }
         components.queryItems = items
 
-        var request = URLRequest(url: components.url!)
+        var request = URLRequest(url: components.urlEncodingPlus!)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
         request.setValue("zh-CN,zh;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await session.data(for: request)

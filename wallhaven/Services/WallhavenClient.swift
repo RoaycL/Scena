@@ -18,7 +18,7 @@ struct WallhavenClient: Sendable {
     func validateAPIKey(_ apiKey: String) async throws {
         var components = URLComponents(string: "https://wallhaven.cc/api/v1/settings")!
         components.queryItems = [.init(name: "apikey", value: apiKey)]
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WallperError.network("无效的响应。")
         }
@@ -34,7 +34,7 @@ struct WallhavenClient: Sendable {
     func getCollections(apiKey: String) async throws -> [WallhavenCollection] {
         var components = URLComponents(string: "https://wallhaven.cc/api/v1/collections")!
         components.queryItems = [.init(name: "apikey", value: apiKey)]
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? ""
@@ -50,7 +50,7 @@ struct WallhavenClient: Sendable {
             .init(name: "apikey", value: apiKey)
         ]
         
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: data, encoding: .utf8) ?? ""
@@ -76,7 +76,7 @@ struct WallhavenClient: Sendable {
         }
         components.queryItems = items
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WallperError.network("无效的响应。")
         }
@@ -94,7 +94,7 @@ struct WallhavenClient: Sendable {
         if let apiKey, !apiKey.isEmpty {
             components.queryItems = [.init(name: "apikey", value: apiKey)]
         }
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: components.urlEncodingPlus!)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw WallperError.network("获取详情失败。")
         }
@@ -112,5 +112,16 @@ struct WallhavenClient: Sendable {
         let decoder = JSONDecoder()
         let result = try decoder.decode(DetailResponse.self, from: data)
         return result.data.tags.map { $0.name }
+    }
+}
+
+nonisolated extension URLComponents {
+    /// 与 url 相同，但把查询参数里的「+」转义成 %2B。
+    /// URLComponents 不会转义「+」，服务器会把它当成空格：Steam 的翻页 cursor 经常带「+」（不转义时那一页返回空，
+    /// 工坊列表停在 4～5 页「到底了」），wallhaven 搜索里的「+标签」也会失效
+    var urlEncodingPlus: URL? {
+        var copy = self
+        copy.percentEncodedQuery = percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return copy.url
     }
 }

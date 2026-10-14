@@ -138,7 +138,7 @@ final class SteamAccountSession: ObservableObject {
                 .init(name: "numperpage", value: "30"),
                 .init(name: "p", value: String(page)),
             ]
-            let html = try await getHTML(components.url!)
+            let html = try await getHTML(components.urlEncodingPlus!)
             if list.reportedTotal == nil, let match = html.firstMatch(of: /of ([\d,]+) entries/) {
                 list.reportedTotal = Int(match.1.replacingOccurrences(of: ",", with: ""))
             }
