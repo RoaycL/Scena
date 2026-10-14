@@ -760,7 +760,7 @@ private struct PlaylistLargePreview: View {
             case .workshop:
                 let path = entry.path
                 let workshop = await Task.detached(priority: .userInitiated) {
-                    path.flatMap { WorkshopItem.load(from: URL(fileURLWithPath: $0)) }
+                    path.flatMap { WorkshopItem.load(from: URL(fileURLWithPath: $0), computeSize: false) }
                 }.value
                 guard !Task.isCancelled else { return }
                 item = workshop.map { GalleryItem(origin: .workshop($0)) }

@@ -70,7 +70,7 @@ nonisolated struct WorkshopItem: Identifiable, Hashable, Sendable {
 
 nonisolated extension WorkshopItem {
     /// 从本地文件夹读取 project.json
-    static func load(from folder: URL) -> WorkshopItem? {
+    static func load(from folder: URL, computeSize: Bool = true) -> WorkshopItem? {
         let projectURL = folder.appendingPathComponent("project.json")
         guard let data = try? Data(contentsOf: projectURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -100,7 +100,7 @@ nonisolated extension WorkshopItem {
             previewURL: preview,
             tags: json["tags"] as? [String] ?? [],
             contentRating: json["contentrating"] as? String,
-            fileSize: folderSize(folder),
+            fileSize: computeSize ? folderSize(folder) : 0,
             localFolder: folder,
             entryFile: file
         )

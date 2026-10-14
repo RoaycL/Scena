@@ -49,6 +49,7 @@ struct PlaylistEditingTests {
         manager.restore(removal)
         #expect(manager.playlists.first?.entries.map(\.id) == (original + [new]).map(\.id))
         manager.moveEntries([original[1].id, original[2].id], in: playlist.id, before: nil)
+        manager.flushPendingSave()
         let reloaded = PlaylistManager(storageURL: file)
         #expect(reloaded.playlists.first?.entries.map(\.id) == [original[0].id, original[3].id, new.id, original[1].id, original[2].id])
         manager.delete(playlist.id)

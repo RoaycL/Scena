@@ -10,7 +10,7 @@ import Combine
 import Foundation
 import SwiftUI
 
-struct PlaylistEntry: Codable, Hashable, Identifiable {
+struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable {
         case wallhaven, local, workshop
     }
@@ -82,7 +82,7 @@ struct PlaylistEntry: Codable, Hashable, Identifiable {
     }
 }
 
-struct Playlist: Codable, Identifiable, Hashable {
+struct Playlist: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     var name: String
     var entries: [PlaylistEntry] = []
@@ -109,6 +109,8 @@ final class PlaylistManager: ObservableObject {
     var activePlaylist: Playlist? { playlists.first { $0.id == activeID } }
 
     private let persistenceURL: URL
+    private let persistenceWriter: PlaylistPersistenceWriter
+    private var saveTask: Task<Void, Never>?
     private var timer: Timer?
     private var applyTask: Task<Void, Never>?
     private var playbackGeneration = 0
@@ -134,6 +136,7 @@ final class PlaylistManager: ObservableObject {
         self.applier = applier
         self.playbackDefaults = playbackDefaults
         persistenceURL = storageURL ?? Self.storageURL
+        persistenceWriter = PlaylistPersistenceWriter(url: persistenceURL)
         if let data = try? Data(contentsOf: persistenceURL),
            let decoded = try? JSONDecoder().decode([Playlist].self, from: data) {
             playlists = decoded
@@ -264,8 +267,21 @@ final class PlaylistManager: ObservableObject {
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(playlists) else { return }
-        try? data.write(to: persistenceURL, options: .atomic)
+        saveTask?.cancel()
+        let snapshot = playlists, writer = persistenceWriter
+        saveTask = Task {
+            do { try await Task.sleep(for: .milliseconds(300)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            writer.enqueue(snapshot)
+        }
+    }
+
+    /// 退出前等待已排队写入，再保存最新快照，旧快照不会覆盖退出时的状态。
+    func flushPendingSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        persistenceWriter.flush(playlists)
     }
 
     // MARK: - Playback
@@ -442,7 +458,7 @@ final class PlaylistManager: ObservableObject {
             try checkCurrent()
             try WallpaperManager.applyWallpaper(from: URL(fileURLWithPath: path))
         case .workshop:
-            guard let path = entry.path, let item = WorkshopItem.load(from: URL(fileURLWithPath: path)) else {
+            guard let path = entry.path, let item = WorkshopItem.load(from: URL(fileURLWithPath: path), computeSize: false) else {
                 throw WallperError.wallpaper("工坊壁纸已被删除。")
             }
             try checkCurrent()
