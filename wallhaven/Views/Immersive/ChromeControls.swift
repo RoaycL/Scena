@@ -119,3 +119,27 @@ struct LiveWallpaperStatus: View {
         }
     }
 }
+
+/// 统一的状态角标：红色爱心 = 已收藏 / 已订阅，绿色对勾 = 已下载到本地
+struct StatusBadges: View {
+    var isFavorite = false
+    var isDownloaded = false
+    var size: CGFloat = 18
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if isFavorite { badge("heart.fill", color: .red, help: "已收藏 / 已订阅") }
+            if isDownloaded { badge("checkmark", color: .green, help: "已下载到本地") }
+        }
+    }
+
+    private func badge(_ symbol: String, color: Color, help: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.5, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(color.opacity(0.9), in: Circle())
+            .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+            .help(help)
+    }
+}

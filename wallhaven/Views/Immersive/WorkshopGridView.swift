@@ -49,7 +49,8 @@ struct WorkshopGridView<MenuItems: View>: View {
                                 item: item,
                                 isSelected: item.id == selectedID,
                                 downloadState: workshop.downloadState(of: item),
-                                isLive: isLive(item)
+                                isLive: isLive(item),
+                                isSubscribed: workshop.isSubscribed(item)
                             )
                             .id(item.id)
                             .onTapGesture { onSelect(item) }
@@ -156,6 +157,7 @@ private struct WorkshopTile: View {
     let isSelected: Bool
     let downloadState: DownloadState
     let isLive: Bool
+    var isSubscribed = false
 
     @State private var isHovered = false
 
@@ -245,13 +247,8 @@ private struct WorkshopTile: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.green, in: Capsule())
-        } else if item.isDownloaded {
-            Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(.green.opacity(0.85), in: Circle())
-                .help("已下载")
+        } else if item.isDownloaded || isSubscribed {
+            StatusBadges(isFavorite: isSubscribed, isDownloaded: item.isDownloaded, size: 20)
         }
     }
 }
@@ -315,7 +312,7 @@ private struct WorkshopDetailPanel: View {
                 if item.subscriptions > 0 {
                     metaChip("\(item.subscriptions.formatted()) 订阅")
                 }
-                metaChip(item.isDownloaded ? "已下载" : "未下载", color: item.isDownloaded ? .green : nil)
+                metaChip(item.isDownloaded ? "✓ 已下载" : "未下载", color: item.isDownloaded ? .green : nil)
             }
 
             if !item.tags.isEmpty {
@@ -392,11 +389,11 @@ private struct WorkshopDetailPanel: View {
                 let subscribed = workshop.isSubscribed(item)
                 Button { workshop.toggleSubscription(item) } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: subscribed ? "checkmark.circle.fill" : "plus.circle")
+                        Image(systemName: subscribed ? "heart.fill" : "heart")
                         Text(subscribed ? "已订阅" : "订阅")
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(subscribed ? .green : .white.opacity(0.85))
+                    .foregroundStyle(subscribed ? .red : .white.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)
                     .background(.white.opacity(0.1), in: Capsule())

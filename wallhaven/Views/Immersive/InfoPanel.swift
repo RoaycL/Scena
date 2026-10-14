@@ -156,7 +156,7 @@ struct FavoriteMenuButton: View {
                 Label(isFavorite ? "取消收藏" : "添加到默认收藏", systemImage: isFavorite ? "heart.slash" : "heart")
             }
         } label: {
-            CircleIconLabel(systemImage: isFavorite ? "heart.fill" : "heart", tint: isFavorite ? .pink : .white)
+            CircleIconLabel(systemImage: isFavorite ? "heart.fill" : "heart", tint: isFavorite ? .red : .white)
         }
         // .button + .plain 才能保留自定义 label 的样式（borderlessButton 会把背景去掉）
         .menuStyle(.button)

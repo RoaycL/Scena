@@ -21,6 +21,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
     var onRetry: () -> Void = {}
     /// 工坊条目的下载状态（显示「下载中 / 排队中」遮罩）
     var downloadState: (GalleryItem) -> DownloadState = { _ in .none }
+    /// 角标：是否已收藏 / 订阅、是否已下载
+    var badges: (GalleryItem) -> (favorite: Bool, downloaded: Bool) = { _ in (false, false) }
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
 
     private let corner: CGFloat = 10
@@ -92,6 +94,11 @@ struct ThumbnailStrip<MenuItems: View>: View {
                     DownloadingOverlay(state: state)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                let state = badges(item)
+                StatusBadges(isFavorite: state.favorite, isDownloaded: state.downloaded, size: 17)
+                    .padding(5)
+            }
             .overlay(alignment: .bottomLeading) {
                 if item.isVideo {
                     Image(systemName: "play.circle.fill")
@@ -99,9 +106,9 @@ struct ThumbnailStrip<MenuItems: View>: View {
                         .foregroundStyle(.white)
                         .shadow(radius: 3)
                         .padding(6)
-                } else if let workshopItem = item.workshop {
-                    // 工坊条目：类型图标；未下载时显示下载箭头
-                    Image(systemName: workshopItem.isDownloaded ? item.librarySymbol : "arrow.down.circle")
+                } else if item.workshop != nil {
+                    // 工坊条目：类型图标（是否已下载看右上角的绿色对勾）
+                    Image(systemName: item.librarySymbol)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 20, height: 20)

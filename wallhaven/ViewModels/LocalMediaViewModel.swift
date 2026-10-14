@@ -31,7 +31,13 @@ struct LocalMediaItem: Identifiable, Hashable, Sendable {
 }
 
 final class LocalMediaViewModel: ObservableObject {
-    @Published private(set) var items: [LocalMediaItem] = []
+    @Published private(set) var items: [LocalMediaItem] = [] {
+        didSet {
+            wallhavenIDs = Set(items.filter { $0.source == .wallhaven }.map { $0.url.deletingPathExtension().lastPathComponent })
+        }
+    }
+    /// 已下载的 wallhaven 壁纸 ID（文件名就是 ID），用于显示「已下载」角标
+    private(set) var wallhavenIDs: Set<String> = []
 
     private let toast = ToastCenter.shared
     private var storageObserver: NSObjectProtocol?
