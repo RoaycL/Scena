@@ -19,6 +19,7 @@ struct ImmersiveBackground: View {
 
     var onFailed: (GalleryItem) -> Void = { _ in }
     var retryToken = 0
+    var staticOnly = false
 
     @State private var displayedItem: GalleryItem?
     @State private var requestedID: String?
@@ -33,7 +34,7 @@ struct ImmersiveBackground: View {
         ZStack {
             if showsBlackBase { Color.black }
             ForEach(layers) { candidate in
-                BackgroundLayer(item: candidate, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard, onFailure: {
+                BackgroundLayer(item: candidate, staticOnly: staticOnly, showsPreviewCard: showsPreviewCard, centersPreviewCard: centersPreviewCard, onFailure: {
                     DispatchQueue.main.async {
                         guard requestedID == candidate.id, requestedRetryToken == retryToken else { return }
                         onFailed(candidate)
@@ -67,6 +68,7 @@ struct ImmersiveBackground: View {
 
 private struct BackgroundLayer: View {
     let item: GalleryItem
+    let staticOnly: Bool
     let showsPreviewCard: Bool
     let centersPreviewCard: Bool
     let onFailure: () -> Void
@@ -116,6 +118,7 @@ private struct BackgroundLayer: View {
                 layers(in: geo.size)
             }
         }
+        .onChange(of: staticOnly) { isLiveReady = false }
     }
 
     private func layers(in size: CGSize) -> some View {
@@ -123,21 +126,25 @@ private struct BackgroundLayer: View {
             if item.isVideo, let url = item.local?.url {
                 // 视频首帧要几百毫秒：先显示封面帧，视频就绪后淡入
                 poster(size: size)
-                LoopingVideoView(url: url, onReady: liveDidBecomeReady)
-                    .frame(width: size.width, height: size.height)
-                    .opacity(isLiveReady ? 1 : 0)
+                if !staticOnly {
+                    LoopingVideoView(url: url, onReady: liveDidBecomeReady)
+                        .frame(width: size.width, height: size.height)
+                        .opacity(isLiveReady ? 1 : 0)
+                }
             } else if let workshopItem = item.playableWorkshopItem {
                 // 场景 / 网页渲染器启动要 1～5 秒：先显示壁纸自带的预览图，渲染出第一帧后淡入
                 poster(size: size)
-                WorkshopPlayerView(item: workshopItem) { state in
-                    if state == .ready {
-                        liveDidBecomeReady()
-                    } else if case .failed = state {
-                        onFailure()
+                if !staticOnly {
+                    WorkshopPlayerView(item: workshopItem) { state in
+                        if state == .ready {
+                            liveDidBecomeReady()
+                        } else if case .failed = state {
+                            onFailure()
+                        }
                     }
+                    .frame(width: size.width, height: size.height)
+                    .opacity(isLiveReady ? 1 : 0)
                 }
-                .frame(width: size.width, height: size.height)
-                .opacity(isLiveReady ? 1 : 0)
             } else if let full = item.fullSource {
                 KFImage(source: full)
                     .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))

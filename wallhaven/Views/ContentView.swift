@@ -396,7 +396,8 @@ struct ContentView: View {
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden,
                     onDisplayed: { displayedBackgroundItem = $0; failedBackgroundID = nil },
                     onFailed: { if $0.id == selectedItem?.id { failedBackgroundID = $0.id } },
-                    retryToken: backgroundRetryToken
+                    retryToken: backgroundRetryToken,
+                    staticOnly: page == .playlists
                 )
                     .frame(width: size.width, height: size.height)
                     // 播放列表页：背景虚化，面板成为主体
