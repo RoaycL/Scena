@@ -41,6 +41,9 @@ struct ImmersiveBackground: View {
                     }
                 }
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
+                // 新画面从略微放大、略带模糊过渡到清晰，像镜头对焦；减少动态效果时只淡入
+                .scaleEffect(displayedItem?.id == candidate.id || Motion.reducesMotion ? 1 : 1.035)
+                .blur(radius: displayedItem?.id == candidate.id || Motion.reducesMotion ? 0 : 10)
                 .transition(.opacity)
             }
         }

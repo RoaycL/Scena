@@ -24,6 +24,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
     @ViewBuilder let contextMenu: (GalleryItem) -> MenuItems
 
     private let corner: CGFloat = 10
+    /// 鼠标悬停的缩略图：提亮并轻微放大
+    @State private var hoveredID: String?
     private var thumbWidth: CGFloat { thumbHeight * 16 / 9 }
 
     var body: some View {
@@ -37,6 +39,9 @@ struct ThumbnailStrip<MenuItems: View>: View {
                             .onTapGesture { onSelect(item) }
                             .simultaneousGesture(TapGesture(count: 2).onEnded { onActivate(item) })
                             .contextMenu { contextMenu(item) }
+                            .onHover { inside in
+                                if inside { hoveredID = item.id } else if hoveredID == item.id { hoveredID = nil }
+                            }
                             .onAppear { onItemAppear(item) }
                     }
                     if isLoading {
@@ -114,9 +119,11 @@ struct ThumbnailStrip<MenuItems: View>: View {
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
                     .stroke(isSelected ? Color.white : Color.white.opacity(0.18), lineWidth: isSelected ? 2.5 : 1)
             )
-            .opacity(isSelected ? 1 : 0.78)
-            .scaleEffect(isSelected ? 1.04 : 1)
+            .opacity(isSelected || hoveredID == item.id ? 1 : 0.78)
+            .scaleEffect(isSelected ? 1.04 : (hoveredID == item.id ? 1.02 : 1))
+            .shadow(color: .black.opacity(isSelected ? 0.45 : 0), radius: 10, y: 4)
             .animation(Motion.hover, value: isSelected)
+            .animation(Motion.hover, value: hoveredID == item.id)
             .contentShape(Rectangle())
     }
 }

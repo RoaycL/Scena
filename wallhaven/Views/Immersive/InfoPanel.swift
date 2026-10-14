@@ -91,7 +91,7 @@ struct PrimaryActionButton: View {
             .padding(.vertical, 8)
             .background(.white, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
     }
 }
 
@@ -119,7 +119,7 @@ struct CircleIconButton: View {
         Button(action: action) {
             CircleIconLabel(systemImage: systemImage, tint: tint)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableButtonStyle())
         .help(help)
     }
 }
@@ -174,5 +174,26 @@ extension Color {
             green: Double((value >> 8) & 0xFF) / 255,
             blue: Double(value & 0xFF) / 255
         )
+    }
+}
+
+/// 按下时轻微缩小、悬停时提亮，松开回弹；所有主要按钮共用，手感一致
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PressableBody(configuration: configuration)
+    }
+
+    private struct PressableBody: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.92 : 1)
+                .brightness(isHovered && !configuration.isPressed ? 0.08 : 0)
+                .animation(Motion.hover, value: configuration.isPressed)
+                .animation(Motion.hover, value: isHovered)
+                .onHover { isHovered = $0 }
+        }
     }
 }
