@@ -63,6 +63,9 @@ struct ContentView: View {
     @State private var backgroundItem: GalleryItem?
     @State private var displayedBackgroundItem: GalleryItem?
     @State private var failedBackgroundID: String?
+    /// 删除动画：正在收起的缩略图；被删除、正在淡出的大图（下一张显示出来后清除）
+    @State private var removingIDs: Set<String> = []
+    @State private var dismissedBackgroundID: String?
     @State private var backgroundRetryToken = 0
     @State private var playlistKeyHandler: ((ImmersiveWindowController.Key) -> Bool)?
     @State private var prefetcher: ImagePrefetcher?
@@ -233,12 +236,32 @@ struct ContentView: View {
         deleteFromLibrary(GalleryItem(origin: .local(item)), unsubscribe: false)
     }
 
-    /// 删除（移到废纸篓）。删除选中项后选中原位置的邻项由 ensureValidSelection 统一处理
+    /// 删除（移到废纸篓）。删除选中项后选中原位置的邻项由 ensureValidSelection 统一处理。
+    /// 先播放收起动画：缩略图缩小淡出、两侧合拢；删的是当前大图时，大图和信息栏一起下沉淡出，
+    /// 动画结束再真正删除，下一张随后对焦淡入
     private func deleteFromLibrary(_ item: GalleryItem, unsubscribe: Bool) {
-        switch item.origin {
-        case .local(let local): localViewModel.delete(item: local)
-        case .workshop(let workshopItem): workshop.delete(workshopItem, unsubscribe: unsubscribe)
-        case .remote: return
+        guard item.remote == nil, !removingIDs.contains(item.id) else { return }
+        // 只有大图正显示着这张时才淡出大图；它还在加载中时，屏幕上是别的图，不用动
+        let isShowing = item.id == displayedBackgroundItem?.id
+        let collapse: Animation = Motion.reducesMotion ? .easeOut(duration: 0.15) : .easeIn(duration: 0.26)
+        withAnimation(collapse) {
+            removingIDs.insert(item.id)
+            if isShowing { dismissedBackgroundID = item.id }
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(Motion.reducesMotion ? 150 : 260))
+            withAnimation(Motion.navigation) {
+                switch item.origin {
+                case .local(let local): localViewModel.delete(item: local)
+                case .workshop(let workshopItem): workshop.delete(workshopItem, unsubscribe: unsubscribe)
+                case .remote: break
+                }
+            }
+            removingIDs.remove(item.id)
+            // 删除失败（文件被占用等）时条目还在：恢复显示
+            if currentItems.contains(where: { $0.id == item.id }), dismissedBackgroundID == item.id {
+                withAnimation(Motion.content) { dismissedBackgroundID = nil }
+            }
         }
     }
 
@@ -417,12 +440,23 @@ struct ContentView: View {
                     item: backgroundItem,
                     showsPreviewCard: isWorkshopGrid ? immersive.isChromeHidden : true,
                     centersPreviewCard: isWorkshopGrid || immersive.isChromeHidden,
-                    onDisplayed: { displayedBackgroundItem = $0; failedBackgroundID = nil },
-                    onFailed: { if $0.id == selectedItem?.id { failedBackgroundID = $0.id } },
+                    onDisplayed: {
+                        displayedBackgroundItem = $0
+                        failedBackgroundID = nil
+                        if $0.id != dismissedBackgroundID { dismissedBackgroundID = nil }
+                    },
+                    onFailed: {
+                        if $0.id == selectedItem?.id { failedBackgroundID = $0.id }
+                        if $0.id != dismissedBackgroundID { withAnimation(Motion.content) { dismissedBackgroundID = nil } }
+                    },
                     retryToken: backgroundRetryToken,
                     staticOnly: page == .playlists
                 )
                     .frame(width: size.width, height: size.height)
+                    // 删除当前壁纸：大图略微缩小、模糊并淡出，下一张就绪后再淡入
+                    .scaleEffect(dismissedBackgroundID != nil && !Motion.reducesMotion ? 0.96 : 1)
+                    .blur(radius: dismissedBackgroundID != nil && !Motion.reducesMotion ? 14 : 0)
+                    .opacity(dismissedBackgroundID != nil ? 0 : 1)
                     // 播放列表页：背景虚化，面板成为主体
                     .blur(radius: page == .playlists && !Motion.reducesMotion ? 18 : 0)
                     .animation(Motion.navigation, value: page == .playlists)
@@ -1124,6 +1158,8 @@ struct ContentView: View {
                             }
                         }
                         .animation(Motion.content, value: actionableItem?.id)
+                        .opacity(dismissedBackgroundID != nil ? 0 : 1)
+                        .offset(y: dismissedBackgroundID != nil && !Motion.reducesMotion ? 8 : 0)
                         .frame(maxWidth: min(size.width * 0.6, 620), alignment: .leading)
                         .padding(.horizontal, 32)
                         .onHover { immersive.setHold("panel", active: $0) }
@@ -1134,6 +1170,7 @@ struct ContentView: View {
                     selectedID: selectedItem?.id,
                     selectionWithoutScrollingID: selectionWithoutScrollingID,
                     centersSelection: centersSelection,
+                    removingIDs: removingIDs,
                     isLoading: isLoading,
                     thumbHeight: max(72, min(130, size.height * 0.13)),
                     onSelect: { select($0, isUserInitiated: true) },

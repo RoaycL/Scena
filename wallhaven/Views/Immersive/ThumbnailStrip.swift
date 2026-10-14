@@ -12,6 +12,8 @@ struct ThumbnailStrip<MenuItems: View>: View {
     let selectionWithoutScrollingID: String?
     /// 自动轮播时把选中项滚到正中；否则只在选中项不可见时滚动最小距离
     var centersSelection = false
+    /// 正在删除的条目：缩小淡出，宽度收为 0，两侧卡片合拢
+    var removingIDs: Set<String> = []
     let isLoading: Bool
     let thumbHeight: CGFloat
     let onSelect: (GalleryItem) -> Void
@@ -35,7 +37,13 @@ struct ThumbnailStrip<MenuItems: View>: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
                     ForEach(items) { item in
+                        let isRemoving = removingIDs.contains(item.id)
                         thumbnail(for: item)
+                            .scaleEffect(isRemoving && !Motion.reducesMotion ? 0.6 : 1)
+                            .opacity(isRemoving ? 0 : 1)
+                            .frame(width: isRemoving ? 0 : nil)
+                            .padding(.trailing, isRemoving ? -8 : 0)
+                            .allowsHitTesting(!isRemoving)
                             .id(item.id)
                             // 单击立即选中；双击另外识别，不让单击等待双击判定
                             .onTapGesture { onSelect(item) }
