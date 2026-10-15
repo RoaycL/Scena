@@ -53,9 +53,7 @@ struct ImmersiveBackground: View {
                 }
                 .id("\(candidate.id)-\(attempt)")
                 .opacity(displayedItem?.id == candidate.id ? 1 : 0)
-                // 新画面从略微放大、略带模糊过渡到清晰，像镜头对焦；减少动态效果时只淡入
-                // 工坊动态壁纸不缩放：它先显示模糊的氛围底色，再由动态画面淡入，不需要也不应该有「对焦」缩放
-                .scaleEffect(displayedItem?.id == candidate.id || Motion.reducesMotion || candidate.playableWorkshopItem != nil ? 1 : 1.035)
+                // 新画面从略带模糊过渡到清晰（不缩放，缩放会显得像突然缩回原图）；减少动态效果时只淡入
                 .blur(radius: displayedItem?.id == candidate.id || Motion.reducesMotion ? 0 : 10)
                 .transition(.opacity)
             }

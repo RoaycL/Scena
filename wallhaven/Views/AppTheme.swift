@@ -117,12 +117,25 @@ private struct ScenaFrostedPanel: ViewModifier {
         let palette = ThemePalette(scheme: scheme)
         let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
         content
-            // 窗口内部的浮层要采样 SwiftUI 背后的壁纸，不能复用 behindWindow 的窗口磨砂。
-            // 使用 SwiftUI 材质参与同一视图树的背景合成，避免原生视图桥接后只留下实心灰底。
-            .background(.ultraThinMaterial, in: shape)
+            .modifier(FrostedPanelFill(shape: shape, palette: palette))
             .overlay(shape.stroke(palette.border, lineWidth: 0.5))
             .clipShape(shape)
             .shadow(color: palette.shadow, radius: 24, y: 10)
+    }
+}
+
+/// 浮层底：macOS 26 用 Liquid Glass（适度模糊，背后壁纸的形状和颜色能透出来；透明款 .clear 几乎不模糊，
+/// 文字会被花哨的壁纸干扰），叠一层很淡的明暗保证可读；更早的系统用 SwiftUI 最薄的材质
+private struct FrostedPanelFill<S: Shape>: ViewModifier {
+    let shape: S
+    let palette: ThemePalette
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.tint(palette.isDay ? .white.opacity(0.16) : .black.opacity(0.22)), in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
     }
 }
 

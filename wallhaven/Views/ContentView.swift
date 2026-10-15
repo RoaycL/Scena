@@ -1147,9 +1147,8 @@ struct ContentView: View {
         if page == .playlists {
             PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)), onKeyboardHandler: { playlistKeyHandler = $0 })
                 .scrollContentBackground(.hidden)
-                .sceneGlass(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: palette.panel)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous).stroke(palette.border, lineWidth: 0.5))
+                // 与下载、筛选浮层同一套透明策略：Liquid Glass + 很淡的明暗，背后的壁纸能透出来
+                .scenaFrostedPanel()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 78)
                 .padding(.horizontal, 32)
