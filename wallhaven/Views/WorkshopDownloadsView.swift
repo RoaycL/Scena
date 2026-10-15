@@ -89,28 +89,21 @@ private struct WorkshopDownloadsList: View {
                             Divider()
                         }
                         if !foldedJobs.isEmpty {
-                            Button {
-                                withAnimation(Motion.panel) { showsFolded.toggle() }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "chevron.right")
-                                        .rotationEffect(.degrees(showsFolded ? 90 : 0))
-                                    Text("已完成 \(foldedJobs.count) 项")
-                                    Spacer()
-                                }
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 10)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            if showsFolded {
+                            DisclosureGroup(isExpanded: $showsFolded) {
                                 ForEach(foldedJobs) { job in
                                     row(job)
                                         .padding(.vertical, 9)
                                     Divider()
                                 }
+                            } label: {
+                                Text("已完成 \(foldedJobs.count) 项")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.vertical, 10)
                             }
+                            // 使用系统的纵向折叠布局，内容向标题合拢，避免逐行移除时向下漂移。
+                            .tint(.secondary)
+                            .animation(Motion.reducesMotion ? nil : Motion.panel, value: showsFolded)
                         }
                     }
                 }
