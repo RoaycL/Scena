@@ -160,10 +160,18 @@ final class PlaylistManager: ObservableObject {
     private func downloadLocalCopies(of entries: [PlaylistEntry]) {
         let wallpapers = entries.compactMap(\.wallhaven)
         guard !wallpapers.isEmpty else { return }
+        let tracker = WallhavenDownloadTracker.shared
+        wallpapers.forEach { tracker.begin($0.id) }
         Task {
             var failed = 0
             for wallpaper in wallpapers {
-                do { _ = try await DownloadService().download(wallpaper) } catch { failed += 1 }
+                do {
+                    _ = try await DownloadService().download(wallpaper)
+                    tracker.finish(wallpaper.id, success: true)
+                } catch {
+                    tracker.finish(wallpaper.id, success: false)
+                    failed += 1
+                }
             }
             if failed > 0 {
                 toast.show("\(failed) 张壁纸下载失败，轮到时会再试", style: .error)

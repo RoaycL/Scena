@@ -1342,11 +1342,8 @@ struct ContentView: View {
                 // 以壁纸 id 作为按钮身份：切换壁纸时直接换新按钮，只有同一张壁纸的状态变化才播放过渡动画
                 FavoriteMenuButton(wallpaper: wallpaper)
                     .id("favorite-\(wallpaper.id)")
-                DownloadActionButton(phase: downloadedWallhavenIDs.contains(wallpaper.id) || viewModel.downloadedIDs.contains(wallpaper.id)
-                                     ? .done : (viewModel.downloadingIDs.contains(wallpaper.id) ? .downloading : .idle)) {
-                    viewModel.downloadImage(wallpaper)
-                }
-                .id("download-\(wallpaper.id)")
+                RemoteDownloadButton(wallpaper: wallpaper, isInLibrary: downloadedWallhavenIDs.contains(wallpaper.id))
+                    .id("download-\(wallpaper.id)")
                 AddToPlaylistButton(item: item)
                     .id("playlist-\(item.id)")
                 CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
@@ -1688,4 +1685,23 @@ extension AnyTransition {
 private struct SelectedTabAnchorKey: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
+}
+
+/// wallhaven 壁纸的下载按钮：手动下载和后台下载（加入播放列表时自动下载）都显示进度，
+/// 只观察下载状态，不让整个主界面跟着刷新
+private struct RemoteDownloadButton: View {
+    @EnvironmentObject private var viewModel: WallpaperViewModel
+    @ObservedObject private var tracker = WallhavenDownloadTracker.shared
+    let wallpaper: WallhavenWallpaper
+    let isInLibrary: Bool
+
+    private var phase: DownloadActionButton.Phase {
+        if isInLibrary || viewModel.downloadedIDs.contains(wallpaper.id) || tracker.downloaded.contains(wallpaper.id) { return .done }
+        if viewModel.downloadingIDs.contains(wallpaper.id) || tracker.downloading.contains(wallpaper.id) { return .downloading }
+        return .idle
+    }
+
+    var body: some View {
+        DownloadActionButton(phase: phase) { viewModel.downloadImage(wallpaper) }
+    }
 }

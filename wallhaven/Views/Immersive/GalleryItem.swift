@@ -87,7 +87,10 @@ struct GalleryItem: Identifiable, Equatable {
         switch origin {
         case .remote(let wallpaper):
             // 已下载到本地的直接读本地文件：切换更快，离线也能看
-            if let local = wallpaper.localFileURL { return .provider(LocalFileImageDataProvider(fileURL: local)) }
+            // 沿用原图地址作为缓存键：下载完成后切到本地文件时直接命中已加载的图片，不会重新加载、闪一下
+            if let local = wallpaper.localFileURL {
+                return .provider(LocalFileImageDataProvider(fileURL: local, cacheKey: wallpaper.path.absoluteString))
+            }
             return wallpaper.path.convertToSource()
         case .local(let item):
             return item.isVideo ? nil : .provider(LocalFileImageDataProvider(fileURL: item.url))
