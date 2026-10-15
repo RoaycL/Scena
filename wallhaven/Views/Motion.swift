@@ -48,7 +48,12 @@ extension View {
     /// - interactive: 可点击的元素，玻璃会响应悬停和按下
     @ViewBuilder
     func sceneGlass<S: Shape>(in shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(macOS 26.0, *) {
+        if let tint, !interactive {
+            // 带着色的大面板（播放列表、筛选、详情、下载）：Liquid Glass 在窗口失去焦点时会变成更灰、更实的
+            // 「非活跃」样式，面板颜色跟着变。改用始终保持活跃状态的原生磨砂，聚焦与否看起来一致
+            background(tint, in: shape)
+                .background { ActivePanelMaterial().clipShape(shape) }
+        } else if #available(macOS 26.0, *) {
             let base: Glass = tint.map { Glass.regular.tint($0) } ?? .regular
             glassEffect(interactive ? base.interactive() : base, in: shape)
         } else if let tint {
@@ -56,5 +61,28 @@ extension View {
         } else {
             background(.ultraThinMaterial, in: shape)
         }
+    }
+}
+
+/// 窗口内的原生磨砂，状态固定为活跃：不随窗口是否聚焦变灰；明暗跟随当前主题
+struct ActivePanelMaterial: NSViewRepresentable {
+    @Environment(\.colorScheme) private var scheme
+
+    func makeNSView(context: Context) -> PassThrough {
+        let view = PassThrough()
+        view.material = .popover
+        view.blendingMode = .withinWindow
+        view.state = .active
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: PassThrough, context: Context) {
+        view.appearance = NSAppearance(named: scheme == .light ? .vibrantLight : .vibrantDark)
+    }
+
+    /// 只负责画背景，不接收鼠标
+    final class PassThrough: NSVisualEffectView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

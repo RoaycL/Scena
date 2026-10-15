@@ -302,6 +302,9 @@ struct ContentView: View {
             || (page == .workshop && workshop.isRefreshing && !workshop.onlineItems.isEmpty)
     }
 
+    /// 创意工坊网格页显示界面时，背景换成窗口后方的磨砂玻璃（隐藏界面时仍显示选中壁纸的预览）
+    private var isGridGlass: Bool { isWorkshopGrid && !immersive.isChromeHidden }
+
     private var hasOpenPanel: Bool { isFilterPresented || isWorkshopFilterPresented || isDownloadsPresented }
 
     private func handleKey(_ key: ImmersiveWindowController.Key) -> Bool {
@@ -498,15 +501,17 @@ struct ContentView: View {
                         if $0.id != dismissedBackgroundID { withAnimation(Motion.content) { dismissedBackgroundID = nil } }
                     },
                     retryToken: backgroundRetryToken,
-                    staticOnly: page == .playlists
+                    // 播放列表页、创意工坊网格页背景被盖住，不再运行动态渲染
+                    staticOnly: page == .playlists || isGridGlass
                 )
                     .frame(width: size.width, height: size.height)
                     // 删除当前壁纸：大图略微缩小、模糊并淡出，下一张就绪后再淡入
                     .scaleEffect(dismissedBackgroundID != nil && !Motion.reducesMotion ? 0.96 : 1)
                     .blur(radius: dismissedBackgroundID != nil && !Motion.reducesMotion ? 14 : 0)
-                    .opacity(dismissedBackgroundID != nil ? 0 : 1)
-                    // 播放列表页：背景虚化，面板成为主体
-                    .blur(radius: page == .playlists && !Motion.reducesMotion ? 18 : 0)
+                    .opacity(dismissedBackgroundID != nil || isGridGlass ? 0 : 1)
+                    // 播放列表页：背景虚化，面板成为主体。opaque：边缘保持不透明，
+                    // 否则模糊会让窗口边缘变成半透明，透出后面的其他窗口，四周显得发虚
+                    .blur(radius: page == .playlists && !Motion.reducesMotion ? 18 : 0, opaque: page == .playlists)
                     .animation(Motion.navigation, value: page == .playlists)
                     // 沉浸式页面双击图片：隐藏 / 显示界面，只看图片细节（同空格键）
                     .contentShape(Rectangle())
@@ -515,14 +520,24 @@ struct ContentView: View {
                         immersive.toggleChrome()
                     }
 
-                // 网格类页面整体压暗，保证缩略图和文字清晰
-                if isWorkshopGrid || page == .playlists {
-                    palette.scrim.opacity(immersive.isChromeHidden ? 0 : (palette.isDay ? 0.32 : 0.35))
+                // 创意工坊网格页：背景是窗口后方的磨砂玻璃，透出当前桌面壁纸；
+                // 缩略图还没加载出来的卡片也是半透明的，同样能看到这层玻璃
+                ScenaWindowGlass(material: .popover)
+                    .overlay(palette.scrim.opacity(palette.isDay ? 0.10 : 0.18))
+                    .frame(width: size.width, height: size.height)
+                    .opacity(isGridGlass ? 1 : 0)
+                    .animation(Motion.navigation, value: isGridGlass)
+                    .allowsHitTesting(false)
+
+                // 播放列表页：虚化的背景上再轻轻压一层，面板更突出
+                if page == .playlists {
+                    palette.scrim.opacity(immersive.isChromeHidden ? 0 : (palette.isDay ? 0.16 : 0.26))
                         .allowsHitTesting(false)
                 }
 
+                // 上下渐变只为大图页面的文字服务；播放列表页的面板和顶部栏自带背景，不再叠加
                 scrims(height: size.height)
-                    .opacity(immersive.isChromeHidden ? 0 : (displayedBackgroundItem == nil ? 0.4 : 1))
+                    .opacity(immersive.isChromeHidden || isGridGlass || page == .playlists ? 0 : (displayedBackgroundItem == nil ? 0.4 : 1))
                     .allowsHitTesting(false)
 
                 gallery(in: size)
@@ -744,14 +759,15 @@ struct ContentView: View {
     /// 上下渐变暗角，保证文字在任何壁纸上都可读
     private func scrims(height: CGFloat) -> some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [palette.scrim.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+            // 只保证文字可读，尽量少压壁纸：日间白色更显眼，比夜间再淡一些
+            LinearGradient(colors: [palette.scrim.opacity(palette.isDay ? 0.38 : 0.45), .clear], startPoint: .top, endPoint: .bottom)
                 .frame(height: 110)
             Spacer(minLength: 0)
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: palette.scrim.opacity(0.45), location: 0.45),
-                    .init(color: palette.scrim.opacity(palette.isDay ? 0.78 : 0.75), location: 1),
+                    .init(color: palette.scrim.opacity(palette.isDay ? 0.26 : 0.32), location: 0.45),
+                    .init(color: palette.scrim.opacity(palette.isDay ? 0.58 : 0.62), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom

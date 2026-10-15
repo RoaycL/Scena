@@ -28,8 +28,9 @@ struct ThemePalette {
     let scheme: ColorScheme
     var isDay: Bool { scheme == .light }
     var scrim: Color { isDay ? .white : .black }
-    var panel: Color { isDay ? .white.opacity(0.66) : Color(red: 0.07, green: 0.09, blue: 0.13).opacity(0.65) }
-    var border: Color { isDay ? .white.opacity(0.72) : .white.opacity(0.13) }
+    /// 玻璃面板的着色：保留透明感，背景只是隐约透出，文字仍然清楚
+    var panel: Color { isDay ? .white.opacity(0.42) : Color(red: 0.07, green: 0.09, blue: 0.13).opacity(0.52) }
+    var border: Color { isDay ? .white.opacity(0.6) : .white.opacity(0.13) }
     var selection: Color { isDay ? .accentColor.opacity(0.13) : .white.opacity(0.18) }
     var shadow: Color { .black.opacity(isDay ? 0.12 : 0.35) }
     /// 主按钮（设为壁纸、播放）和选中的筛选项：夜间白底黑字，日间强调色底白字
@@ -101,14 +102,24 @@ struct ScenaWindowGlass: NSViewRepresentable {
 /// 关于页也按应用级系统外观绘制图标，避免手动窗口主题影响图标的日夜变体。
 struct SystemApplicationIcon: NSViewRepresentable {
     func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
+        let view = FittingImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         context.coordinator.attach(view)
         return view
     }
 
     func updateNSView(_ view: NSImageView, context: Context) { context.coordinator.refresh() }
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// NSImageView 默认把图标原图尺寸（可达 1024pt）当作固有尺寸，SwiftUI 给的 64×64 框装不下，图标会溢出错位；
+    /// 不报告固有尺寸，图标就严格缩放在给定的框里
+    final class FittingImageView: NSImageView {
+        override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    }
 
     final class Coordinator {
         private weak var view: NSImageView?
