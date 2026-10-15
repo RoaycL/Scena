@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="wallhaven/AppIcon.icon/Assets/night.png">
-    <img src="wallhaven/AppIcon.icon/Assets/day.png" width="112" height="112" alt="Scena 应用图标">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/scena-icon-night.png">
+    <img src="docs/images/scena-icon-day.png" width="112" height="112" alt="Scena 应用图标">
   </picture>
 </p>
 
