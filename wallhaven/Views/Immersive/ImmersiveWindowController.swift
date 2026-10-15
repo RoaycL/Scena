@@ -98,6 +98,10 @@ final class ImmersiveWindowController: ObservableObject {
         autoplay.selectedManually(at: ProcessInfo.processInfo.systemUptime)
     }
 
+    func restartGalleryCountdown() {
+        autoplay.restartCountdown(at: ProcessInfo.processInfo.systemUptime)
+    }
+
     /// 编辑和菜单跟踪期间保持当前预览；关闭或隐藏窗口时不再轮播。
     var canAdvanceGallery: Bool {
         holdReasons.isDisjoint(with: ["search", "filter", "workshopFilter", "alert", "menu"])

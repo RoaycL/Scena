@@ -50,7 +50,7 @@ struct ContentView: View {
     private var palette: ThemePalette { ThemePalette(scheme: colorScheme) }
     @StateObject private var localViewModel = LocalMediaViewModel()
     @StateObject private var immersive = ImmersiveWindowController()
-    @State private var galleryTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    @State private var galleryTimer = Timer.publish(every: GalleryAutoplayState.interval, on: .main, in: .common).autoconnect()
     @ObservedObject private var toastCenter = ToastCenter.shared
     @ObservedObject private var liveController = LiveWallpaperController.shared
 
@@ -86,7 +86,7 @@ struct ContentView: View {
     @State private var prefetcher: ImagePrefetcher?
     @State private var isFilterPresented = false
     @State private var isDownloadsPresented = false
-    @FocusState private var isSearchFocused: Bool
+    @State private var isSearchExpanded = false
 
     @State private var isShowingNewFolderAlert = false
     @State private var newFolderName = ""
@@ -337,7 +337,7 @@ struct ContentView: View {
             viewModel.toggleFavorite(wallpaper)
         case .character("/"):
             guard hasSearch else { return false }
-            isSearchFocused = true
+            openSearch()
         case .character("1"): switchTab(.discover)
         case .character("2"): switchTab(.collections)
         case .character("3"): switchTab(.library)
@@ -391,8 +391,7 @@ struct ContentView: View {
             toggleChrome: { immersive.toggleChrome() },
             switchTab: { switchTab($0) },
             focusSearch: {
-                immersive.showChrome()
-                isSearchFocused = true
+                openSearch()
             },
             openInBrowser: {
                 if let url = item?.remote?.url ?? item?.workshop?.workshopPageURL {
@@ -465,7 +464,14 @@ struct ContentView: View {
         }
     }
 
+    private func restartGalleryCountdown() {
+        immersive.restartGalleryCountdown()
+        // 重建订阅使下一次触发距离现在满五秒；控制器的截止时间也会拦住旧的排队事件。
+        galleryTimer = Timer.publish(every: GalleryAutoplayState.interval, on: .main, in: .common).autoconnect()
+    }
+
     private func switchTab(_ tab: MainTab) {
+        restartGalleryCountdown()
         withAnimation(Motion.navigation) {
             if tab == .collections, currentTab != .collections { collectionSource = .all }
             currentTab = tab
@@ -493,11 +499,15 @@ struct ContentView: View {
                     showsBlackBase: false,
                     onDisplayed: {
                         displayedBackgroundItem = $0
+                        restartGalleryCountdown()
                         failedBackgroundID = nil
                         if $0.id != dismissedBackgroundID { dismissedBackgroundID = nil }
                     },
                     onFailed: {
-                        if $0.id == selectedItem?.id { failedBackgroundID = $0.id }
+                        if $0.id == selectedItem?.id {
+                            failedBackgroundID = $0.id
+                            restartGalleryCountdown()
+                        }
                         if $0.id != dismissedBackgroundID { withAnimation(Motion.content) { dismissedBackgroundID = nil } }
                     },
                     retryToken: backgroundRetryToken,
@@ -609,6 +619,7 @@ struct ContentView: View {
         .background(WindowAccessor { immersive.attach(to: $0) })
         .focusedSceneValue(\.galleryActions, commandActions)
         .onAppear {
+            restartGalleryCountdown()
             MainWindow.opener = { openWindow(id: MainWindow.id) }
             immersive.keyHandler = handleKey
             immersive.allowsChromeKeyboardShortcuts = { !hasOpenPanel && page != .playlists }
@@ -622,8 +633,8 @@ struct ContentView: View {
             workshop.syncSubscriptions()
         }
         .onReceive(galleryTimer) { _ in
-            guard !isWorkshopGrid, page != .playlists, !(page == .home && viewModel.isLoading), immersive.canAdvanceGallery,
-                  currentItems.count > 1 else { return }
+            guard !isWorkshopGrid, page != .playlists, !(page == .home && viewModel.isLoading),
+                  actionableItem != nil, currentItems.count > 1, immersive.canAdvanceGallery else { return }
             let index = selectedItem.flatMap { currentItems.firstIndex(of: $0) } ?? -1
             select(currentItems[(index + 1) % currentItems.count])
             centersSelection = true
@@ -631,7 +642,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: MainWindow.navigationNotification)) { _ in
             handleMenuNavigation()
         }
+        .onChange(of: currentTab) { isSearchExpanded = false }
         .onChange(of: page) {
+            isSearchExpanded = false
+            restartGalleryCountdown()
             selectionWithoutScrollingID = nil
             syncWorkshopMode()
             if page == .library {
@@ -654,7 +668,14 @@ struct ContentView: View {
         .onChange(of: currentItems.map(\.id), initial: true) { oldIDs, _ in
             ensureValidSelection(previousIDs: oldIDs)
         }
-        .onChange(of: selectedItem?.id) { failedBackgroundID = nil }
+        .onChange(of: discoverSource) { restartGalleryCountdown() }
+        .onChange(of: collectionSource) { restartGalleryCountdown() }
+        .onChange(of: librarySource) { restartGalleryCountdown() }
+        .onChange(of: viewModel.selectedFolderID) { restartGalleryCountdown() }
+        .onChange(of: selectedItem?.id) {
+            failedBackgroundID = nil
+            restartGalleryCountdown()
+        }
         .onChange(of: selectedItem, initial: true) { _, item in
             guard let item else { return }
             backgroundItem = item
@@ -680,7 +701,7 @@ struct ContentView: View {
             toastCenter.show(message, style: .error)
             viewModel.errorMessage = nil
         }
-        .onChange(of: isSearchFocused) { _, focused in immersive.setHold("search", active: focused) }
+        .onChange(of: isSearchExpanded) { _, expanded in immersive.setHold("search", active: expanded) }
         .onChange(of: isFilterPresented) { _, presented in immersive.setHold("filter", active: presented) }
         .onChange(of: isShowingNewFolderAlert || isRenamingFolder) { _, shown in immersive.setHold("alert", active: shown) }
         .alert("新建收藏夹", isPresented: $isShowingNewFolderAlert) {
@@ -953,36 +974,17 @@ struct ContentView: View {
         }
     }
 
-    /// 搜索框占位文字：系统默认的灰色在浅色玻璃和亮壁纸上看不清，统一用半透明白色
-    private func searchPrompt(_ text: String) -> Text {
-        Text(text).foregroundStyle(Color.primary.opacity(0.55))
+    private func openSearch() {
+        guard hasSearch else { return }
+        immersive.showChrome()
+        isSearchExpanded = true
     }
 
     private var librarySearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(0.7))
-            TextField("搜索资料库", text: $libraryQuery, prompt: searchPrompt("搜索资料库"))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.primary)
-                .focused($isSearchFocused)
-                .frame(width: isSearchFocused ? 170 : 120)
-                .onSubmit { isSearchFocused = false }
-            if !libraryQuery.isEmpty {
-                Button { libraryQuery = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.primary.opacity(0.45))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .sceneGlass(in: Capsule())
-        .animation(Motion.panel, value: isSearchFocused)
+        CollapsibleSearchField(
+            title: "搜索资料库", query: $libraryQuery, isExpanded: $isSearchExpanded,
+            onSubmit: {}, onClear: { libraryQuery = "" }
+        )
     }
 
     private var libraryAddMenu: some View {
@@ -1004,71 +1006,29 @@ struct ContentView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(0.7))
-            TextField("搜索壁纸", text: $viewModel.query, prompt: searchPrompt("搜索壁纸"))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.primary)
-                .focused($isSearchFocused)
-                .frame(width: isSearchFocused ? 180 : 120)
-                .onSubmit {
-                    viewModel.search(reset: true)
-                    isSearchFocused = false
-                }
-            if !viewModel.query.isEmpty {
-                Button {
-                    viewModel.query = ""
-                    viewModel.search(reset: true)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.primary.opacity(0.45))
-                }
-                .buttonStyle(.plain)
+        CollapsibleSearchField(
+            title: "搜索壁纸", query: $viewModel.query, isExpanded: $isSearchExpanded,
+            onSubmit: { viewModel.search(reset: true) },
+            onClear: {
+                viewModel.query = ""
+                viewModel.search(reset: true)
             }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .sceneGlass(in: Capsule())
-        .animation(Motion.panel, value: isSearchFocused)
+        )
     }
 
     private var workshopSearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(0.7))
-            TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅", text: $workshop.query,
-                      prompt: searchPrompt(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅"))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.primary)
-                .focused($isSearchFocused)
-                .frame(width: isSearchFocused ? 170 : 120)
-                .onSubmit {
-                    // 已下载模式是实时过滤，无需提交
-                    if workshop.mode == .online { workshop.search(reset: true) }
-                    isSearchFocused = false
-                }
-            if !workshop.query.isEmpty {
-                Button {
-                    workshop.query = ""
-                    if workshop.mode == .online { workshop.search(reset: true) }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.primary.opacity(0.45))
-                }
-                .buttonStyle(.plain)
+        CollapsibleSearchField(
+            title: workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅",
+            query: $workshop.query, isExpanded: $isSearchExpanded,
+            onSubmit: {
+                // 订阅列表实时过滤，在线搜索在提交时发起请求。
+                if workshop.mode == .online { workshop.search(reset: true) }
+            },
+            onClear: {
+                workshop.query = ""
+                if workshop.mode == .online { workshop.search(reset: true) }
             }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .sceneGlass(in: Capsule())
-        .animation(Motion.panel, value: isSearchFocused)
+        )
     }
 
     private var workshopFilterButton: some View {
@@ -1108,15 +1068,11 @@ struct ContentView: View {
                 isDownloadsPresented = false
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "line.3.horizontal.decrease")
-                Text(viewModel.sortOrder.label).lineLimit(1)
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.primary.opacity(0.85))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .sceneGlass(in: Capsule())
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(0.85))
+                .frame(width: 34, height: 34)
+                .sceneGlass(in: Circle(), interactive: true)
         }
         .buttonStyle(.plain)
         .help("筛选与排序")
@@ -1576,6 +1532,99 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+/// 顶栏搜索默认只占一个按钮的位置；输入结束后保留条件并收起。
+private struct CollapsibleSearchField: View {
+    let title: String
+    @Binding var query: String
+    @Binding var isExpanded: Bool
+    let onSubmit: () -> Void
+    let onClear: () -> Void
+    @FocusState private var isFocused: Bool
+
+    private var hasQuery: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                if isExpanded { submit() } else { isExpanded = true }
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.primary.opacity(0.85))
+                    .frame(width: 34, height: 34)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "提交搜索" : title)
+            .help(!isExpanded && hasQuery ? "当前搜索：\(query)" : title)
+            .overlay(alignment: .topTrailing) {
+                if !isExpanded && hasQuery {
+                    Circle().fill(Color.accentColor)
+                        .frame(width: 5, height: 5)
+                        .padding(5)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+
+            if isExpanded {
+                TextField(title, text: $query,
+                          prompt: Text(title).foregroundStyle(Color.primary.opacity(0.55)))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.primary)
+                    .focused($isFocused)
+                    .frame(width: 170)
+                    .padding(.horizontal, 3)
+                    .onSubmit { submit() }
+                    .onExitCommand { collapse() }
+                    .task {
+                        // 等输入框挂载后再聚焦，支持按钮和搜索快捷键两种入口。
+                        await Task.yield()
+                        guard !Task.isCancelled, isExpanded else { return }
+                        isFocused = true
+                    }
+                    .transition(.opacity)
+
+                Button {
+                    if !query.isEmpty { onClear() }
+                    collapse()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.primary.opacity(0.55))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(query.isEmpty ? "取消搜索" : "清除搜索")
+                .accessibilityLabel(query.isEmpty ? "取消搜索" : "清除搜索")
+                .transition(.opacity)
+            }
+        }
+        .frame(width: isExpanded ? 244 : 34, height: 34, alignment: .leading)
+        .clipped()
+        .sceneGlass(in: Capsule(), interactive: true)
+        .animation(Motion.panel, value: isExpanded)
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded { isFocused = false }
+        }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { isExpanded = false }
+        }
+    }
+
+    private func submit() {
+        onSubmit()
+        collapse()
+    }
+
+    private func collapse() {
+        isExpanded = false
+        isFocused = false
     }
 }
 

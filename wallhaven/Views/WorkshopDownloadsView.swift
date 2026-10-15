@@ -89,21 +89,31 @@ private struct WorkshopDownloadsList: View {
                             Divider()
                         }
                         if !foldedJobs.isEmpty {
-                            DisclosureGroup(isExpanded: $showsFolded) {
-                                ForEach(foldedJobs) { job in
-                                    row(job)
-                                        .padding(.vertical, 9)
-                                    Divider()
+                            Button { showsFolded.toggle() } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "chevron.right")
+                                        .rotationEffect(.degrees(showsFolded ? 90 : 0))
+                                    Text("已完成 \(foldedJobs.count) 项")
+                                    Spacer()
                                 }
-                            } label: {
-                                Text("已完成 \(foldedJobs.count) 项")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.vertical, 10)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
                             }
-                            // 使用系统的纵向折叠布局，内容向标题合拢，避免逐行移除时向下漂移。
-                            .tint(.secondary)
-                            .animation(Motion.reducesMotion ? nil : Motion.panel, value: showsFolded)
+                            .buttonStyle(.plain)
+                            .accessibilityValue(showsFolded ? "已展开" : "已收起")
+                            .animation(Motion.reducesMotion ? nil : Motion.disclosure, value: showsFolded)
+
+                            DownloadSectionReveal(isExpanded: showsFolded) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(foldedJobs) { job in
+                                        row(job)
+                                            .padding(.vertical, 9)
+                                        Divider()
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -224,5 +234,28 @@ private struct DownloadsBackground: ViewModifier {
                 .background(palette.scrim.opacity(0.12).ignoresSafeArea())
                 .background { ScenaWindowGlass().ignoresSafeArea() }
         }
+    }
+}
+
+
+/// 内容保持挂载，收起期间只缩小顶部对齐的可见高度，不会提前移除行。
+private struct DownloadSectionReveal<Content: View>: View {
+    let isExpanded: Bool
+    @ViewBuilder let content: () -> Content
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if contentHeight != height { contentHeight = height }
+            }
+            .frame(height: isExpanded ? contentHeight : 0, alignment: .top)
+            .clipped()
+            .allowsHitTesting(isExpanded)
+            .accessibilityHidden(!isExpanded)
+            .animation(Motion.reducesMotion ? nil : Motion.disclosure, value: isExpanded)
+            .animation(Motion.reducesMotion ? nil : Motion.disclosure, value: contentHeight)
     }
 }

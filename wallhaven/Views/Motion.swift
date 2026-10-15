@@ -23,6 +23,8 @@ enum Motion {
     static var navigation: Animation { resolved(.spring(response: 0.34, dampingFraction: 0.86)) }
     /// 面板、搜索框、展开收起：出现干脆，收起轻
     static var panel: Animation { resolved(.spring(response: 0.32, dampingFraction: 0.84)) }
+    /// 列表折叠：高度连续收缩，避免弹簧在零高度附近回弹
+    static var disclosure: Animation { resolved(.easeInOut(duration: 0.28)) }
     /// 图片、文字等内容替换（交叉淡化，不涉及位移）
     static var content: Animation { .smooth(duration: 0.35) }
     /// 提示条进出：减少动态效果时只短暂淡化
