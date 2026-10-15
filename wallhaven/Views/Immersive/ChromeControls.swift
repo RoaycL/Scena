@@ -14,17 +14,17 @@ struct ToastView: View {
         HStack(spacing: 8) {
             switch toast.style {
             case .progress:
-                ProgressView().controlSize(.small).tint(.white)
+                ProgressView().controlSize(.small).tint(.primary)
             case .success:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             case .error:
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
             case .info:
-                Image(systemName: "info.circle.fill").foregroundStyle(.white.opacity(0.8))
+                Image(systemName: "info.circle.fill").foregroundStyle(Color.primary.opacity(0.8))
             }
             Text(toast.message)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .lineLimit(2)
             if toast.action != nil {
                 HStack(spacing: 2) {
@@ -32,7 +32,7 @@ struct ToastView: View {
                     if toast.actionTitle == "查看" { Image(systemName: "chevron.right") }
                 }
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(Color.primary.opacity(0.75))
                 .fixedSize()
             }
         }
@@ -40,9 +40,8 @@ struct ToastView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .sceneGlass(in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .overlay(Capsule().stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -54,7 +53,7 @@ struct FilterPanel: View {
         GlassPanel(width: 300) {
             Text("筛选")
                 .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
 
             GlassSection(title: "分类") {
                 FlowLayout {
@@ -117,7 +116,7 @@ struct LiveWallpaperStatus: View {
                     Text("LIVE")
                         .font(.system(size: 11, weight: .bold))
                         .tracking(1)
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(Color.primary.opacity(0.85))
                         .fixedSize()
                 }
             }
@@ -139,31 +138,32 @@ struct PageLoadingCapsule: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small).tint(.white)
+            ProgressView().controlSize(.small).tint(.primary)
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(Color.primary.opacity(0.9))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .sceneGlass(in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+        .overlay(Capsule().stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .environment(\.colorScheme, .dark)
     }
 }
 
 /// 大图还没显示时的背景：用当前壁纸的缩略图做成强模糊的磨砂底，颜色和即将出现的画面一致；
 /// 还没有缩略图时是深色渐变
 struct FrostedBackdrop: View {
+    @Environment(\.colorScheme) private var scheme
+    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     let item: GalleryItem?
 
     var body: some View {
         ZStack {
-            WindowFrostedGlass()
+            ScenaWindowGlass()
             // 无缩略图时也有真实桌面透色，浅亮的上沿让加载占位保留玻璃质感。
             LinearGradient(
-                colors: [.white.opacity(0.10), Color(red: 0.45, green: 0.55, blue: 0.68).opacity(0.05), .black.opacity(0.08)],
+                colors: [palette.scrim.opacity(palette.isDay ? 0.20 : 0.08), Color.accentColor.opacity(0.04), palette.scrim.opacity(0.08)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
             if let item, let source = item.thumbnailSource {
@@ -176,7 +176,7 @@ struct FrostedBackdrop: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .blur(radius: 60, opaque: true)
                     .saturation(1.15)
-                    .overlay(Color.black.opacity(0.3))
+                    .overlay(palette.scrim.opacity(palette.isDay ? 0.48 : 0.3))
                     .id(item.id)
                     .transition(.opacity)
             }
@@ -184,19 +184,4 @@ struct FrostedBackdrop: View {
         .clipped()
         .animation(Motion.content, value: item?.id)
     }
-}
-
-
-/// 窗口后的原生磨砂材质，首次启动无需等待图片就能显示。
-private struct WindowFrostedGlass: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .underWindowBackground
-        view.blendingMode = .behindWindow
-        view.state = .active
-        view.appearance = NSAppearance(named: .vibrantDark)
-        return view
-    }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }

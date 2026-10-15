@@ -13,6 +13,7 @@ enum PlaylistsWindow {
 /// 大图预览与横向胶片队列；浏览预览不会立即改变桌面壁纸。
 struct PlaylistsView: View {
     @ObservedObject private var manager = PlaylistManager.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedID: UUID?
     @State private var previewEntryID: String?
     @State private var selectedEntries = Set<String>()
@@ -46,6 +47,8 @@ struct PlaylistsView: View {
             content
         }
         .padding(24)
+        // 独立窗口没有沉浸式背景，铺一层原生磨砂（窗口本身是透明的）；嵌入主界面时由外层玻璃面板提供背景
+        .background { if !embedded { ScenaWindowGlass().ignoresSafeArea() } }
         .coordinateSpace(name: "playlistBoard")
         .onPreferenceChange(PlaylistDragFramesKey.self) { frames in
             MainActor.assumeIsolated {
@@ -426,11 +429,11 @@ struct PlaylistsView: View {
                         Text(title)
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(ThemePalette(scheme: colorScheme).primaryText)
                     .frame(minWidth: 88)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.white, in: Capsule())
+                    .background(ThemePalette(scheme: colorScheme).primaryFill, in: Capsule())
                     .animation(Motion.hover, value: symbol)
                 } else {
                     Label(title, systemImage: symbol).frame(minWidth: 88)
@@ -955,7 +958,7 @@ struct AddToPlaylistButton: View {
             }
         } label: {
             CircleIconLabel(systemImage: isInPlaylist ? "text.badge.checkmark" : "text.badge.plus",
-                            tint: isInPlaylist ? .accentColor : .white)
+                            tint: isInPlaylist ? .accentColor : .primary)
                 .overlay { StateBurst(trigger: burst, color: .accentColor) }
         }
         .menuStyle(.button)
@@ -1100,11 +1103,11 @@ struct GlassChipLabel: View {
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).opacity(0.7)
             }
         }
-        .foregroundStyle(.white.opacity(0.85))
+        .foregroundStyle(.primary.opacity(0.85))
         .padding(.horizontal, 11)
         .padding(.vertical, 6)
-        .background(Capsule().fill(Color.white.opacity(0.08)))
-        .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .background(Capsule().fill(Color.primary.opacity(0.08)))
+        .overlay(Capsule().stroke(.primary.opacity(0.12), lineWidth: 0.5))
         .contentShape(Capsule())
     }
 }

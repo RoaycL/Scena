@@ -7,6 +7,7 @@ import Kingfisher
 import SwiftUI
 
 struct ThumbnailStrip<MenuItems: View>: View {
+    @Environment(\.colorScheme) private var scheme
     let items: [GalleryItem]
     let selectedID: String?
     let selectionWithoutScrollingID: String?
@@ -117,7 +118,7 @@ struct ThumbnailStrip<MenuItems: View>: View {
             .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(isSelected ? Color.white : Color.white.opacity(0.18), lineWidth: isSelected ? 2.5 : 1)
+                    .stroke(isSelected ? (scheme == .light ? Color.accentColor : Color.white) : Color.primary.opacity(0.18), lineWidth: isSelected ? 2.5 : 1)
             )
             .opacity(isSelected || hoveredID == item.id ? 1 : 0.78)
             .scaleEffect(Motion.reducesMotion ? 1 : (isSelected ? 1.04 : (hoveredID == item.id ? 1.02 : 1)))

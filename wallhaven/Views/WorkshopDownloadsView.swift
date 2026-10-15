@@ -11,7 +11,7 @@ struct WorkshopDownloadsButton: View {
         Button { withAnimation(Motion.panel) { isPresented.toggle() } } label: {
             Image(systemName: "arrow.down.circle")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(Color.primary.opacity(0.85))
                 .frame(width: 34, height: 34)
                 .sceneGlass(in: Circle(), interactive: true)
         }
@@ -122,7 +122,6 @@ private struct WorkshopDownloadsList: View {
         .padding(16)
         .frame(width: 440, height: 420)
         .modifier(DownloadsBackground(inWindowPanel: onNavigate != nil))
-        .environment(\.colorScheme, .dark)
     }
 
     private func row(_ job: WorkshopDownloadJob) -> some View {
@@ -215,34 +214,22 @@ private struct WorkshopDownloadsList: View {
 
 /// 主界面浮层用和筛选面板一致的玻璃卡片；独立窗口用原生磨砂背景
 private struct DownloadsBackground: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     let inWindowPanel: Bool
 
     func body(content: Content) -> some View {
         if inWindowPanel {
             let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
             content
-                .sceneGlass(in: shape, tint: .black.opacity(0.4))
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
+                .sceneGlass(in: shape, tint: palette.panel)
+                .overlay(shape.stroke(palette.border, lineWidth: 0.5))
                 .clipShape(shape)
-                .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+                .shadow(color: palette.shadow, radius: 24, y: 10)
         } else {
             content
-                .background(Color.black.opacity(0.28))
-                .background(DownloadsGlassBackground())
+                .background(palette.scrim.opacity(0.12).ignoresSafeArea())
+                .background { ScenaWindowGlass().ignoresSafeArea() }
         }
     }
-}
-
-/// 独立窗口的原生磨砂背景，叠加深色底保证文字可读。
-private struct DownloadsGlassBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        view.appearance = NSAppearance(named: .vibrantDark)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

@@ -104,6 +104,7 @@ struct wallhavenApp: App {
             ContentView()
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
+                .scenaTheme()
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -114,21 +115,25 @@ struct wallhavenApp: App {
             SettingsView()
                 .environmentObject(viewModel)
                 .environmentObject(workshop)
+                .scenaTheme()
         }
 
         Window("播放列表", id: PlaylistsWindow.id) {
             PlaylistsView()
+                .scenaTheme()
         }
         .defaultSize(width: 960, height: 680)
 
         Window("下载任务", id: DownloadsWindow.id) {
             WorkshopDownloadsView()
                 .environmentObject(workshop)
+                .scenaTheme()
         }
         .windowResizability(.contentSize)
 
         Window("登录 Steam", id: SteamLoginWindow.id) {
             SteamLoginView()
+                .scenaTheme(transparentWindow: false)
         }
         .defaultSize(width: 520, height: 680)
         .windowResizability(.contentMinSize)

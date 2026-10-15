@@ -46,6 +46,8 @@ struct ContentView: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: ThemePalette { ThemePalette(scheme: colorScheme) }
     @StateObject private var localViewModel = LocalMediaViewModel()
     @StateObject private var immersive = ImmersiveWindowController()
     @State private var galleryTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -515,7 +517,7 @@ struct ContentView: View {
 
                 // 网格类页面整体压暗，保证缩略图和文字清晰
                 if isWorkshopGrid || page == .playlists {
-                    Color.black.opacity(immersive.isChromeHidden ? 0 : 0.35)
+                    palette.scrim.opacity(immersive.isChromeHidden ? 0 : (palette.isDay ? 0.32 : 0.35))
                         .allowsHitTesting(false)
                 }
 
@@ -742,14 +744,14 @@ struct ContentView: View {
     /// 上下渐变暗角，保证文字在任何壁纸上都可读
     private func scrims(height: CGFloat) -> some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [palette.scrim.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
                 .frame(height: 110)
             Spacer(minLength: 0)
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0),
-                    .init(color: .black.opacity(0.35), location: 0.45),
-                    .init(color: .black.opacity(0.75), location: 1),
+                    .init(color: palette.scrim.opacity(0.45), location: 0.45),
+                    .init(color: palette.scrim.opacity(palette.isDay ? 0.78 : 0.75), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -786,7 +788,6 @@ struct ContentView: View {
             if canCenter { navigation }
         }
         .animation(Motion.navigation, value: canCenter)
-        .environment(\.colorScheme, .dark)
         .onHover { immersive.setHold("topbar", active: $0) }
     }
 
@@ -803,12 +804,12 @@ struct ContentView: View {
                         HStack(spacing: 5) {
                             Text(tab.rawValue)
                             if !source.isEmpty {
-                                Text("·").foregroundStyle(.white.opacity(0.45))
-                                Text(source).foregroundStyle(.white.opacity(0.85))
+                                Text("·").foregroundStyle(Color.primary.opacity(0.45))
+                                Text(source).foregroundStyle(Color.primary.opacity(0.85))
                             }
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.6))
+                                .foregroundStyle(Color.primary.opacity(0.6))
                         }
                         .modifier(MainTabLabel(isSelected: true))
                     }
@@ -836,7 +837,7 @@ struct ContentView: View {
                 if let anchor {
                     let frame = proxy[anchor]
                     Capsule()
-                        .fill(.white.opacity(0.2))
+                        .fill(palette.selection)
                         .frame(width: frame.width, height: frame.height)
                         .offset(x: frame.minX, y: frame.minY)
                 }
@@ -912,7 +913,7 @@ struct ContentView: View {
                     Button { workshop.syncSubscriptions(force: true) } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(Color.primary.opacity(0.85))
                             .rotationEffect(.degrees(workshop.isSyncing && !Motion.reducesMotion ? 360 : 0))
                             .animation(workshop.isSyncing ? Motion.syncing : Motion.hover, value: workshop.isSyncing)
                             .frame(width: 34, height: 34)
@@ -927,7 +928,7 @@ struct ContentView: View {
             SettingsLink {
                 Image(systemName: "gearshape")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(Color.primary.opacity(0.85))
                     .frame(width: 34, height: 34)
                     .sceneGlass(in: Circle(), interactive: true)
             }
@@ -938,18 +939,18 @@ struct ContentView: View {
 
     /// 搜索框占位文字：系统默认的灰色在浅色玻璃和亮壁纸上看不清，统一用半透明白色
     private func searchPrompt(_ text: String) -> Text {
-        Text(text).foregroundStyle(.white.opacity(0.55))
+        Text(text).foregroundStyle(Color.primary.opacity(0.55))
     }
 
     private var librarySearchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(Color.primary.opacity(0.7))
             TextField("搜索资料库", text: $libraryQuery, prompt: searchPrompt("搜索资料库"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .focused($isSearchFocused)
                 .frame(width: isSearchFocused ? 170 : 120)
                 .onSubmit { isSearchFocused = false }
@@ -957,7 +958,7 @@ struct ContentView: View {
                 Button { libraryQuery = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
                 .buttonStyle(.plain)
             }
@@ -975,7 +976,7 @@ struct ContentView: View {
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(Color.primary.opacity(0.85))
                 .frame(width: 34, height: 34)
                 .sceneGlass(in: Circle(), interactive: true)
         }
@@ -990,11 +991,11 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(Color.primary.opacity(0.7))
             TextField("搜索壁纸", text: $viewModel.query, prompt: searchPrompt("搜索壁纸"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .focused($isSearchFocused)
                 .frame(width: isSearchFocused ? 180 : 120)
                 .onSubmit {
@@ -1008,7 +1009,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
                 .buttonStyle(.plain)
             }
@@ -1023,12 +1024,12 @@ struct ContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(Color.primary.opacity(0.7))
             TextField(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅", text: $workshop.query,
                       prompt: searchPrompt(workshop.mode == .online ? "搜索工坊或粘贴链接" : "搜索订阅"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .focused($isSearchFocused)
                 .frame(width: isSearchFocused ? 170 : 120)
                 .onSubmit {
@@ -1043,7 +1044,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
                 .buttonStyle(.plain)
             }
@@ -1064,7 +1065,7 @@ struct ContentView: View {
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(Color.primary.opacity(0.85))
                 .frame(width: 34, height: 34)
                 .sceneGlass(in: Circle(), interactive: true)
         }
@@ -1074,9 +1075,9 @@ struct ContentView: View {
             if workshop.filters.activeCount > 0 {
                 Text("\(workshop.filters.activeCount)")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.white)
                     .frame(minWidth: 15, minHeight: 15)
-                    .background(.white, in: Circle())
+                    .background(Color.accentColor, in: Circle())
                     .offset(x: 3, y: -3)
             }
         }
@@ -1096,7 +1097,7 @@ struct ContentView: View {
                 Text(viewModel.sortOrder.label).lineLimit(1)
             }
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(Color.primary.opacity(0.85))
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .sceneGlass(in: Capsule())
@@ -1148,7 +1149,7 @@ struct ContentView: View {
                 Text(selectedFolder?.name ?? "全部收藏").lineLimit(1)
             }
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(Color.primary.opacity(0.85))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -1174,10 +1175,9 @@ struct ContentView: View {
         if page == .playlists {
             PlaylistsView(embedded: true, panelWidth: max(360, min(size.width - 64, 1180)), maximumHeight: max(420, min(820, size.height - 118)), onKeyboardHandler: { playlistKeyHandler = $0 })
                 .scrollContentBackground(.hidden)
-                .sceneGlass(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: .black.opacity(0.35))
+                .sceneGlass(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: palette.panel)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
-                .environment(\.colorScheme, .dark)
+                .overlay(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous).stroke(palette.border, lineWidth: 0.5))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 78)
                 .padding(.horizontal, 32)
@@ -1222,10 +1222,10 @@ struct ContentView: View {
                                     }
                                     .buttonStyle(.borderless)
                                 }
-                                .font(.caption).foregroundStyle(.white)
+                                .font(.caption).foregroundStyle(Color.primary)
                             } else if actionableItem == nil {
                                 Label("加载中", systemImage: "arrow.triangle.2.circlepath")
-                                    .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                    .font(.caption).foregroundStyle(Color.primary.opacity(0.8))
                             }
                         }
                         .animation(Motion.content, value: actionableItem?.id)
@@ -1305,7 +1305,7 @@ struct ContentView: View {
                     Text("资料库还是空的")
                     Text("下载的壁纸、导入的图片和视频、已下载的创意工坊壁纸都会出现在这里")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(Color.primary.opacity(0.6))
                     HStack {
                         Button("导入图片或视频") { localViewModel.importFiles() }.buttonStyle(.bordered)
                         Button("添加工坊文件夹") { workshop.addLibraryFolder() }.buttonStyle(.bordered)
@@ -1318,8 +1318,7 @@ struct ContentView: View {
                 EmptyView()
             }
         }
-        .foregroundStyle(.white.opacity(0.85))
-        .environment(\.colorScheme, .dark)
+        .foregroundStyle(Color.primary.opacity(0.85))
     }
 
     @ViewBuilder
@@ -1329,7 +1328,7 @@ struct ContentView: View {
             Text("登录 Steam 账号，同步创意工坊订阅")
             Text("Windows 上订阅的壁纸会自动下载到 Mac；在 Mac 上下载的壁纸也会同步订阅")
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(Color.primary.opacity(0.6))
             Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }.buttonStyle(.bordered)
         } else if workshop.mode == .subscribed && workshop.isSyncing {
             Text("正在同步订阅…")
@@ -1429,15 +1428,15 @@ struct ContentView: View {
             if !workshopItem.type.isPlayable {
                 Text("Windows 程序，macOS 无法运行")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(Color.primary.opacity(0.7))
             } else if state == .queued || state == .downloading {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.white)
-                    Text(state.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                    ProgressView().controlSize(.small).tint(.primary)
+                    Text(state.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.primary)
                     Button("取消") { workshop.cancelDownload(workshopItem) }
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(Color.primary.opacity(0.7))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -1451,7 +1450,7 @@ struct ContentView: View {
             if workshop.isLoggedIn, workshopItem.workshopPageURL != nil {
                 CircleIconButton(
                     systemImage: isSubscribed ? "heart.fill" : "heart",
-                    tint: isSubscribed ? .red : .white,
+                    tint: isSubscribed ? .red : .primary,
                     help: isSubscribed ? "已订阅（点击取消订阅）" : "订阅到 Steam 账号"
                 ) { workshop.toggleSubscription(workshopItem) }
                 .id("subscribe-\(item.id)")
@@ -1580,7 +1579,7 @@ private struct MainTabLabel: ViewModifier {
             .font(.system(size: 13, weight: .medium))
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
+            .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.6))
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
             .contentShape(Capsule())

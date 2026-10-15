@@ -9,6 +9,8 @@ import SwiftUI
 
 /// 深色玻璃面板：与沉浸式界面统一风格（替代系统 popover，避免浅色外观下白底白字）
 struct GlassPanel<Content: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     var width: CGFloat = 340
     var maxHeight: CGFloat = 600
     @ViewBuilder let content: () -> Content
@@ -25,11 +27,10 @@ struct GlassPanel<Content: View>: View {
         .frame(width: width)
         .frame(maxHeight: maxHeight)
         .fixedSize(horizontal: false, vertical: true)
-        .sceneGlass(in: shape, tint: .black.opacity(0.4))
-        .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .sceneGlass(in: shape, tint: palette.panel)
+        .overlay(shape.stroke(palette.border, lineWidth: 0.5))
         .clipShape(shape)
-        .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
-        .environment(\.colorScheme, .dark)
+        .shadow(color: palette.shadow, radius: 24, y: 10)
     }
 }
 
@@ -43,12 +44,12 @@ struct GlassSection<Content: View>: View {
             HStack {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(Color.primary.opacity(0.55))
                 if let trailing {
                     Spacer()
                     Text(trailing)
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(Color.primary.opacity(0.4))
                 }
             }
             content()
@@ -57,9 +58,10 @@ struct GlassSection<Content: View>: View {
 }
 
 struct GlassChip: View {
+    @Environment(\.colorScheme) private var scheme
     let title: String
     let isOn: Bool
-    var tint: Color = .white
+    var tint: Color? = nil
     var disabled = false
     var fontSize: CGFloat = 12
     var horizontalPadding: CGFloat = 11
@@ -71,13 +73,14 @@ struct GlassChip: View {
                 .font(.system(size: fontSize, weight: .medium))
                 .lineLimit(1)
                 .fixedSize()
-                .foregroundStyle(isOn ? (tint == .white ? .black : .white) : .white.opacity(0.8))
+                // 选中：带颜色的（分级等）用该颜色底白字；普通选项同主按钮，夜间白底黑字、日间强调色底白字
+                .foregroundStyle(isOn ? (tint == nil ? ThemePalette(scheme: scheme).primaryText : .white) : Color.primary.opacity(0.8))
                 .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 6)
                 .background(
-                    Capsule().fill(isOn ? (tint == .white ? Color.white.opacity(0.92) : tint.opacity(0.8)) : Color.white.opacity(0.08))
+                    Capsule().fill(isOn ? (tint.map { $0.opacity(0.85) } ?? ThemePalette(scheme: scheme).primaryFill.opacity(0.92)) : Color.primary.opacity(0.06))
                 )
-                .overlay(Capsule().stroke(.white.opacity(isOn ? 0 : 0.12), lineWidth: 0.5))
+                .overlay(Capsule().stroke(Color.primary.opacity(isOn ? 0 : 0.10), lineWidth: 0.5))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -148,16 +151,16 @@ struct WorkshopFilterPanel: View {
             HStack {
                 Text("筛选")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.primary)
                 Text(workshop.mode == .online ? "创意工坊" : "已下载")
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.primary.opacity(0.5))
                 Spacer()
                 if !workshop.filters.isDefault {
                     Button("重置") { workshop.resetFilters() }
                         .buttonStyle(.plain)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
+                        .foregroundStyle(Color.primary.opacity(0.75))
                 }
             }
 
@@ -189,7 +192,7 @@ struct WorkshopFilterPanel: View {
                 if workshop.mode == .library, workshop.filters.features.contains("Approved") {
                     Text("仅显示带有官方好评标记的素材；本地文件可能未保存该标记。")
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
             }
 
@@ -214,7 +217,7 @@ struct WorkshopFilterPanel: View {
                 if workshop.filters.ratings.contains(.mature) {
                     Text("部分成人内容需要 Steam 账号完成年龄验证才会返回。")
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.primary.opacity(0.45))
                 }
             }
 
@@ -267,7 +270,7 @@ struct WorkshopFilterPanel: View {
 
             Text("「应用」类型是 Windows 程序，macOS 无法运行，已自动排除。")
                 .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.primary.opacity(0.4))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -307,10 +310,10 @@ struct WorkshopModePicker: View {
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .fixedSize()
-                        .foregroundStyle(workshop.mode == mode ? .white : .white.opacity(0.6))
+                        .foregroundStyle(workshop.mode == mode ? Color.primary : Color.primary.opacity(0.6))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Capsule().fill(workshop.mode == mode ? .white.opacity(0.2) : .clear))
+                        .background(Capsule().fill(workshop.mode == mode ? Color.accentColor.opacity(0.15) : .clear))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)

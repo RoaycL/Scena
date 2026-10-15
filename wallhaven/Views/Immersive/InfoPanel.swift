@@ -7,6 +7,8 @@ import SwiftUI
 
 /// 左下角的信息面板：直接压在壁纸上（靠底部渐变保证可读性），不再使用黑色底框
 struct InfoPanel<Actions: View>: View {
+    @Environment(\.colorScheme) private var scheme
+    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     let eyebrow: String
     let title: String
     let meta: [String]
@@ -21,11 +23,11 @@ struct InfoPanel<Actions: View>: View {
             Text(eyebrow)
                 .font(.system(size: 10, weight: .bold))
                 .tracking(2.5)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(Color.primary.opacity(0.6))
 
             Text(title)
                 .font(.system(size: 30, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
                 .lineLimit(2)
 
             HStack(spacing: 8) {
@@ -47,7 +49,7 @@ struct InfoPanel<Actions: View>: View {
                 }
             }
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.white.opacity(0.75))
+            .foregroundStyle(Color.primary.opacity(0.75))
 
             if !tags.isEmpty {
                 HStack(spacing: 6) {
@@ -55,11 +57,11 @@ struct InfoPanel<Actions: View>: View {
                         Button { onTag?(tag) } label: {
                             Text("#\(tagLabel(tag))")
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.85))
+                                .foregroundStyle(Color.primary.opacity(0.85))
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 4)
-                                .background(.white.opacity(0.12), in: Capsule())
-                                .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+                                .background(Color.primary.opacity(0.07), in: Capsule())
+                                .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                         .help("搜索 \(tag)")
@@ -74,7 +76,7 @@ struct InfoPanel<Actions: View>: View {
             }
             .padding(.top, 4)
         }
-        .shadow(color: .black.opacity(0.35), radius: 8, y: 2)
+        .shadow(color: palette.shadow, radius: 8, y: 2)
         .animation(Motion.content, value: tags)
     }
 }
@@ -83,6 +85,8 @@ struct InfoPanel<Actions: View>: View {
 /// 这张正是当前桌面壁纸时常驻显示「当前壁纸」
 struct ApplyWallpaperButton: View {
     @ObservedObject private var feedback = ApplyFeedback.shared
+    @Environment(\.colorScheme) private var scheme
+    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     let item: GalleryItem
     var title = "设为壁纸"
     let action: () -> Void
@@ -101,7 +105,8 @@ struct ApplyWallpaperButton: View {
             HStack(spacing: 5) {
                 switch phase {
                 case .applying:
-                    ProgressView().controlSize(.mini).environment(\.colorScheme, .light)
+                    ProgressView().controlSize(.mini)
+                        .environment(\.colorScheme, palette.primarySpinnerScheme)
                         .transition(.opacity)
                 case .applied, .current:
                     Image(systemName: "checkmark")
@@ -114,11 +119,11 @@ struct ApplyWallpaperButton: View {
                     .contentTransition(.opacity)
             }
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.black)
+            .foregroundStyle(palette.primaryText)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            // 「当前壁纸」是常驻状态，略微收敛，和可操作的白色主按钮区分开
-            .background(.white.opacity(phase == .current ? 0.78 : 1), in: Capsule())
+            // 「当前壁纸」是常驻状态，略微收敛，和可操作的主按钮区分开
+            .background(palette.primaryFill.opacity(phase == .current ? (palette.isDay ? 0.72 : 0.78) : 1), in: Capsule())
             .animation(Motion.hover, value: phase)
         }
         .buttonStyle(PressableButtonStyle())
@@ -138,7 +143,7 @@ struct ApplyWallpaperButton: View {
 
 struct CircleIconLabel: View {
     let systemImage: String
-    var tint: Color = .white
+    var tint: Color = .primary
 
     var body: some View {
         Image(systemName: systemImage)
@@ -158,7 +163,7 @@ struct CircleIconLabel: View {
 
 struct CircleIconButton: View {
     let systemImage: String
-    var tint: Color = .white
+    var tint: Color = .primary
     let help: String
     let action: () -> Void
 
@@ -200,7 +205,7 @@ struct FavoriteMenuButton: View {
                 Label(isFavorite ? "取消收藏" : "添加到默认收藏", systemImage: isFavorite ? "heart.slash" : "heart")
             }
         } label: {
-            CircleIconLabel(systemImage: isFavorite ? "heart.fill" : "heart", tint: isFavorite ? .red : .white)
+            CircleIconLabel(systemImage: isFavorite ? "heart.fill" : "heart", tint: isFavorite ? .red : .primary)
                 .overlay { StateBurst(trigger: burst, color: .red) }
         }
         // .button + .plain 才能保留自定义 label 的样式（borderlessButton 会把背景去掉）
@@ -243,7 +248,7 @@ struct DownloadActionButton: View {
     var body: some View {
         Button(action: action) {
             CircleIconLabel(systemImage: phase == .done ? "checkmark" : "arrow.down",
-                            tint: phase == .done ? .green : .white.opacity(phase == .downloading ? 0.45 : 1))
+                            tint: phase == .done ? .green : .primary.opacity(phase == .downloading ? 0.45 : 1))
                 .overlay {
                     if phase == .downloading { DownloadingRing().transition(.opacity) }
                 }
@@ -264,7 +269,7 @@ private struct DownloadingRing: View {
     var body: some View {
         Circle()
             .trim(from: 0, to: 0.28)
-            .stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
             .rotationEffect(.degrees(spinning ? 360 : 0))
             .padding(1)
             .onAppear {

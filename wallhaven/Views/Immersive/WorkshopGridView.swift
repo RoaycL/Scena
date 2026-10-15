@@ -119,11 +119,11 @@ struct WorkshopGridView<MenuItems: View>: View {
             } else if workshop.canLoadMore {
                 Button("加载更多") { workshop.loadMore() }
                     .buttonStyle(.borderless)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.primary.opacity(0.7))
             } else if !items.isEmpty {
                 Text("已经到底了")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.primary.opacity(0.45))
             }
         }
         .frame(maxWidth: .infinity, minHeight: 44)
@@ -164,6 +164,7 @@ struct WorkshopGridView<MenuItems: View>: View {
 // MARK: - Tile
 
 private struct WorkshopTile: View {
+    @Environment(\.colorScheme) private var scheme
     let item: WorkshopItem
     let isSelected: Bool
     let downloadState: DownloadState
@@ -219,7 +220,7 @@ private struct WorkshopTile: View {
             }
             .clipShape(shape)
             .overlay(
-                shape.stroke(isSelected ? Color.white : Color.white.opacity(isHovered ? 0.35 : 0.12), lineWidth: isSelected ? 2.5 : 1)
+                shape.stroke(isSelected ? (scheme == .light ? Color.accentColor : Color.white) : Color.primary.opacity(isHovered ? 0.35 : 0.12), lineWidth: isSelected ? 2.5 : 1)
             )
             .brightness(isHovered && !isSelected ? 0.05 : 0)
             .contentShape(shape)
@@ -272,6 +273,7 @@ private struct WorkshopTile: View {
 
 private struct WorkshopDetailPanel: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
+    @Environment(\.colorScheme) private var scheme
     let item: WorkshopItem
     let isLive: Bool
     let maxHeight: CGFloat
@@ -308,10 +310,10 @@ private struct WorkshopDetailPanel: View {
                 Text(isLive ? "LIVE · 正在桌面播放" : "WALLPAPER ENGINE · \(item.type.label)")
                     .font(.system(size: 10, weight: .bold))
                     .tracking(1.5)
-                    .foregroundStyle(isLive ? .green : .white.opacity(0.55))
+                    .foregroundStyle(isLive ? .green : Color.primary.opacity(0.55))
                 Text(item.title)
                     .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.primary)
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -353,7 +355,7 @@ private struct WorkshopDetailPanel: View {
             if !item.type.isPlayable {
                 Text("Windows 程序，macOS 无法运行")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.primary.opacity(0.6))
             } else if [.paused, .failed, .cancelled].contains(workshop.downloadState(of: item)) {
                 HStack {
                     Text(workshop.downloadState(of: item).label)
@@ -366,32 +368,32 @@ private struct WorkshopDetailPanel: View {
                     }
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
             } else if isDownloading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).tint(.white)
                     Text(workshop.downloadState(of: item).label)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
                     Spacer()
                     Button("暂停") { workshop.pauseDownload(item.id) }
                         .buttonStyle(.plain)
                     Button("停止") { workshop.cancelDownload(item) }
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(Color.primary.opacity(0.7))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(.white.opacity(0.1), in: Capsule())
+                .background(Color.primary.opacity(0.06), in: Capsule())
             } else {
                 Button { workshop.apply(item) } label: {
                     Text(item.isDownloaded ? "设为壁纸" : "下载并应用")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(ThemePalette(scheme: scheme).primaryText)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
-                    .background(.white, in: Capsule())
+                    .background(ThemePalette(scheme: scheme).primaryFill, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .help("回车")
@@ -405,11 +407,11 @@ private struct WorkshopDetailPanel: View {
                         Text(subscribed ? "已订阅" : "订阅")
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(subscribed ? .red : .white.opacity(0.85))
+                    .foregroundStyle(subscribed ? .red : Color.primary.opacity(0.85))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 7)
-                    .background(.white.opacity(0.1), in: Capsule())
-                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
                 }
                 .buttonStyle(.plain)
                 .help(subscribed ? "已在 Steam 订阅，Windows 上的 Wallpaper Engine 会同步；点击取消订阅" : "订阅到 Steam 账号，Windows 上的 Wallpaper Engine 会自动下载")
@@ -457,10 +459,10 @@ private struct WorkshopDetailPanel: View {
     private func metaChip(_ text: String, color: Color? = nil) -> some View {
         Text(text)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(color ?? .white.opacity(0.75))
+            .foregroundStyle(color ?? .primary.opacity(0.75))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background((color ?? .white).opacity(0.12), in: Capsule())
+            .background((color ?? .primary).opacity(0.12), in: Capsule())
     }
 
     private func ratingColor(_ rating: WorkshopRating) -> Color {
@@ -519,15 +521,15 @@ private struct WorkshopExtraInfoSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let info {
-                Divider().overlay(.white.opacity(0.12))
+                Divider().overlay(.primary.opacity(0.12))
                 stats(info)
                 if !info.description.isEmpty {
                     description(info.description)
                 }
             } else if isLoading {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.white)
-                    Text("正在读取简介…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    ProgressView().controlSize(.small).tint(.primary)
+                    Text("正在读取简介…").font(.system(size: 11)).foregroundStyle(.primary.opacity(0.5))
                 }
             }
         }
@@ -560,8 +562,8 @@ private struct WorkshopExtraInfoSection: View {
             if let up = info.votesUp, let down = info.votesDown, up + down > 0 {
                 let percent = Int((Double(up) / Double(up + down) * 100).rounded())
                 row("hand.thumbsup") {
-                    Text("好评 \(percent)%").foregroundStyle(percent >= 80 ? .green : .white.opacity(0.85))
-                    Text("· \((up + down).formatted()) 个评价").foregroundStyle(.white.opacity(0.5))
+                    Text("好评 \(percent)%").foregroundStyle(percent >= 80 ? .green : .primary.opacity(0.85))
+                    Text("· \((up + down).formatted()) 个评价").foregroundStyle(.primary.opacity(0.5))
                 }
             }
             if info.favorited > 0 {
@@ -574,14 +576,14 @@ private struct WorkshopExtraInfoSection: View {
             }
         }
         .font(.system(size: 12))
-        .foregroundStyle(.white.opacity(0.85))
+        .foregroundStyle(.primary.opacity(0.85))
     }
 
     private func row<Content: View>(_ icon: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 7) {
             Image(systemName: icon)
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.primary.opacity(0.5))
                 .frame(width: 16)
             HStack(spacing: 4) { content() }
                 .lineLimit(1)
@@ -593,10 +595,10 @@ private struct WorkshopExtraInfoSection: View {
             Text("简介")
                 .font(.system(size: 10, weight: .bold))
                 .tracking(1.5)
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.primary.opacity(0.5))
             Text(text)
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(.primary.opacity(0.8))
                 .lineSpacing(3)
                 .lineLimit(isExpanded ? nil : 8)
                 .fixedSize(horizontal: false, vertical: true)
@@ -607,7 +609,7 @@ private struct WorkshopExtraInfoSection: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.primary.opacity(0.6))
             }
         }
     }

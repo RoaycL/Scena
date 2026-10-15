@@ -38,6 +38,13 @@ struct SettingsView: View {
                 .tag(Tab.about)
         }
         .frame(width: 580, height: 560)
+        // 窗口是透明的：磨砂要一直铺到标题栏和工具栏下面，否则那一条会直接露出后面的内容
+        // 设置页用更通透的磨砂，背后的桌面和窗口能隐约透出来
+        .background { ScenaWindowGlass(material: .popover).ignoresSafeArea() }
+        .background {
+            LinearGradient(colors: [Color.white.opacity(0.06), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+        }
     }
 }
 
@@ -96,9 +103,21 @@ private struct GeneralSettings: View {
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true
     @AppStorage(DesktopSettings.showDockIcon) private var showDockIcon = true
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
 
     var body: some View {
         Form {
+            Section {
+                Picker("主题", selection: $theme) {
+                    ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("外观")
+            } footer: {
+                SettingsFootnote("跟随系统会自动切换日间与夜间外观。应用图标始终跟随系统，不受这里的主题选择影响。")
+            }
+
             Section {
                 Toggle("开机时自动启动", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 Toggle("在 Dock 中显示图标", isOn: $showDockIcon)
@@ -133,6 +152,7 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
@@ -169,6 +189,7 @@ private struct AccountSettings: View {
             steamCMDSection
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     private var wallhavenSection: some View {
@@ -376,6 +397,7 @@ private struct LiveWallpaperSettings: View {
             AutoPauseSection(live: live)
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -605,6 +627,7 @@ private struct WorkshopSettings: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -693,6 +716,7 @@ private struct StorageSettings: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .onAppear { storage.refreshUsage() }
     }
 
@@ -763,8 +787,7 @@ private struct AboutSettings: View {
         Form {
             Section {
                 HStack(spacing: 16) {
-                    Image(nsImage: NSApplication.shared.applicationIconImage)
-                        .resizable()
+                    SystemApplicationIcon()
                         .frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Scena").font(.title2.bold())
@@ -865,5 +888,6 @@ private struct AboutSettings: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
