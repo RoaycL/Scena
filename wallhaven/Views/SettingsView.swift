@@ -40,11 +40,7 @@ struct SettingsView: View {
         .frame(width: 580, height: 560)
         // 窗口是透明的：磨砂要一直铺到标题栏和工具栏下面，否则那一条会直接露出后面的内容
         // 设置页用更通透的磨砂，背后的桌面和窗口能隐约透出来
-        .background { ScenaWindowGlass(material: .popover).ignoresSafeArea() }
-        .background {
-            LinearGradient(colors: [Color.white.opacity(0.06), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
-                .ignoresSafeArea()
-        }
+        .background { ScenaFrostedBackground().ignoresSafeArea() }
     }
 }
 

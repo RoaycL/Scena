@@ -217,22 +217,14 @@ private struct WorkshopDownloadsList: View {
 
 /// 主界面浮层用和筛选面板一致的玻璃卡片；独立窗口用原生磨砂背景
 private struct DownloadsBackground: ViewModifier {
-    @Environment(\.colorScheme) private var scheme
-    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     let inWindowPanel: Bool
 
     func body(content: Content) -> some View {
         if inWindowPanel {
-            let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
-            content
-                .sceneGlass(in: shape, tint: palette.panel)
-                .overlay(shape.stroke(palette.border, lineWidth: 0.5))
-                .clipShape(shape)
-                .shadow(color: palette.shadow, radius: 24, y: 10)
+            content.scenaFrostedPanel()
         } else {
             content
-                .background(palette.scrim.opacity(0.12).ignoresSafeArea())
-                .background { ScenaWindowGlass().ignoresSafeArea() }
+                .background { ScenaFrostedBackground().ignoresSafeArea() }
         }
     }
 }

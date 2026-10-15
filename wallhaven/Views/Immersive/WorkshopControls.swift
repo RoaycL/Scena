@@ -7,16 +7,13 @@ import SwiftUI
 
 // MARK: - Glass panel building blocks
 
-/// 深色玻璃面板：与沉浸式界面统一风格（替代系统 popover，避免浅色外观下白底白字）
+/// 筛选面板：与设置页共用原生磨砂，保留浮层的圆角与阴影。
 struct GlassPanel<Content: View>: View {
-    @Environment(\.colorScheme) private var scheme
-    private var palette: ThemePalette { ThemePalette(scheme: scheme) }
     var width: CGFloat = 340
     var maxHeight: CGFloat = 600
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 content()
@@ -27,10 +24,7 @@ struct GlassPanel<Content: View>: View {
         .frame(width: width)
         .frame(maxHeight: maxHeight)
         .fixedSize(horizontal: false, vertical: true)
-        .sceneGlass(in: shape, tint: palette.panel)
-        .overlay(shape.stroke(palette.border, lineWidth: 0.5))
-        .clipShape(shape)
-        .shadow(color: palette.shadow, radius: 24, y: 10)
+        .scenaFrostedPanel()
     }
 }
 

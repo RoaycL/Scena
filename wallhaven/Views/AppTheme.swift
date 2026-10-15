@@ -99,6 +99,36 @@ struct ScenaWindowGlass: NSViewRepresentable {
 }
 
 
+/// 设置、下载和筛选共用同一层原生磨砂，不再额外叠加深浅色实底。
+struct ScenaFrostedBackground: View {
+    var body: some View {
+        ScenaWindowGlass(material: .popover)
+            .background {
+                LinearGradient(colors: [Color.white.opacity(0.06), .clear],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+    }
+}
+
+private struct ScenaFrostedPanel: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let palette = ThemePalette(scheme: scheme)
+        let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
+        content
+            .background { ScenaFrostedBackground() }
+            .overlay(shape.stroke(palette.border, lineWidth: 0.5))
+            .clipShape(shape)
+            .shadow(color: palette.shadow, radius: 24, y: 10)
+    }
+}
+
+extension View {
+    func scenaFrostedPanel() -> some View { modifier(ScenaFrostedPanel()) }
+}
+
+
 /// 关于页也按应用级系统外观绘制图标，避免手动窗口主题影响图标的日夜变体。
 struct SystemApplicationIcon: NSViewRepresentable {
     func makeNSView(context: Context) -> NSImageView {
