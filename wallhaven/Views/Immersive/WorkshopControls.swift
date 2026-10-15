@@ -7,7 +7,7 @@ import SwiftUI
 
 // MARK: - Glass panel building blocks
 
-/// 筛选面板：与设置页共用原生磨砂，保留浮层的圆角与阴影。
+/// 筛选面板：窗口内的磨砂透出当前壁纸，保留浮层的圆角与阴影。
 struct GlassPanel<Content: View>: View {
     var width: CGFloat = 340
     var maxHeight: CGFloat = 600

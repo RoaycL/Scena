@@ -99,7 +99,7 @@ struct ScenaWindowGlass: NSViewRepresentable {
 }
 
 
-/// 设置、下载和筛选共用同一层原生磨砂，不再额外叠加深浅色实底。
+/// 独立窗口的磨砂：采样窗口背后的桌面和其他窗口，只用于设置与独立下载窗口。
 struct ScenaFrostedBackground: View {
     var body: some View {
         ScenaWindowGlass(material: .popover)
@@ -117,7 +117,9 @@ private struct ScenaFrostedPanel: ViewModifier {
         let palette = ThemePalette(scheme: scheme)
         let shape = RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
         content
-            .background { ScenaFrostedBackground() }
+            // 窗口内部的浮层要采样 SwiftUI 背后的壁纸，不能复用 behindWindow 的窗口磨砂。
+            // 使用 SwiftUI 材质参与同一视图树的背景合成，避免原生视图桥接后只留下实心灰底。
+            .background(.ultraThinMaterial, in: shape)
             .overlay(shape.stroke(palette.border, lineWidth: 0.5))
             .clipShape(shape)
             .shadow(color: palette.shadow, radius: 24, y: 10)
