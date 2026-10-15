@@ -67,12 +67,31 @@ final class LiveWallpaperController: ObservableObject {
 
     private let storageKey = "liveWallpaper.content"
     private let legacyStorageKey = "liveWallpaper.path"
-    private var windows: [NSWindow] = []
-    private var players: [LivePlaybackView] = []
+    private final class Surface {
+        let window: NSWindow
+        let player: LivePlaybackView
+        private var isClosed = false
+
+        init(window: NSWindow, player: LivePlaybackView) {
+            self.window = window
+            self.player = player
+        }
+
+        func close() {
+            guard !isClosed else { return }
+            isClosed = true
+            player.stop()
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+    }
+
+    private let surfaces = WallpaperWindowLifecycle<Surface>()
+    private var windows: [NSWindow] { surfaces.active.map(\.window) }
+    private var players: [LivePlaybackView] { surfaces.active.map(\.player) }
     private var observers: [NSObjectProtocol] = []
     private var mouseMonitors: [Any] = []
-    /// 每次重建窗口递增，用于丢弃过期的回调
-    private var generation = 0
     /// 系统原因（锁屏、睡眠）导致的暂停，与用户手动暂停分开记录
     private var isSystemSuspended = false
     /// 设置里的自动暂停条件（其他 App 在使用、全屏、电池、不活跃）
@@ -196,17 +215,12 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 新窗口先以透明状态创建，播放器出第一帧后淡入，再移除旧窗口：切换时不会黑屏
     private func rebuildWindows() {
-        generation += 1
-        let currentGeneration = generation
+        let currentGeneration = surfaces.beginReplacement()
         revealedWindows.removeAll()
-        let oldWindows = windows
-        let oldPlayers = players
         removeMouseTracking()
-        windows = []
-        players = []
 
         guard let content = current else {
-            fadeOut(oldWindows, oldPlayers)
+            fadeOut(surfaces.removeAll())
             return
         }
 
@@ -230,37 +244,49 @@ final class LiveWallpaperController: ObservableObject {
             window.ignoresMouseEvents = true
             window.isOpaque = false
             window.hasShadow = false
+            window.animationBehavior = .none
+            window.isRestorable = false
             window.backgroundColor = .clear
             window.isReleasedWhenClosed = false
             // ⌘H 隐藏 App 时壁纸窗口不能跟着消失
             window.canHide = false
             window.alphaValue = 0
+            player.frame = CGRect(origin: .zero, size: screen.frame.size)
+            player.autoresizingMask = [.width, .height]
             window.contentView = player
             window.setFrame(screen.frame, display: true)
+            player.layoutSubtreeIfNeeded()
             // 同一层级里后 orderFront 的在上面，盖住旧窗口
             window.orderFront(nil)
 
-            windows.append(window)
-            players.append(player)
+            surfaces.append(Surface(window: window, player: player))
         }
 
+        guard !surfaces.active.isEmpty else {
+            fadeOut(surfaces.removeAll())
+            updatePlayback()
+            return
+        }
         var pending = windows.count
         let finish = { [weak self] in
-            guard let self, self.generation == currentGeneration else { return }
-            self.retire(oldWindows, oldPlayers)
+            guard let self, self.surfaces.generation == currentGeneration else { return }
+            self.retire()
         }
-        for (window, player) in zip(windows, players) {
-            player.whenReady { [weak self, weak window] in
-                guard let self, self.generation == currentGeneration, let window else { return }
-                self.reveal(window)
+        for surface in surfaces.active {
+            surface.player.whenReady { [weak self, weak surface] in
+                guard let self, let surface,
+                      self.surfaces.isCurrent(surface, generation: currentGeneration) else { return }
+                self.reveal(surface, generation: currentGeneration)
                 pending -= 1
                 if pending == 0 { finish() }
             }
         }
         // 兜底：播放器迟迟没有就绪时也要显示出来，不能一直停留在旧壁纸上
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            guard let self, self.generation == currentGeneration else { return }
-            self.windows.filter { $0.alphaValue < 1 }.forEach(self.reveal)
+            guard let self, self.surfaces.generation == currentGeneration else { return }
+            for surface in self.surfaces.active where surface.window.alphaValue < 1 {
+                self.reveal(surface, generation: currentGeneration)
+            }
             finish()
         }
 
@@ -270,14 +296,18 @@ final class LiveWallpaperController: ObservableObject {
         updatePlayback()
     }
 
-    private func reveal(_ window: NSWindow) {
+    private func reveal(_ surface: Surface, generation: Int) {
+        guard surfaces.isCurrent(surface, generation: generation) else { return }
+        let window = surface.window
+        window.contentView?.layoutSubtreeIfNeeded()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.35
             window.animator().alphaValue = 1
-        } completionHandler: { [weak self, weak window] in
+        } completionHandler: { [weak self, weak surface] in
             MainActor.assumeIsolated {
-                guard let self, let window else { return }
-                self.revealedWindows.insert(ObjectIdentifier(window))
+                guard let self, let surface,
+                      self.surfaces.isCurrent(surface, generation: generation) else { return }
+                self.revealedWindows.insert(ObjectIdentifier(surface.window))
                 self.updatePlayback()
             }
         }
@@ -293,35 +323,35 @@ final class LiveWallpaperController: ObservableObject {
     }
 
     /// 新窗口淡入完成后再移除旧窗口
-    private func retire(_ oldWindows: [NSWindow], _ oldPlayers: [LivePlaybackView]) {
-        guard !oldWindows.isEmpty else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            oldPlayers.forEach { $0.stop() }
-            oldWindows.forEach { $0.orderOut(nil) }
+    private func retire() {
+        let oldSurfaces = surfaces.retiring
+        guard !oldSurfaces.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self else {
+                oldSurfaces.forEach { $0.close() }
+                return
+            }
+            self.surfaces.removeRetiring(oldSurfaces).forEach { $0.close() }
         }
     }
 
     /// 停止动态壁纸时淡出，露出下面的静态壁纸
-    private func fadeOut(_ oldWindows: [NSWindow], _ oldPlayers: [LivePlaybackView]) {
-        guard !oldWindows.isEmpty else { return }
+    private func fadeOut(_ oldSurfaces: [Surface]) {
+        guard !oldSurfaces.isEmpty else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.35
-            oldWindows.forEach { $0.animator().alphaValue = 0 }
+            oldSurfaces.forEach { $0.window.animator().alphaValue = 0 }
         } completionHandler: {
             MainActor.assumeIsolated {
-                oldPlayers.forEach { $0.stop() }
-                oldWindows.forEach { $0.orderOut(nil) }
+                oldSurfaces.forEach { $0.close() }
             }
         }
     }
 
     private func tearDownWindows() {
-        generation += 1
         revealedWindows.removeAll()
         removeMouseTracking()
-        fadeOut(windows, players)
-        players.removeAll()
-        windows.removeAll()
+        fadeOut(surfaces.removeAll())
     }
 
     private func removeMouseTracking() {
