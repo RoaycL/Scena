@@ -81,6 +81,17 @@ import Testing
         #expect(probes == 0)
     }
 
+    @Test func successfulVerificationCanBeReusedAfterStoreRestarts() async {
+        let defaults = preferences.make(), store = CloudflareClearanceStore(defaults: preferences.make())
+        let persistent = CloudflareClearanceStore(defaults: defaults)
+        let model = CloudflareVerificationModel(store: persistent) { _, _ in }
+        let challenge = CloudflareChallengeRequiredError(domain: "wallsflow.com", challengeURL: url)
+        #expect(await model.inspect(cookies: [cookie()], challenge: challenge))
+        let restarted = CloudflareClearanceStore(defaults: defaults)
+        #expect(restarted.cookieHeader(for: url) == "cf_clearance=fake-clearance")
+        #expect(store.cookieHeader(for: url) == nil)
+    }
+
     @Test func challengeIsRecognizedForListAndDownloadAndIsNotTransientRetry() throws {
         let data = Data("<html><title>Just a moment...</title><script>_cf_chl_opt</script></html>".utf8)
         for status in [200, 403, 503] {

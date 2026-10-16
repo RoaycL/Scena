@@ -70,7 +70,7 @@ struct AdditionalWallpaperSourceTests {
         let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
         #expect(parameters.first { $0.name == "mode" }?.value == mode)
         #expect(!parameters.contains { $0.name == "content" })
-        #expect(PixivSource().filters(for: query).map(\.id) == ["mode"])
+        #expect(PixivSource().filters(for: query).map(\.id) == ["mode", "rankingDate"])
     }
 
     @Test func pixivKeywordSearchEncodesPathAndSelectsEndpoint() async throws {
@@ -83,13 +83,14 @@ struct AdditionalWallpaperSourceTests {
             #expect(parameters.first { $0.name == "word" }?.value == "C++ / 风景?")
             #expect(parameters.first { $0.name == "mode" }?.value == "safe")
             return data
-        })
+        }, signedIn: { false })
         let result = try await source.search(query, page: 1)
         #expect(result.count == 1)
         #expect(result.first?.id == "pixiv-150915104")
         #expect(result.first?.imageURL.path.contains("/c/") == false)
         #expect(result.first?.imageURL.lastPathComponent == "150915104_p0_master1200.jpg")
-        #expect(source.filters(for: query).map(\.id) == ["content"])
+        #expect(source.filters(for: query).contains { $0.id == "content" })
+        #expect(!source.filters(for: query).contains { $0.id == "mode" })
         let manga = WallpaperQuery(text: "landscape", sort: "default", filters: ["content": ["manga"]])
         #expect(PixivSource.searchURL(manga, page: 2).path == "/ajax/search/manga/landscape")
         #expect(try await source.search(query, page: 11).isEmpty)

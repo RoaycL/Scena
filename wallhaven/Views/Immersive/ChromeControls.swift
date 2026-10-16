@@ -51,17 +51,17 @@ struct FilterPanel: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
 
     var body: some View {
-        let descriptor = viewModel.descriptor
         GlassPanel(width: 300) {
             Text("筛选")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.primary)
 
             ForEach(viewModel.activeFilters) { filter in
-                let note = viewModel.isAuthenticated ? filter.note : (filter.signedOutNote ?? filter.note)
+                let note = viewModel.isSourceAuthenticated ? filter.note : (filter.signedOutNote ?? filter.note)
                 GlassSection(title: filter.title, trailing: note) {
-                    FlowLayout {
-                        if filter.mode != .atLeastOne {
+                    if filter.input == .choices {
+                      FlowLayout {
+                        if filter.allowsEmptySelection {
                             GlassChip(title: "不限", isOn: viewModel.filterSelections[filter.id]?.isEmpty ?? true) {
                                 viewModel.toggle(nil, in: filter)
                             }
@@ -72,16 +72,20 @@ struct FilterPanel: View {
                                 viewModel.toggle(option, in: filter)
                             }
                         }
+                      }
+                    } else {
+                        SourceFilterFields(filter: filter)
+                            .disabled(filter.requiresAccount && !viewModel.isSourceAuthenticated)
                     }
                 }
             }
 
-            if descriptor.sorts.count > 1 {
+            if viewModel.activeSorts.count > 1 {
                 GlassSection(title: "排序") {
                     FlowLayout {
-                        ForEach(descriptor.sorts) { option in
-                            GlassChip(title: option.title, isOn: viewModel.sortID == option.id) {
-                                viewModel.sortID = option.id
+                        ForEach(viewModel.activeSorts) { option in
+                            GlassChip(title: option.title, isOn: viewModel.sortID == option.id, disabled: !viewModel.isAvailable(option)) {
+                                viewModel.selectSort(option)
                             }
                         }
                     }

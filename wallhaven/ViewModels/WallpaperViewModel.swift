@@ -23,6 +23,8 @@ final class WallpaperViewModel: ObservableObject {
     @Published var apiKeyInput = ""
     @Published var usernameInput = ""
     @Published private(set) var isAuthenticated = false
+    @Published private(set) var isPixivAuthenticated = false
+    private var pixivAccountObserver: AnyCancellable?
     @Published private(set) var wallpapers: [RemoteWallpaper] = []
     @Published private(set) var favorites: Set<String> = []
     @Published private(set) var favoriteWallpapers: [RemoteWallpaper] = []
@@ -90,7 +92,8 @@ final class WallpaperViewModel: ObservableObject {
          searchLoader: (@MainActor (WallpaperQuery, Int) async throws -> [RemoteWallpaper])? = nil,
          downloadLoader: (@MainActor (RemoteWallpaper) async throws -> URL)? = nil,
          applyDownloaded: (@MainActor (URL) throws -> Void)? = nil,
-         manualApplyAction: (@MainActor () -> Void)? = nil) {
+         manualApplyAction: (@MainActor () -> Void)? = nil,
+         pixivAccount: PixivAccountSession? = nil) {
         self.searchLoader = searchLoader
         self.downloadLoader = downloadLoader
         self.applyDownloaded = applyDownloaded ?? { try WallpaperManager.applyWallpaper(from: $0) }
@@ -98,10 +101,26 @@ final class WallpaperViewModel: ObservableObject {
         self.discoveryDefaults = discoveryDefaults
         let savedID = discoveryDefaults.string(forKey: Self.selectedSourceKey)
         source = sources.first { $0.descriptor.id == savedID } ?? sources[0]
+        isPixivAuthenticated = pixivAccount?.isLoggedIn ?? false
         loadAuth()
         restoreDiscoveryPreferences()
         loadFavorites()
         loadFolders()
+        pixivAccountObserver = pixivAccount?.$isLoggedIn.dropFirst().removeDuplicates()
+            .receive(on: RunLoop.main).sink { [weak self] signedIn in
+                MainActor.assumeIsolated {
+                    guard let self, self.isPixivAuthenticated != signedIn else { return }
+                    self.isPixivAuthenticated = signedIn
+                    guard self.descriptor.id == PixivSource.id else { return }
+                    if signedIn { self.restoreDiscoveryPreferences() }
+                    else {
+                        self.removeLockedSelections()
+                        self.wallpapers = []
+                        self.selectedWallpaper = nil
+                    }
+                    self.search(reset: true)
+                }
+            }
         // 标签缓存约 1 MB，放到后台读取，不拖慢启动
         Task { [weak self] in
             let (tags, order) = await Task.detached(priority: .utility) { Self.loadTagCache() }.value
@@ -113,6 +132,8 @@ final class WallpaperViewModel: ObservableObject {
 
     var descriptor: WallpaperSourceDescriptor { source.descriptor }
     var activeFilters: [SourceFilter] { source.filters(for: searchRequest) }
+    var activeSorts: [SourceOption] { source.sorts(for: searchRequest) }
+    var isSourceAuthenticated: Bool { descriptor.id == PixivSource.id ? isPixivAuthenticated : isAuthenticated }
 
     /// 切换图源：恢复该图源上次的搜索条件并重新搜索
     func selectSource(_ newSource: any WallpaperSource) {
@@ -134,13 +155,14 @@ final class WallpaperViewModel: ObservableObject {
         }
         query = saved?["query"] as? String ?? ""
         let sort = saved?["sort"] as? String ?? ""
-        sortID = descriptor.sorts.contains { $0.id == sort } ? sort : descriptor.defaultSort
+        sortID = descriptor.sorts.contains { $0.id == sort && isAvailable($0) } ? sort : descriptor.defaultSort
         let filters = saved?["filters"] as? [String: [String]] ?? [:]
         filterSelections = Dictionary(uniqueKeysWithValues: descriptor.filters.map { filter in
             let valid = Set(filter.options.filter { isAvailable($0) }.map(\.id))
-            var selection = filters[filter.id].map(Set.init) ?? filter.defaultSelection
-            selection.formIntersection(valid)
-            if selection.isEmpty, filter.mode == .atLeastOne { selection = filter.defaultSelection.intersection(valid) }
+            var selection = filter.normalized(filters[filter.id].map(Set.init) ?? filter.defaultSelection)
+            if filter.input == .choices { selection.formIntersection(valid) }
+            if filter.requiresAccount && !isSourceAuthenticated { selection = [] }
+            if selection.isEmpty, !filter.allowsEmptySelection { selection = filter.defaultSelection.intersection(valid) }
             return (filter.id, selection)
         })
     }
@@ -173,7 +195,7 @@ final class WallpaperViewModel: ObservableObject {
         WallpaperQuery(text: query, sort: sortID, filters: filterSelections, credential: credential(for: descriptor.id))
     }
 
-    /// 图源账号凭据；目前只有 Wallhaven 有账号
+    /// Wallhaven 使用 API 密钥；Pixiv 由网络层的 Cookie Vault 注入，避免凭据进入筛选快照。
     private func credential(for sourceID: String) -> String? {
         sourceID == WallhavenSource.id ? storedAPIKey : nil
     }
@@ -186,7 +208,7 @@ final class WallpaperViewModel: ObservableObject {
 
     /// 需要登录的选项在未登录时不可选
     func isAvailable(_ option: SourceOption) -> Bool {
-        !option.requiresAccount || isAuthenticated
+        !option.requiresAccount || isSourceAuthenticated
     }
 
     /// 切换筛选项；option 为 nil 表示「不限」（清空可多选的筛选）
@@ -197,7 +219,9 @@ final class WallpaperViewModel: ObservableObject {
                 errorMessage = "需要登录才能开启 \(option.title)。"
                 return
             }
-            if filter.mode == .oneOf {
+            if filter.mode == .exactlyOne {
+                selection = [option.id]
+            } else if filter.mode == .oneOf {
                 // 单选：再点一次已选项回到「不限」
                 selection = selection.contains(option.id) ? [] : [option.id]
             } else {
@@ -206,10 +230,42 @@ final class WallpaperViewModel: ObservableObject {
                 if selection.isEmpty, filter.mode == .atLeastOne { return }
             }
         } else {
+            guard filter.allowsEmptySelection else { return }
             selection = []
         }
         filterSelections[filter.id] = selection
+        reconcileActiveFilters()
         search(reset: true, debounce: true)
+    }
+
+    func setValues(_ values: Set<String>, in filter: SourceFilter) {
+        guard !filter.requiresAccount || isSourceAuthenticated else { return }
+        filterSelections[filter.id] = filter.normalized(values)
+        search(reset: true, debounce: true)
+    }
+
+    func selectSort(_ option: SourceOption) {
+        guard isAvailable(option), activeSorts.contains(where: { $0.id == option.id }) else { return }
+        sortID = option.id
+    }
+
+    private func reconcileActiveFilters() {
+        for filter in activeFilters where filter.input == .choices {
+            let valid = Set(filter.options.filter { isAvailable($0) }.map(\.id))
+            var selection = filter.normalized(filterSelections[filter.id] ?? []).intersection(valid)
+            if selection.isEmpty, !filter.allowsEmptySelection { selection = filter.defaultSelection.intersection(valid) }
+            if filterSelections[filter.id] != selection { filterSelections[filter.id] = selection }
+        }
+    }
+
+    private func removeLockedSelections() {
+        for filter in descriptor.filters {
+            let locked = Set(filter.options.filter(\.requiresAccount).map(\.id))
+            var selection = filter.requiresAccount ? [] : (filterSelections[filter.id] ?? []).subtracting(locked)
+            if selection.isEmpty, !filter.allowsEmptySelection { selection = filter.defaultSelection.subtracting(locked) }
+            filterSelections[filter.id] = selection
+        }
+        if descriptor.sorts.first(where: { $0.id == sortID })?.requiresAccount == true { sortID = descriptor.defaultSort }
     }
 
     func search(reset: Bool, debounce: Bool = false) {
@@ -419,13 +475,7 @@ final class WallpaperViewModel: ObservableObject {
         apiKeyInput = ""
         usernameInput = ""
         isAuthenticated = false
-        // 退出后去掉需要登录的筛选项
-        for filter in descriptor.filters {
-            let locked = Set(filter.options.filter(\.requiresAccount).map(\.id))
-            var selection = (filterSelections[filter.id] ?? []).subtracting(locked)
-            if selection.isEmpty, filter.mode == .atLeastOne { selection = filter.defaultSelection.subtracting(locked) }
-            filterSelections[filter.id] = selection
-        }
+        if descriptor.id == WallhavenSource.id { removeLockedSelections() }
         statusMessage = "已登出"
         search(reset: true)
     }

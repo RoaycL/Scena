@@ -18,12 +18,14 @@ nonisolated protocol WallpaperSource: Sendable {
     func downloadURL(for wallpaper: RemoteWallpaper) async throws -> URL
     /// 仅展示当前查询确实支持的筛选条件，保留隐藏条件的选择以便返回时恢复。
     func filters(for query: WallpaperQuery) -> [SourceFilter]
+    func sorts(for query: WallpaperQuery) -> [SourceOption]
 }
 
 extension WallpaperSource {
     nonisolated func tags(for wallpaper: RemoteWallpaper, credential: String?) async throws -> [String] { wallpaper.tags }
     nonisolated func downloadURL(for wallpaper: RemoteWallpaper) async throws -> URL { wallpaper.imageURL }
     nonisolated func filters(for query: WallpaperQuery) -> [SourceFilter] { descriptor.filters }
+    nonisolated func sorts(for query: WallpaperQuery) -> [SourceOption] { descriptor.sorts }
 }
 
 /// 图源能力的描述：筛选面板据此生成，不需要为每个图源单独写界面
@@ -56,6 +58,7 @@ nonisolated struct SourceOption: Identifiable, Hashable, Sendable {
 
 nonisolated struct SourceFilter: Identifiable, Sendable {
     enum Mode: Sendable {
+        case exactlyOne
         /// 多选且至少保留一项（分类、内容分级）
         case atLeastOne
         /// 多选，空集合表示「不限」（分辨率）
@@ -67,12 +70,17 @@ nonisolated struct SourceFilter: Identifiable, Sendable {
     let id: String
     let title: String
     let mode: Mode
-    let options: [SourceOption]
+    var options: [SourceOption]
     let defaultSelection: Set<String>
     /// 标题右侧的说明
     var note: String? = nil
     /// 未登录时标题右侧的说明
     var signedOutNote: String? = nil
+    enum Input: Sendable { case choices, numberRange, dateRange, date, text }
+    var input: Input = .choices
+    var requiresAccount = false
+
+    var allowsEmptySelection: Bool { mode != .atLeastOne && mode != .exactlyOne }
 }
 
 /// 一次搜索的条件快照

@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWindow.allowsAutomaticWindowTabbing = false
         StorageManager.configureImageCache()
         // 测试通过注入会话验证，不读取用户真实的 Pixiv 钥匙串。
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil && NSClassFromString("XCTestCase") == nil {
+        if !AppRuntime.isRunningTests {
             _ = PixivAccountSession.shared
         }
         LiveWallpaperController.shared.restore()
@@ -102,7 +102,7 @@ enum AppSettings {
 @main
 struct wallhavenApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var viewModel = WallpaperViewModel()
+    @StateObject private var viewModel = WallpaperViewModel(pixivAccount: AppRuntime.isRunningTests ? nil : .shared)
     @StateObject private var workshop = WorkshopViewModel()
     @StateObject private var liveController = LiveWallpaperController.shared
     @AppStorage(AppSettings.showStatusItemKey) private var showStatusItem = true

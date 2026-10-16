@@ -45,6 +45,7 @@ nonisolated struct PixivCredential: Codable, Sendable {
     }
 
     func load() throws -> PixivCredential? {
+        guard !AppRuntime.isRunningTests else { return nil }
         var request = query
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -59,6 +60,7 @@ nonisolated struct PixivCredential: Codable, Sendable {
     }
 
     func save(_ credential: PixivCredential) throws {
+        guard !AppRuntime.isRunningTests else { throw SteamAuthenticationError.keychain(errSecNotAvailable) }
         let data = try JSONEncoder().encode(credential)
         let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
@@ -73,6 +75,7 @@ nonisolated struct PixivCredential: Codable, Sendable {
     }
 
     func remove() throws {
+        guard !AppRuntime.isRunningTests else { throw SteamAuthenticationError.keychain(errSecNotAvailable) }
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw SteamAuthenticationError.keychain(status) }
     }
@@ -243,6 +246,8 @@ nonisolated enum PixivSessionError: LocalizedError {
     }
 
     private func validate(_ candidate: PixivCredential, epoch: UUID, origin: ValidationOrigin) async -> Bool {
+        // 宿主启动早于测试 Bundle 完成注入时，也不能使用真实凭据发请求。
+        guard !(AppRuntime.isRunningTests && keychain is PixivKeychain) else { return false }
         guard Self.validToken(candidate.phpsessid) else { errorMessage = PixivSessionError.invalidResponse.localizedDescription; return false }
         var request = URLRequest(url: URL(string: "https://www.pixiv.net/ajax/user/extra")!)
         request.httpShouldHandleCookies = false

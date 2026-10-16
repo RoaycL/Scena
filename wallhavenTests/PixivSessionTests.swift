@@ -155,6 +155,47 @@ import Testing
         #expect(session.errorMessage?.contains("会话已过期") == true)
     }
 
+    @Test func pixivLoginUnlocksItsFiltersAndLogoutRestoresSafeDefaults() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests()
+        let session = account(store, network, read: { [] })
+        let model = WallpaperViewModel(discoveryDefaults: preferences.make(), sources: [PixivSource()], searchLoader: { _, _ in [] }, pixivAccount: session)
+        model.query = "test"
+        let age = try #require(model.activeFilters.first { $0.id == "age" })
+        let restricted = try #require(age.options.first { $0.id == "r18" })
+        #expect(!model.isAvailable(restricted) && !model.isSourceAuthenticated)
+        let login = Task { await session.authenticate(cookies: [cookie()]) }
+        try await waitFor { network.pending[0] != nil }
+        network.finish(0)
+        #expect(await login.value)
+        try await waitFor { model.isPixivAuthenticated }
+        #expect(model.isAvailable(restricted) && model.isSourceAuthenticated)
+        model.toggle(restricted, in: age)
+        model.selectSort(try #require(model.activeSorts.first { $0.id == "popular_d" }))
+        model.setValues(["min=500"], in: try #require(model.activeFilters.first { $0.id == "bookmarks" }))
+        #expect(model.filterSelections["age"] == ["r18"])
+        await session.logout()
+        try await waitFor { !model.isPixivAuthenticated }
+        #expect(model.filterSelections["age"] == ["safe"] && model.filterSelections["bookmarks"] == [])
+        #expect(model.sortID == "date_d" && !model.isAvailable(restricted))
+    }
+
+    @Test func savedAdvancedFiltersRestoreAfterPersistentLoginValidation() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests(), defaults = preferences.make()
+        store.value = PixivCredential(phpsessid: "123_saved", userID: "123", userName: nil, updatedAt: Date())
+        let session = account(store, network, read: { [] })
+        defaults.set(["query": "test", "sort": "popular_d", "filters": ["age": ["r18"], "width": ["min=1920", "max=3840"], "date": ["min=2026-01-02"], "tool": ["Photoshop"]]], forKey: "wallper.discovery.pixiv.v2")
+        let model = WallpaperViewModel(discoveryDefaults: defaults, sources: [PixivSource()], searchLoader: { _, _ in [] }, pixivAccount: session)
+        #expect(model.filterSelections["age"] == ["safe"] && model.sortID == "date_d")
+        #expect(model.filterSelections["width"] == ["min=1920", "max=3840"])
+        let restore = Task { await session.checkLoginState() }
+        try await waitFor { network.pending[0] != nil }
+        network.finish(0)
+        #expect(await restore.value)
+        try await waitFor { model.isPixivAuthenticated }
+        #expect(model.filterSelections["age"] == ["r18"] && model.sortID == "popular_d")
+        #expect(model.filterSelections["date"] == ["min=2026-01-02"] && model.filterSelections["tool"] == ["Photoshop"])
+    }
+
     @Test func restartingLoginClearsStaleErrorAndRejectsOldValidation() async throws {
         let store = MemoryPixivKeychain(), network = ControlledPixivRequests()
         let session = account(store, network, read: { [] })
