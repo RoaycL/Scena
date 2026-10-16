@@ -712,18 +712,18 @@ private struct StorageSettings: View {
             }
 
             Section {
-                usageRow("Wallhaven", storage.usage.wallpapers, .blue)
+                usageRow("在线下载", storage.usage.wallpapers, .blue)
                 usageRow("本地导入", storage.usage.imported, .green)
                 usageRow("创意工坊壁纸", storage.usage.workshop, .purple)
-                usageRow("图片缓存", storage.usage.cache, .gray)
+                usageRow("缓存", storage.usage.cache, .gray)
                 HStack {
                     Spacer()
-                    Button("清除图片缓存") { storage.clearImageCache() }
+                    Button("清除缓存") { storage.clearImageCache() }
                 }
             } header: {
                 Text("空间占用")
             } footer: {
-                SettingsFootnote("图片缓存上限 1 GB，保留 14 天，清除后缩略图会重新下载。")
+                SettingsFootnote("包括缩略图和背景图（上限 1 GB，保留 14 天）、视频封面、在线视频预览、工坊动图预览和网页缓存。清除后会按需重新下载，不影响已下载的壁纸和登录状态。")
             }
         }
         .formStyle(.grouped)

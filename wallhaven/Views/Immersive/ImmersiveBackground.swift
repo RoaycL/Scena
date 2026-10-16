@@ -85,6 +85,7 @@ private struct BackgroundLayer: View {
     }
 
     @State private var isLiveReady = false
+    @State private var remoteVideoURL: URL?
     @State private var liveFailed = false
     @State private var hasSignalledReady = false
 
@@ -163,6 +164,12 @@ private struct BackgroundLayer: View {
             }
         }
         .onChange(of: staticOnly) { isLiveReady = false }
+        .task(id: item.id) {
+            guard let remote = item.remote, remote.isVideo else { return }
+            if let local = remote.localFileURL { remoteVideoURL = local; return }
+            guard let preview = remote.previewVideoURL else { return }
+            remoteVideoURL = try? await RemoteVideoCache.shared.localURL(for: preview)
+        }
     }
 
     private func layers(in size: CGSize) -> some View {
@@ -200,9 +207,10 @@ private struct BackgroundLayer: View {
                     .opacity(isLiveReady ? 1 : 0)
                 }
             } else if let remote = item.remote, remote.isVideo {
-                // 在线视频壁纸：先显示站点的封面图；下载过的播放本地原片，否则播放站点的低分辨率预览
+                // 在线视频壁纸：先显示站点的封面图；下载过的播放本地原片，
+                // 否则把低分辨率预览下载到缓存再播放（来回切换不重复下载）
                 poster(size: size)
-                if !staticOnly, let url = remote.localFileURL ?? remote.previewVideoURL {
+                if !staticOnly, let url = remoteVideoURL {
                     LoopingVideoView(url: url, onReady: { liveDidBecomeReady() })
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
@@ -211,6 +219,8 @@ private struct BackgroundLayer: View {
                 KFImage(source: full)
                     .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
                     .scaleFactor(ImageSizing.scale)
+                    // 本地图片直接读原文件就很快，背景大图不再写一份到磁盘缓存，额度留给在线图片
+                    .cacheMemoryOnly(item.local != nil)
                     .loadDiskFileSynchronously(false)
                     .cancelOnDisappear(true)
                     .onSuccess { _ in onReady() }
@@ -333,8 +343,8 @@ struct AnimatedPreviewImage: NSViewRepresentable {
 
         func load(_ url: URL, into view: NSImageView) {
             task = Task { [weak view] in
-                // URLSession 默认带 URLCache，重复查看不会重复下载
-                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                // 独立的大容量缓存：重复查看、来回切换不重复下载几 MB 的 GIF
+                guard let (data, _) = try? await CacheLocations.previewSession.data(from: url),
                       !Task.isCancelled,
                       let image = NSImage(data: data) else { return }
                 view?.image = image

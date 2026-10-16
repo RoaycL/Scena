@@ -238,7 +238,9 @@ struct ContentView: View {
         }
         guard !sources.isEmpty else { return }
         prefetcher?.stop()
-        let newPrefetcher = ImagePrefetcher(sources: sources, options: ImageSizing.backgroundOptions)
+        // 本地图片的背景大图只放内存（和背景层一致），不写磁盘缓存
+        let options = ImageSizing.backgroundOptions + (items[index].local != nil ? [.cacheMemoryOnly] : [])
+        let newPrefetcher = ImagePrefetcher(sources: sources, options: options)
         newPrefetcher.maxConcurrentDownloads = 2
         newPrefetcher.start()
         prefetcher = newPrefetcher

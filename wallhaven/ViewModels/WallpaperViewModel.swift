@@ -39,7 +39,9 @@ final class WallpaperViewModel: ObservableObject {
     /// （资料库扫描到新文件前，用 downloadedIDs 先显示为已下载，避免按钮闪回箭头）
     @Published private(set) var downloadingIDs: Set<String> = []
     @Published private(set) var downloadedIDs: Set<String> = []
-    @Published private(set) var tagsByID: [String: [String]] = WallpaperViewModel.loadTagCache()
+    @Published private(set) var tagsByID: [String: [String]] = [:]
+    /// 标签缓存的写入顺序（最旧的在前），超过上限时从前面淘汰
+    private var tagOrder: [String] = []
     private var tagCacheSave: Task<Void, Never>?
     private var tagRequests: Set<String> = []
 
@@ -81,6 +83,13 @@ final class WallpaperViewModel: ObservableObject {
         restoreDiscoveryPreferences()
         loadFavorites()
         loadFolders()
+        // 标签缓存约 1 MB，放到后台读取，不拖慢启动
+        Task { [weak self] in
+            let (tags, order) = await Task.detached(priority: .utility) { Self.loadTagCache() }.value
+            guard let self else { return }
+            tagsByID.merge(tags) { current, _ in current }
+            tagOrder = order.filter { !tagOrder.contains($0) } + tagOrder
+        }
     }
 
     var descriptor: WallpaperSourceDescriptor { source.descriptor }
@@ -527,12 +536,14 @@ final class WallpaperViewModel: ObservableObject {
 
     /// 按需加载壁纸标签（详情接口），结果缓存
     func loadTagsIfNeeded(for wallpaper: RemoteWallpaper) async {
-        guard tagsByID[wallpaper.id] == nil, tagRequests.insert(wallpaper.id).inserted else { return }
+        // 列表数据已经带标签的图源（Konachan、4K Wallpapers）不需要请求，也不写缓存
+        guard wallpaper.tags.isEmpty, tagsByID[wallpaper.id] == nil, tagRequests.insert(wallpaper.id).inserted else { return }
         defer { tagRequests.remove(wallpaper.id) }
         do {
             guard let source = WallpaperSources.source(id: wallpaper.sourceID) else { return }
             let tags = try await source.tags(for: wallpaper, credential: credential(for: wallpaper.sourceID))
             tagsByID[wallpaper.id] = tags
+            tagOrder.append(wallpaper.id)
             scheduleTagCacheSave()
         } catch {
             // 标签只是锦上添花，失败时静默
@@ -541,29 +552,40 @@ final class WallpaperViewModel: ObservableObject {
 
     private static let tagCacheLimit = 5000
 
-    private static var tagCacheURL: URL? {
+    nonisolated private static var tagCacheURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.roayc.wallhaven", isDirectory: true)
             .appendingPathComponent("wallhaven-tags.json")
     }
 
-    private static func loadTagCache() -> [String: [String]] {
-        guard let url = tagCacheURL, let data = try? Data(contentsOf: url),
-              let cache = try? JSONDecoder().decode([String: [String]].self, from: data) else { return [:] }
-        return cache
+    private struct TagEntry: Codable {
+        let id: String
+        let tags: [String]
     }
 
-    /// 合并短时间内的多次写入；超过上限时丢掉一部分旧条目（字典无序，只为控制体积）
+    /// 按写入顺序保存的数组；旧版本保存的是无序字典，读入后顺序不确定，但之后按新格式保存
+    nonisolated private static func loadTagCache() -> (tags: [String: [String]], order: [String]) {
+        guard let url = tagCacheURL, let data = try? Data(contentsOf: url) else { return ([:], []) }
+        if let entries = try? JSONDecoder().decode([TagEntry].self, from: data) {
+            return (Dictionary(entries.map { ($0.id, $0.tags) }, uniquingKeysWith: { _, last in last }), entries.map(\.id))
+        }
+        let legacy = (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
+        return (legacy, Array(legacy.keys))
+    }
+
+    /// 合并短时间内的多次写入；超过上限时淘汰最早写入的条目
     private func scheduleTagCacheSave() {
         tagCacheSave?.cancel()
         tagCacheSave = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self, !Task.isCancelled, let url = Self.tagCacheURL else { return }
-            var cache = tagsByID
-            if cache.count > Self.tagCacheLimit {
-                for key in cache.keys.prefix(cache.count - Self.tagCacheLimit) { cache.removeValue(forKey: key) }
-            }
-            guard let data = try? JSONEncoder().encode(cache) else { return }
+            var seen = Set<String>()
+            // 从后往前去重，保留每个 ID 最近一次的位置
+            var order = tagOrder.reversed().filter { tagsByID[$0] != nil && seen.insert($0).inserted }.reversed() as [String]
+            if order.count > Self.tagCacheLimit { order.removeFirst(order.count - Self.tagCacheLimit) }
+            tagOrder = order
+            let entries = order.compactMap { id in tagsByID[id].map { TagEntry(id: id, tags: $0) } }
+            guard let data = try? JSONEncoder().encode(entries) else { return }
             Task.detached(priority: .utility) {
                 try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? data.write(to: url, options: .atomic)

@@ -129,7 +129,8 @@ final class StorageManager: ObservableObject {
             async let wallpapers = Task.detached { Self.size(of: wallpaperFolder) }.value
             async let imported = Task.detached { Self.size(of: importFolder) }.value
             async let workshop = Task.detached { Self.size(of: workshopFolder) }.value
-            let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0) + (await VideoPosterCache.shared.diskSize())
+            async let others = Task.detached { CacheLocations.otherCachesSize() }.value
+            let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0) + (await VideoPosterCache.shared.diskSize()) + (await others)
             var usage = Usage(wallpapers: await wallpapers, imported: await imported, workshop: await workshop, cache: cache)
             // 默认位置下导入文件夹在壁纸文件夹里面，避免重复计算
             if importFolder.path.hasPrefix(wallpaperFolder.path + "/") { usage.wallpapers -= usage.imported }
@@ -142,8 +143,9 @@ final class StorageManager: ObservableObject {
         Task {
             await VideoPosterCache.shared.clear()
             await ImageCache.default.clearDiskCache()
+            await CacheLocations.clearOtherCaches()
             refreshUsage()
-            ToastCenter.shared.show("图片缓存已清除", style: .success)
+            ToastCenter.shared.show("缓存已清除", style: .success)
         }
     }
 

@@ -120,6 +120,11 @@ private struct VisibleRotation: ViewModifier {
 }
 
 extension View {
+    /// 所在窗口可见性变化（最小化、被完全遮挡、App 隐藏时为 false）
+    func onWindowVisibilityChange(_ action: @escaping (Bool) -> Void) -> some View {
+        background(WindowVisibilityProbe(onChange: action).frame(width: 0, height: 0))
+    }
+
     func rotatingWhileVisible(_ enabled: Bool = true, duration: Double = 1) -> some View {
         modifier(VisibleRotation(enabled: enabled, duration: duration))
     }

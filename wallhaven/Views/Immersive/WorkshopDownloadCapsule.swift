@@ -81,12 +81,13 @@ private struct DownloadFill: View {
     }
 }
 
-/// 一道从左往右循环流过的柔和高光
+/// 一道从左往右循环流过的柔和高光；窗口最小化或被遮挡时停止刷新
 private struct Sheen: View {
     let width: CGFloat
+    @State private var isWindowVisible = true
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !isWindowVisible)) { context in
             let period = 1.6
             let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
             let band = max(60, width * 0.35)
@@ -96,5 +97,6 @@ private struct Sheen: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .allowsHitTesting(false)
+        .onWindowVisibilityChange { isWindowVisible = $0 }
     }
 }
