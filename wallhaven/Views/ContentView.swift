@@ -22,6 +22,7 @@ enum MainTab: String, CaseIterable, Identifiable {
 
 /// 「发现」「收藏」页签里的来源切换
 enum ContentSource: String, CaseIterable, Identifiable {
+    /// 在线图源（具体是哪个由 WallpaperViewModel 的当前图源决定；存储值沿用最初的名字）
     case wallhaven = "Wallhaven"
     case workshop = "创意工坊"
 
@@ -31,10 +32,12 @@ enum ContentSource: String, CaseIterable, Identifiable {
 /// 收藏的来源筛选：全部合并 Wallhaven 收藏与创意工坊订阅。
 enum CollectionSource: String, CaseIterable, Identifiable {
     case all = "全部"
+    /// 在线图源的收藏（存储值沿用最初只有 Wallhaven 时的名字）
     case wallhaven = "Wallhaven"
     case workshop = "创意工坊"
 
     var id: String { rawValue }
+    var title: String { self == .wallhaven ? "在线壁纸" : rawValue }
 }
 
 /// 页签 + 来源决定实际显示的画廊页面
@@ -889,10 +892,26 @@ struct ContentView: View {
     /// 页签上显示的当前来源；nil 表示这个页签没有来源可选
     private func sourceTitle(for tab: MainTab) -> String? {
         switch tab {
-        case .discover: discoverSource.rawValue
-        case .collections: collectionSource == .all ? "" : collectionSource.rawValue
-        case .library: librarySource == .all ? "" : librarySource.rawValue
+        case .discover: discoverSource == .workshop ? discoverSource.rawValue : viewModel.descriptor.name
+        case .collections: collectionSource == .all ? "" : collectionSource.title
+        case .library: librarySource == .all ? "" : librarySource.title
         case .playlists: nil
+        }
+    }
+
+    private static let workshopSelection = "workshop"
+
+    /// 发现页的来源菜单：选在线图源时切换图源，选创意工坊时切到工坊页面
+    private var discoverSelection: Binding<String> {
+        Binding {
+            discoverSource == .workshop ? Self.workshopSelection : viewModel.descriptor.id
+        } set: { id in
+            if id == Self.workshopSelection {
+                discoverSource = .workshop
+            } else if let source = WallpaperSources.source(id: id) {
+                discoverSource = .wallhaven
+                viewModel.selectSource(source)
+            }
         }
     }
 
@@ -900,18 +919,23 @@ struct ContentView: View {
     private func sourcePicker(for tab: MainTab) -> some View {
         switch tab {
         case .discover:
-            Picker("来源", selection: $discoverSource) {
-                ForEach(ContentSource.allCases) { Text($0.rawValue).tag($0) }
+            // 在线图源 + 创意工坊
+            Picker("来源", selection: discoverSelection) {
+                ForEach(WallpaperSources.all, id: \.descriptor.id) { source in
+                    Text(source.descriptor.name).tag(source.descriptor.id)
+                }
+                Divider()
+                Text(ContentSource.workshop.rawValue).tag(Self.workshopSelection)
             }
             .pickerStyle(.inline)
         case .collections:
             Picker("来源", selection: $collectionSource) {
-                ForEach(CollectionSource.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(CollectionSource.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.inline)
         case .library:
             Picker("来源", selection: $librarySource) {
-                ForEach(LibrarySource.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(LibrarySource.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.inline)
         case .playlists:
@@ -1324,14 +1348,17 @@ struct ContentView: View {
     private func infoPanel(for item: GalleryItem) -> some View {
         switch item.origin {
         case .remote(let wallpaper):
-            let tags = viewModel.tagsByID[wallpaper.id] ?? []
+            let tags = viewModel.tagsByID[wallpaper.id] ?? wallpaper.tags
             InfoPanel(
-                eyebrow: "\(page == .favorites ? "FAVORITES" : "FEATURED") · #\(wallpaper.id)",
-                title: (tags.first ?? wallpaper.category ?? wallpaper.sourceName).capitalized,
+                eyebrow: "\(page == .favorites ? "FAVORITES" : "FEATURED") · \(wallpaper.sourceName.uppercased())\(wallpaper.isVideo ? " · LIVE" : "")",
+                // 站点有标题时用标题，否则用第一个标签
+                title: wallpaper.title ?? (tags.first ?? wallpaper.category ?? wallpaper.sourceName).replacingOccurrences(of: "_", with: " ").capitalized,
                 meta: remoteMeta(wallpaper),
                 colors: wallpaper.colors,
-                tags: Array(tags.dropFirst()),
+                tags: wallpaper.title == nil ? Array(tags.dropFirst()) : tags,
                 onTag: { tag in
+                    // 在这张壁纸所属的图源里搜索这个标签
+                    if let source = WallpaperSources.source(id: wallpaper.sourceID) { viewModel.selectSource(source) }
                     discoverSource = .wallhaven
                     switchTab(.discover)
                     viewModel.searchTag(tag)

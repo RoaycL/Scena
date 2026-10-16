@@ -29,6 +29,9 @@ nonisolated struct WallpaperSourceDescriptor: Sendable {
     let defaultSort: String
     /// 「随机换一张」使用的排序；没有时用当前排序随机挑
     let randomSort: String?
+    /// 加载这个图源的图片、视频时附带的请求头（防盗链的 Referer 等），只对 mediaHosts 里的域名生效
+    var requestHeaders: [String: String] = [:]
+    var mediaHosts: [String] = []
 }
 
 nonisolated struct SourceOption: Identifiable, Hashable, Sendable {
@@ -47,6 +50,8 @@ nonisolated struct SourceFilter: Identifiable, Sendable {
         case atLeastOne
         /// 多选，空集合表示「不限」（分辨率）
         case anyOf
+        /// 单选，空集合表示「不限」（分类）
+        case oneOf
     }
 
     let id: String
@@ -76,9 +81,50 @@ nonisolated struct WallpaperQuery: Equatable, Sendable {
 nonisolated protocol TransientSourceError: Error {}
 
 nonisolated enum WallpaperSources {
-    static let all: [any WallpaperSource] = [WallhavenSource()]
+    static let all: [any WallpaperSource] = [WallhavenSource(), KonachanSource(), FourKWallpapersSource(), MotionBGSource()]
 
     static func source(id: String) -> (any WallpaperSource)? {
         all.first { $0.descriptor.id == id }
+    }
+
+    /// 某个图片 / 视频地址需要附带的请求头（按域名匹配图源）
+    static func requestHeaders(for url: URL) -> [String: String] {
+        guard let host = url.host?.lowercased() else { return [:] }
+        return all.first { source in
+            source.descriptor.mediaHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+        }?.descriptor.requestHeaders ?? [:]
+    }
+}
+
+/// 网页类图源共用的请求：带浏览器 User-Agent，429 / 503 视为稍后可重试
+nonisolated enum SourceHTTP {
+    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+
+    static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 60
+        return URLSession(configuration: config)
+    }()
+
+    struct Busy: LocalizedError, TransientSourceError {
+        var errorDescription: String? { "图源暂时繁忙，请稍后再试" }
+    }
+
+    static func data(from url: URL, accept: String = "text/html,application/xhtml+xml") async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 429 || status == 503 { throw Busy() }
+        // 翻过最后一页时网页类站点返回 404：当作没有更多
+        if status == 404 { return Data() }
+        guard (200...299).contains(status) else { throw WallperError.network("加载壁纸失败（\(status)）。") }
+        return data
+    }
+
+    static func string(from url: URL) async throws -> String {
+        String(decoding: try await data(from: url), as: UTF8.self)
     }
 }

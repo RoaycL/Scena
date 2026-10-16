@@ -140,7 +140,8 @@ private struct BackgroundLayer: View {
 
     /// 动态壁纸的封面：清晰显示（不模糊），读取失败时什么也不显示，由外层保留上一张
     private func poster(size: CGSize) -> some View {
-        KFImage(source: item.local.flatMap { $0.isVideo ? Source.provider(VideoPosterProvider(url: $0.url, tier: .poster)) : nil } ?? item.thumbnailSource)
+        KFImage(source: item.local.flatMap { $0.isVideo ? Source.provider(VideoPosterProvider(url: $0.url, tier: .poster)) : nil }
+                ?? (item.remote?.isVideo == true ? item.fullSource : nil) ?? item.thumbnailSource)
             // 工坊预览图与缩略图共享处理器；本地视频使用独立的大图海报缓存。
             .setProcessor(item.workshop != nil ? item.thumbnailProcessor : DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
             .scaleFactor(ImageSizing.scale)
@@ -197,6 +198,14 @@ private struct BackgroundLayer: View {
                     }
                     .frame(width: size.width, height: size.height)
                     .opacity(isLiveReady ? 1 : 0)
+                }
+            } else if let remote = item.remote, remote.isVideo {
+                // 在线视频壁纸：先显示站点的封面图；下载过的播放本地原片，否则播放站点的低分辨率预览
+                poster(size: size)
+                if !staticOnly, let url = remote.localFileURL ?? remote.previewVideoURL {
+                    LoopingVideoView(url: url, onReady: { liveDidBecomeReady() })
+                        .frame(width: size.width, height: size.height)
+                        .opacity(isLiveReady ? 1 : 0)
                 }
             } else if let full = item.fullSource {
                 KFImage(source: full)

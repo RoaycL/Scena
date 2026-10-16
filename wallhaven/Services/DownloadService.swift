@@ -37,7 +37,11 @@ struct DownloadService {
             return destination
         }
 
-        let (tempURL, response) = try await session.download(from: wallpaper.imageURL)
+        var request = URLRequest(url: wallpaper.imageURL)
+        for (field, value) in WallpaperSources.requestHeaders(for: wallpaper.imageURL) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        let (tempURL, response) = try await session.download(for: request)
         defer { try? fm.removeItem(at: tempURL) }
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             throw WallperError.network("下载失败。")

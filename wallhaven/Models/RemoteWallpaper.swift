@@ -9,6 +9,10 @@
 import Foundation
 
 nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
+    enum MediaType: String, Codable, Sendable {
+        case image, video
+    }
+
     /// 全局唯一：收藏、已下载文件名、播放列表都用它。新图源用「图源ID-原始ID」；
     /// Wallhaven 为兼容已有收藏和已下载的文件保留原始 ID
     let id: String
@@ -16,9 +20,16 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
     let sourceID: String
     /// 网页详情页（「在浏览器中打开」）
     let pageURL: URL
-    /// 原图
+    /// 原图 / 原视频（下载与设为壁纸用）
     let imageURL: URL
     let thumbURL: URL?
+    /// 背景大图：原图太大（如 PNG 原档）或是视频时，用这张代替；nil 时直接显示原图
+    let posterURL: URL?
+    /// 视频的低分辨率预览（画廊背景直接播放）；下载前用它预览，下载后播放本地原片
+    let previewVideoURL: URL?
+    let mediaType: MediaType
+    /// 站点给出的标题；没有时界面用第一个标签
+    let title: String?
     /// 「1920x1080」；未知时为空
     let resolution: String
     let category: String?
@@ -31,7 +42,8 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
     /// 列表接口直接给出的标签；需要单独请求的由图源的 tags(for:) 提供
     let tags: [String]
 
-    init(id: String, sourceID: String, pageURL: URL, imageURL: URL, thumbURL: URL?, resolution: String = "",
+    init(id: String, sourceID: String, pageURL: URL, imageURL: URL, thumbURL: URL?, posterURL: URL? = nil,
+         previewVideoURL: URL? = nil, mediaType: MediaType = .image, title: String? = nil, resolution: String = "",
          category: String? = nil, rating: String? = nil, favorites: Int = 0, views: Int = 0, fileSize: Int = 0,
          colors: [String] = [], tags: [String] = []) {
         self.id = id
@@ -39,6 +51,10 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
         self.pageURL = pageURL
         self.imageURL = imageURL
         self.thumbURL = thumbURL
+        self.posterURL = posterURL
+        self.previewVideoURL = previewVideoURL
+        self.mediaType = mediaType
+        self.title = title
         self.resolution = resolution
         self.category = category
         self.rating = rating
@@ -53,6 +69,8 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
     // 没有 source 字段的旧数据都来自 Wallhaven
     private enum CodingKeys: String, CodingKey {
         case id, source, url, path, thumbs, resolution, category, purity, ratio, favorites, views, colors, tags
+        case poster, title, media
+        case previewVideo = "preview_video"
         case fileSize = "file_size"
     }
 
@@ -68,6 +86,10 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
         imageURL = try container.decode(URL.self, forKey: .path)
         thumbURL = try? container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs)
             .decodeIfPresent(URL.self, forKey: .large)
+        posterURL = try container.decodeIfPresent(URL.self, forKey: .poster)
+        previewVideoURL = try container.decodeIfPresent(URL.self, forKey: .previewVideo)
+        mediaType = try container.decodeIfPresent(MediaType.self, forKey: .media) ?? .image
+        title = try container.decodeIfPresent(String.self, forKey: .title)
         resolution = try container.decodeIfPresent(String.self, forKey: .resolution) ?? ""
         category = try container.decodeIfPresent(String.self, forKey: .category)
         rating = try container.decodeIfPresent(String.self, forKey: .purity)
@@ -94,6 +116,10 @@ nonisolated struct RemoteWallpaper: Codable, Identifiable, Hashable, Sendable {
         try container.encode(fileSize, forKey: .fileSize)
         try container.encode(colors, forKey: .colors)
         if !tags.isEmpty { try container.encode(tags, forKey: .tags) }
+        try container.encodeIfPresent(posterURL, forKey: .poster)
+        try container.encodeIfPresent(previewVideoURL, forKey: .previewVideo)
+        if mediaType != .image { try container.encode(mediaType, forKey: .media) }
+        try container.encodeIfPresent(title, forKey: .title)
         var thumbs = container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs)
         try thumbs.encodeIfPresent(thumbURL, forKey: .large)
     }
@@ -112,8 +138,13 @@ extension RemoteWallpaper {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    var isVideo: Bool { mediaType == .video }
+
+    /// 背景显示用的图片（视频显示封面）
+    var displayURL: URL { posterURL ?? (isVideo ? (thumbURL ?? imageURL) : imageURL) }
+
     var downloadFileName: String {
-        let ext = imageURL.pathExtension.isEmpty ? "jpg" : imageURL.pathExtension
+        let ext = isVideo ? "mp4" : (imageURL.pathExtension.isEmpty ? "jpg" : imageURL.pathExtension)
         return "\(id).\(ext)"
     }
 }

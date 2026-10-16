@@ -16,6 +16,8 @@ enum LibrarySource: String, CaseIterable, Identifiable {
     case imported = "本地导入"
 
     var id: String { rawValue }
+    /// 在线图源下载的文件都在同一个下载目录（存储值沿用最初的名字）
+    var title: String { self == .wallhaven ? "在线下载" : rawValue }
 
     func matches(_ item: GalleryItem) -> Bool {
         switch self {
@@ -39,7 +41,7 @@ extension GalleryItem {
     var libraryKindLabel: String {
         switch origin {
         case .remote(let wallpaper): wallpaper.sourceName
-        case .local(let item): "\(item.source == .wallhaven ? "Wallhaven" : "本地导入") · \(item.isVideo ? "视频" : "图片")"
+        case .local(let item): "\(item.source == .wallhaven ? "在线下载" : "本地导入") · \(item.isVideo ? "视频" : "图片")"
         case .workshop(let item): "工坊 · \(item.type.label)"
         }
     }

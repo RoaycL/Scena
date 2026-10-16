@@ -43,6 +43,8 @@ extension GalleryItem {
             return live != nil && item.url.standardizedFileURL == live
         case .local(let item):
             return live == nil && Self.isDesktopImage(item.url)
+        case .remote(let wallpaper) where wallpaper.isVideo:
+            return live != nil && wallpaper.localFileURL?.standardizedFileURL == live
         case .remote(let wallpaper):
             guard live == nil, let url = wallpaper.localFileURL else { return false }
             return Self.isDesktopImage(url)

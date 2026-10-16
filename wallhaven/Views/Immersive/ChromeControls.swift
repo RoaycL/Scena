@@ -45,7 +45,7 @@ struct ToastView: View {
     }
 }
 
-/// 筛选面板：图源、筛选项、排序合并到一个面板里，顶栏只留一个按钮。
+/// 筛选面板：筛选项、排序合并到一个面板里，顶栏只留一个按钮（图源在顶部页签的来源菜单里切换）。
 /// 筛选项由当前图源的 descriptor 生成，新增图源不需要改这里
 struct FilterPanel: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
@@ -57,23 +57,11 @@ struct FilterPanel: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.primary)
 
-            if WallpaperSources.all.count > 1 {
-                GlassSection(title: "图源") {
-                    FlowLayout {
-                        ForEach(WallpaperSources.all, id: \.descriptor.id) { source in
-                            GlassChip(title: source.descriptor.name, isOn: source.descriptor.id == descriptor.id) {
-                                viewModel.selectSource(source)
-                            }
-                        }
-                    }
-                }
-            }
-
             ForEach(descriptor.filters) { filter in
                 let note = viewModel.isAuthenticated ? filter.note : (filter.signedOutNote ?? filter.note)
                 GlassSection(title: filter.title, trailing: note) {
                     FlowLayout {
-                        if filter.mode == .anyOf {
+                        if filter.mode != .atLeastOne {
                             GlassChip(title: "不限", isOn: viewModel.filterSelections[filter.id]?.isEmpty ?? true) {
                                 viewModel.toggle(nil, in: filter)
                             }
@@ -88,11 +76,13 @@ struct FilterPanel: View {
                 }
             }
 
-            GlassSection(title: "排序") {
-                FlowLayout {
-                    ForEach(descriptor.sorts) { option in
-                        GlassChip(title: option.title, isOn: viewModel.sortID == option.id) {
-                            viewModel.sortID = option.id
+            if descriptor.sorts.count > 1 {
+                GlassSection(title: "排序") {
+                    FlowLayout {
+                        ForEach(descriptor.sorts) { option in
+                            GlassChip(title: option.title, isOn: viewModel.sortID == option.id) {
+                                viewModel.sortID = option.id
+                            }
                         }
                     }
                 }

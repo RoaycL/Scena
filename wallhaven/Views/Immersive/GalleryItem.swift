@@ -40,7 +40,7 @@ struct GalleryItem: Identifiable, Equatable {
         return nil
     }
 
-    var isVideo: Bool { local?.isVideo ?? false }
+    var isVideo: Bool { local?.isVideo ?? remote?.isVideo ?? false }
 
     /// 已下载、可在背景实时渲染的工坊壁纸
     var playableWorkshopItem: WorkshopItem? {
@@ -86,6 +86,8 @@ struct GalleryItem: Identifiable, Equatable {
     var fullSource: Source? {
         switch origin {
         case .remote(let wallpaper):
+            // 视频和超大原档显示封面图
+            if wallpaper.isVideo || wallpaper.posterURL != nil { return wallpaper.displayURL.convertToSource() }
             // 已下载到本地的直接读本地文件：切换更快，离线也能看
             // 沿用原图地址作为缓存键：下载完成后切到本地文件时直接命中已加载的图片，不会重新加载、闪一下
             if let local = wallpaper.localFileURL {

@@ -153,6 +153,8 @@ final class StorageManager: ObservableObject {
         cache.diskStorage.config.sizeLimit = 1024 * 1024 * 1024
         cache.diskStorage.config.expiration = .days(14)
         cache.memoryStorage.config.totalCostLimit = 300 * 1024 * 1024
+        // 有防盗链的图源（按域名）需要附带请求头才能加载图片
+        KingfisherManager.shared.defaultOptions.append(.requestModifier(SourceRequestModifier()))
     }
 
     nonisolated private static func size(of folder: URL) -> Int64 {
@@ -388,5 +390,17 @@ final class StorageManager: ObservableObject {
                 }
             })
         }
+    }
+}
+
+/// 给在线图源的图片请求加上该图源要求的请求头
+nonisolated struct SourceRequestModifier: ImageDownloadRequestModifier {
+    func modified(for request: URLRequest) -> URLRequest? {
+        guard let url = request.url else { return request }
+        let headers = WallpaperSources.requestHeaders(for: url)
+        guard !headers.isEmpty else { return request }
+        var modified = request
+        for (field, value) in headers { modified.setValue(value, forHTTPHeaderField: field) }
+        return modified
     }
 }

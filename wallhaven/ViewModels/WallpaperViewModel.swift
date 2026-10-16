@@ -168,9 +168,14 @@ final class WallpaperViewModel: ObservableObject {
                 errorMessage = "需要登录才能开启 \(option.title)。"
                 return
             }
-            selection.formSymmetricDifference([option.id])
-            // 至少保留一项：取消最后一项时不生效
-            if selection.isEmpty, filter.mode == .atLeastOne { return }
+            if filter.mode == .oneOf {
+                // 单选：再点一次已选项回到「不限」
+                selection = selection.contains(option.id) ? [] : [option.id]
+            } else {
+                selection.formSymmetricDifference([option.id])
+                // 至少保留一项：取消最后一项时不生效
+                if selection.isEmpty, filter.mode == .atLeastOne { return }
+            }
         } else {
             selection = []
         }
