@@ -179,7 +179,7 @@ struct CircleIconButton: View {
 /// 收藏按钮：点击菜单可选择收藏夹
 struct FavoriteMenuButton: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
-    let wallpaper: WallhavenWallpaper
+    let wallpaper: RemoteWallpaper
     @State private var burst = 0
 
     var body: some View {

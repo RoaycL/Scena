@@ -12,7 +12,9 @@ import SwiftUI
 
 struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable {
-        case wallhaven, local, workshop
+        /// 在线图源（存储值沿用最初只有 Wallhaven 时的名字）
+        case remote = "wallhaven"
+        case local, workshop
     }
 
     let id: String
@@ -20,10 +22,16 @@ struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
     let title: String
     /// 缩略图：远程 URL 字符串或本地文件路径
     let thumbnail: String?
-    /// wallhaven 壁纸（播放时下载）
-    let wallhaven: WallhavenWallpaper?
+    /// 在线壁纸（播放时下载）
+    let remote: RemoteWallpaper?
     /// 本地文件或工坊壁纸文件夹
     let path: String?
+
+    // 在线壁纸沿用旧的存储键，已保存的播放列表无需迁移
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, thumbnail, path
+        case remote = "wallhaven"
+    }
 
     var thumbnailURL: URL? {
         guard let thumbnail else { return nil }
@@ -32,25 +40,25 @@ struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
 
     var kindLabel: String {
         switch kind {
-        case .wallhaven: "wallhaven"
+        case .remote: remote?.sourceName ?? "在线"
         case .local: MediaType.isVideo(URL(fileURLWithPath: path ?? "")) ? "本地视频" : "本地图片"
         case .workshop: "工坊"
         }
     }
 
-    private init(id: String, kind: Kind, title: String, thumbnail: String?, wallhaven: WallhavenWallpaper?, path: String?) {
+    private init(id: String, kind: Kind, title: String, thumbnail: String?, remote: RemoteWallpaper?, path: String?) {
         self.id = id
         self.kind = kind
         self.title = title
         self.thumbnail = thumbnail
-        self.wallhaven = wallhaven
+        self.remote = remote
         self.path = path
     }
 
     /// 路径变化后的副本（本地文件的条目 ID 也随路径更新）
     func with(path: String?, thumbnail: String?) -> PlaylistEntry {
         let newID = kind == .local && path != nil ? "file-\(path!)" : id
-        return PlaylistEntry(id: newID, kind: kind, title: title, thumbnail: thumbnail, wallhaven: wallhaven, path: path)
+        return PlaylistEntry(id: newID, kind: kind, title: title, thumbnail: thumbnail, remote: remote, path: path)
     }
 
     /// 从画廊条目创建；未下载的工坊壁纸返回 nil
@@ -58,17 +66,17 @@ struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
         switch item.origin {
         case .remote(let wallpaper):
             id = "wh-\(wallpaper.id)"
-            kind = .wallhaven
-            title = "wallhaven #\(wallpaper.id)"
-            thumbnail = (wallpaper.thumbURL ?? wallpaper.path).absoluteString
-            self.wallhaven = wallpaper
+            kind = .remote
+            title = wallpaper.displayTitle
+            thumbnail = (wallpaper.thumbURL ?? wallpaper.imageURL).absoluteString
+            remote = wallpaper
             path = nil
         case .local(let local):
             id = "file-\(local.url.path)"
             kind = .local
             title = local.displayName
             thumbnail = local.isVideo ? nil : local.url.path
-            wallhaven = nil
+            remote = nil
             path = local.url.path
         case .workshop(let workshop):
             guard let folder = workshop.localFolder, workshop.type.isPlayable else { return nil }
@@ -76,7 +84,7 @@ struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
             kind = .workshop
             title = workshop.title
             thumbnail = workshop.previewURL.map { $0.isFileURL ? $0.path : $0.absoluteString }
-            wallhaven = nil
+            remote = nil
             path = folder.path
         }
     }
@@ -158,7 +166,7 @@ final class PlaylistManager: ObservableObject {
     /// wallhaven 壁纸加入播放列表时立即下载到本地（和「设为壁纸」一样存进 Scena/Wallhaven）：
     /// 轮到时不用再等下载，离线也能播放，也会出现在资料库里
     private func downloadLocalCopies(of entries: [PlaylistEntry]) {
-        let wallpapers = entries.compactMap(\.wallhaven)
+        let wallpapers = entries.compactMap(\.remote)
         guard !wallpapers.isEmpty else { return }
         let tracker = WallhavenDownloadTracker.shared
         wallpapers.forEach { tracker.begin($0.id) }
@@ -462,8 +470,8 @@ final class PlaylistManager: ObservableObject {
             return
         }
         switch entry.kind {
-        case .wallhaven:
-            guard let wallpaper = entry.wallhaven else { throw WallperError.wallpaper("缺少壁纸信息。") }
+        case .remote:
+            guard let wallpaper = entry.remote else { throw WallperError.wallpaper("缺少壁纸信息。") }
             let fileURL = try await DownloadService().download(wallpaper)
             try checkCurrent()
             try WallpaperManager.applyWallpaper(from: fileURL)

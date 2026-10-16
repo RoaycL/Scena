@@ -815,7 +815,7 @@ private struct PlaylistLargePreview: View {
             if let item {
                 ImmersiveBackground(item: item, showsBlackBase: false, onDisplayed: { displayed in
                     let matches: Bool = switch (entry.kind, displayed.origin) {
-                    case (.wallhaven, .remote(let wallpaper)): wallpaper.id == entry.wallhaven?.id
+                    case (.remote, .remote(let wallpaper)): wallpaper.id == entry.remote?.id
                     case (.local, .local(let local)): local.url.path == entry.path
                     case (.workshop, .workshop(let workshop)): workshop.localFolder?.path == entry.path
                     default: false
@@ -823,7 +823,7 @@ private struct PlaylistLargePreview: View {
                     if matches { onDisplayed(entry.id) }
                 }, onFailed: { failed in
                     let matches: Bool = switch (entry.kind, failed.origin) {
-                    case (.wallhaven, .remote(let wallpaper)): wallpaper.id == entry.wallhaven?.id
+                    case (.remote, .remote(let wallpaper)): wallpaper.id == entry.remote?.id
                     case (.local, .local(let local)): local.url.path == entry.path
                     case (.workshop, .workshop(let workshop)): workshop.localFolder?.path == entry.path
                     default: false
@@ -842,8 +842,8 @@ private struct PlaylistLargePreview: View {
         .task(id: entry) {
             isLoading = true
             switch entry.kind {
-            case .wallhaven:
-                item = entry.wallhaven.map { GalleryItem(origin: .remote($0)) }
+            case .remote:
+                item = entry.remote.map { GalleryItem(origin: .remote($0)) }
             case .local:
                 if let path = entry.path, FileManager.default.fileExists(atPath: path) {
                     item = GalleryItem(origin: .local(LocalMediaItem(url: URL(fileURLWithPath: path), creationDate: .distantPast, fileSize: 0, source: .imported)))

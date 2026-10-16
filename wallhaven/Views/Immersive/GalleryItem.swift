@@ -10,7 +10,7 @@ import Kingfisher
 /// 画廊中的一项：在线壁纸或本地文件，三个页面共用同一套画廊组件
 struct GalleryItem: Identifiable, Equatable {
     enum Origin: Equatable {
-        case remote(WallhavenWallpaper)
+        case remote(RemoteWallpaper)
         case local(LocalMediaItem)
         case workshop(WorkshopItem)
     }
@@ -25,7 +25,7 @@ struct GalleryItem: Identifiable, Equatable {
         }
     }
 
-    var remote: WallhavenWallpaper? {
+    var remote: RemoteWallpaper? {
         if case .remote(let wallpaper) = origin { return wallpaper }
         return nil
     }
@@ -52,7 +52,7 @@ struct GalleryItem: Identifiable, Equatable {
     var thumbnailSource: Source? {
         switch origin {
         case .remote(let wallpaper):
-            return (wallpaper.thumbURL ?? wallpaper.path).convertToSource()
+            return (wallpaper.thumbURL ?? wallpaper.imageURL).convertToSource()
         case .local(let item):
             if item.isVideo {
                 return .provider(VideoPosterProvider(url: item.url, tier: .list))
@@ -89,9 +89,9 @@ struct GalleryItem: Identifiable, Equatable {
             // 已下载到本地的直接读本地文件：切换更快，离线也能看
             // 沿用原图地址作为缓存键：下载完成后切到本地文件时直接命中已加载的图片，不会重新加载、闪一下
             if let local = wallpaper.localFileURL {
-                return .provider(LocalFileImageDataProvider(fileURL: local, cacheKey: wallpaper.path.absoluteString))
+                return .provider(LocalFileImageDataProvider(fileURL: local, cacheKey: wallpaper.imageURL.absoluteString))
             }
-            return wallpaper.path.convertToSource()
+            return wallpaper.imageURL.convertToSource()
         case .local(let item):
             return item.isVideo ? nil : .provider(LocalFileImageDataProvider(fileURL: item.url))
         case .workshop(let item):
@@ -171,14 +171,5 @@ nonisolated struct GIFPosterFrameProcessor: ImageProcessor {
             total += Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
         }
         return total / (64 * 3)
-    }
-}
-
-extension WallhavenWallpaper {
-    /// 已下载到 Scena/Wallhaven 的本地文件（下载时以壁纸 ID 命名）
-    var localFileURL: URL? {
-        let ext = path.pathExtension.isEmpty ? "jpg" : path.pathExtension
-        let url = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true).appendingPathComponent("\(id).\(ext)")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }

@@ -25,20 +25,19 @@ struct DownloadService {
     private let session = URLSession(configuration: .default)
     private let fm = FileManager.default
 
-    func download(_ wallpaper: WallhavenWallpaper) async throws -> URL {
+    func download(_ wallpaper: RemoteWallpaper) async throws -> URL {
         try StorageManager.shared.ensureAvailable()
         let destinationFolder = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true)
         if !fm.fileExists(atPath: destinationFolder.path) {
             try fm.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
         }
 
-        let ext = wallpaper.path.pathExtension.isEmpty ? "jpg" : wallpaper.path.pathExtension
-        let destination = destinationFolder.appendingPathComponent("\(wallpaper.id).\(ext)")
+        let destination = destinationFolder.appendingPathComponent(wallpaper.downloadFileName)
         if fm.fileExists(atPath: destination.path) {
             return destination
         }
 
-        let (tempURL, response) = try await session.download(from: wallpaper.path)
+        let (tempURL, response) = try await session.download(from: wallpaper.imageURL)
         defer { try? fm.removeItem(at: tempURL) }
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             throw WallperError.network("下载失败。")

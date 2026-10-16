@@ -19,137 +19,66 @@ struct FavoriteFolder: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-struct WallhavenCollection: Decodable, Sendable {
+nonisolated struct WallhavenCollection: Decodable, Sendable {
     let id: Int
     let label: String
     let views: Int
     let count: Int
 }
 
-struct WallhavenCollectionsResponse: Decodable, Sendable {
+nonisolated struct WallhavenCollectionsResponse: Decodable, Sendable {
     let data: [WallhavenCollection]
 }
 
-struct WallhavenCollectionWallpapersResponse: Decodable, Sendable {
+nonisolated struct WallhavenCollectionWallpapersResponse: Decodable, Sendable {
     let data: [WallhavenWallpaper]
     let meta: WallhavenMeta
 }
 
-struct WallhavenMeta: Decodable, Sendable {
+nonisolated struct WallhavenMeta: Decodable, Sendable {
     let current_page: Int
     let last_page: Int
 }
 
 
-struct WallhavenSearchResponse: Decodable, Sendable {
+nonisolated struct WallhavenSearchResponse: Decodable, Sendable {
     let data: [WallhavenWallpaper]
 }
 
-struct WallhavenSettingsResponse: Decodable, Sendable {
+nonisolated struct WallhavenSettingsResponse: Decodable, Sendable {
     let data: WallhavenSettingsData
 }
 
-struct WallhavenSettingsData: Decodable, Sendable {
+nonisolated struct WallhavenSettingsData: Decodable, Sendable {
     let purity: [String]
 }
 
-struct WallhavenWallpaper: Codable, Identifiable, Hashable, Sendable {
+/// Wallhaven 接口返回的壁纸，转换成 RemoteWallpaper 后再交给界面
+nonisolated struct WallhavenWallpaper: Decodable, Sendable {
     let id: String
     let url: URL
     let path: URL
-    let thumbURL: URL?
+    let thumbs: Thumbs?
     let resolution: String
     let category: String
-    let favorites: Int
-    let ratio: String
     let purity: String
-    let colors: [String]
-    let views: Int
-    let fileSize: Int
+    let favorites: Int
+    let views: Int?
+    let colors: [String]?
+    let file_size: Int?
 
-    enum CodingKeys: String, CodingKey {
-        case id
-        case url
-        case path
-        case thumbs
-        case resolution
-        case category
-        case favorites
-        case ratio
-        case purity
-        case colors
-        case views
-        case fileSize = "file_size"
+    struct Thumbs: Decodable, Sendable {
+        let large: URL?
     }
 
-    enum ThumbsCodingKeys: String, CodingKey {
-        case large
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        url = try container.decode(URL.self, forKey: .url)
-        path = try container.decode(URL.self, forKey: .path)
-        resolution = try container.decode(String.self, forKey: .resolution)
-        category = try container.decode(String.self, forKey: .category)
-        favorites = try container.decode(Int.self, forKey: .favorites)
-        ratio = try container.decode(String.self, forKey: .ratio)
-        purity = try container.decode(String.self, forKey: .purity)
-        // 旧版本收藏数据中没有这些字段
-        colors = try container.decodeIfPresent([String].self, forKey: .colors) ?? []
-        views = try container.decodeIfPresent(Int.self, forKey: .views) ?? 0
-        fileSize = try container.decodeIfPresent(Int.self, forKey: .fileSize) ?? 0
-
-        if let thumbsContainer = try? container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs) {
-            thumbURL = try thumbsContainer.decodeIfPresent(URL.self, forKey: .large)
-        } else {
-            thumbURL = nil
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(url, forKey: .url)
-        try container.encode(path, forKey: .path)
-        try container.encode(resolution, forKey: .resolution)
-        try container.encode(category, forKey: .category)
-        try container.encode(favorites, forKey: .favorites)
-        try container.encode(ratio, forKey: .ratio)
-        try container.encode(purity, forKey: .purity)
-        try container.encode(colors, forKey: .colors)
-        try container.encode(views, forKey: .views)
-        try container.encode(fileSize, forKey: .fileSize)
-
-        var thumbsContainer = container.nestedContainer(keyedBy: ThumbsCodingKeys.self, forKey: .thumbs)
-        try thumbsContainer.encodeIfPresent(thumbURL, forKey: .large)
+    var remote: RemoteWallpaper {
+        RemoteWallpaper(id: id, sourceID: WallhavenSource.id, pageURL: url, imageURL: path, thumbURL: thumbs?.large,
+                        resolution: resolution, category: category, rating: purity, favorites: favorites,
+                        views: views ?? 0, fileSize: file_size ?? 0, colors: colors ?? [])
     }
 }
 
-enum SortOrder: String, CaseIterable, Identifiable, Sendable {
-    case relevance
-    case random
-    case dateAdded = "date_added"
-    case views
-    case favorites
-    case toplist
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .relevance: return "相关性"
-        case .random: return "随机"
-        case .dateAdded: return "最新"
-        case .views: return "浏览量"
-        case .favorites: return "收藏数"
-        case .toplist: return "热门"
-        }
-    }
-}
-
-enum WallperError: LocalizedError, Sendable {
+nonisolated enum WallperError: LocalizedError, Sendable {
     case network(String)
     case io(String)
     case wallpaper(String)

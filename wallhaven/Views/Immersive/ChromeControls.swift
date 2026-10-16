@@ -45,40 +45,44 @@ struct ToastView: View {
     }
 }
 
-/// 筛选面板：分类、纯度、排序合并到一个面板里，顶栏只留一个按钮
+/// 筛选面板：图源、筛选项、排序合并到一个面板里，顶栏只留一个按钮。
+/// 筛选项由当前图源的 descriptor 生成，新增图源不需要改这里
 struct FilterPanel: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
 
     var body: some View {
+        let descriptor = viewModel.descriptor
         GlassPanel(width: 300) {
             Text("筛选")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.primary)
 
-            GlassSection(title: "分类") {
-                FlowLayout {
-                    GlassChip(title: "常规", isOn: viewModel.includeGeneral, action: viewModel.toggleGeneral)
-                    GlassChip(title: "动漫", isOn: viewModel.includeAnime, action: viewModel.toggleAnime)
-                    GlassChip(title: "人物", isOn: viewModel.includePeople, action: viewModel.togglePeople)
-                }
-            }
-
-            GlassSection(title: "内容分级", trailing: viewModel.isAuthenticated ? nil : "登录后可开启 Sketchy / NSFW") {
-                FlowLayout {
-                    GlassChip(title: "SFW", isOn: viewModel.includeSFW, tint: .green, action: viewModel.toggleSFW)
-                    GlassChip(title: "Sketchy", isOn: viewModel.includeSketchy, tint: .orange, disabled: !viewModel.isAuthenticated, action: viewModel.toggleSketchy)
-                    GlassChip(title: "NSFW", isOn: viewModel.includeNSFW, tint: .red, disabled: !viewModel.isAuthenticated, action: viewModel.toggleNSFW)
-                }
-            }
-
-            GlassSection(title: "分辨率", trailing: "可多选") {
-                FlowLayout {
-                    GlassChip(title: "不限", isOn: viewModel.resolutions.isEmpty) {
-                        viewModel.toggleResolution(nil)
+            if WallpaperSources.all.count > 1 {
+                GlassSection(title: "图源") {
+                    FlowLayout {
+                        ForEach(WallpaperSources.all, id: \.descriptor.id) { source in
+                            GlassChip(title: source.descriptor.name, isOn: source.descriptor.id == descriptor.id) {
+                                viewModel.selectSource(source)
+                            }
+                        }
                     }
-                    ForEach(WallpaperViewModel.resolutionOptions, id: \.self) { resolution in
-                        GlassChip(title: resolution.replacingOccurrences(of: "x", with: "×"), isOn: viewModel.resolutions.contains(resolution)) {
-                            viewModel.toggleResolution(resolution)
+                }
+            }
+
+            ForEach(descriptor.filters) { filter in
+                let note = viewModel.isAuthenticated ? filter.note : (filter.signedOutNote ?? filter.note)
+                GlassSection(title: filter.title, trailing: note) {
+                    FlowLayout {
+                        if filter.mode == .anyOf {
+                            GlassChip(title: "不限", isOn: viewModel.filterSelections[filter.id]?.isEmpty ?? true) {
+                                viewModel.toggle(nil, in: filter)
+                            }
+                        }
+                        ForEach(filter.options) { option in
+                            GlassChip(title: option.title, isOn: viewModel.isSelected(option, in: filter),
+                                      tint: option.tint.map(Self.color), disabled: !viewModel.isAvailable(option)) {
+                                viewModel.toggle(option, in: filter)
+                            }
                         }
                     }
                 }
@@ -86,13 +90,21 @@ struct FilterPanel: View {
 
             GlassSection(title: "排序") {
                 FlowLayout {
-                    ForEach(SortOrder.allCases) { option in
-                        GlassChip(title: option.label, isOn: viewModel.sortOrder == option) {
-                            viewModel.sortOrder = option
+                    ForEach(descriptor.sorts) { option in
+                        GlassChip(title: option.title, isOn: viewModel.sortID == option.id) {
+                            viewModel.sortID = option.id
                         }
                     }
                 }
             }
+        }
+    }
+
+    private static func color(_ tint: SourceOption.Tint) -> Color {
+        switch tint {
+        case .green: .green
+        case .orange: .orange
+        case .red: .red
         }
     }
 }

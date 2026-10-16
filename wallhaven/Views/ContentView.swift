@@ -394,7 +394,7 @@ struct ContentView: View {
                 openSearch()
             },
             openInBrowser: {
-                if let url = item?.remote?.url ?? item?.workshop?.workshopPageURL {
+                if let url = item?.remote?.pageURL ?? item?.workshop?.workshopPageURL {
                     NSWorkspace.shared.open(url)
                 }
             },
@@ -695,7 +695,7 @@ struct ContentView: View {
                 await viewModel.loadTagsIfNeeded(for: next)
             }
         }
-        .onChange(of: viewModel.sortOrder) { viewModel.search(reset: true, debounce: true) }
+        .onChange(of: viewModel.sortID) { viewModel.search(reset: true, debounce: true) }
         .onChange(of: viewModel.errorMessage) { _, message in
             guard let message else { return }
             toastCenter.show(message, style: .error)
@@ -1327,7 +1327,7 @@ struct ContentView: View {
             let tags = viewModel.tagsByID[wallpaper.id] ?? []
             InfoPanel(
                 eyebrow: "\(page == .favorites ? "FAVORITES" : "FEATURED") · #\(wallpaper.id)",
-                title: (tags.first ?? wallpaper.category).capitalized,
+                title: (tags.first ?? wallpaper.category ?? wallpaper.sourceName).capitalized,
                 meta: remoteMeta(wallpaper),
                 colors: wallpaper.colors,
                 tags: Array(tags.dropFirst()),
@@ -1345,7 +1345,7 @@ struct ContentView: View {
                     .id("download-\(wallpaper.id)")
                 AddToPlaylistButton(item: item)
                     .id("playlist-\(item.id)")
-                CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
+                CircleIconButton(systemImage: "safari", help: "在浏览器中打开") { NSWorkspace.shared.open(wallpaper.pageURL) }
             }
 
         case .local(let local):
@@ -1476,9 +1476,9 @@ struct ContentView: View {
         return meta
     }
 
-    private func remoteMeta(_ wallpaper: WallhavenWallpaper) -> [String] {
-        var meta = [wallpaper.resolution]
-        meta.append("♥ \(wallpaper.favorites)")
+    private func remoteMeta(_ wallpaper: RemoteWallpaper) -> [String] {
+        var meta = wallpaper.resolution.isEmpty ? [] : [wallpaper.resolution]
+        if wallpaper.favorites > 0 { meta.append("♥ \(wallpaper.favorites)") }
         if wallpaper.views > 0 { meta.append("\(wallpaper.views) 次浏览") }
         if wallpaper.fileSize > 0 {
             meta.append(FileSizeText.string(Int64(wallpaper.fileSize)))
@@ -1495,7 +1495,7 @@ struct ContentView: View {
             Button("下载") { viewModel.downloadImage(wallpaper) }
             AddToPlaylistMenu(item: item)
             Divider()
-            Button("在浏览器中打开") { NSWorkspace.shared.open(wallpaper.url) }
+            Button("在浏览器中打开") { NSWorkspace.shared.open(wallpaper.pageURL) }
         case .local(let local):
             Button("设为壁纸") { localViewModel.applyWallpaper(local) }
             AddToPlaylistMenu(item: item)
@@ -1691,7 +1691,7 @@ private struct SelectedTabAnchorKey: PreferenceKey {
 private struct RemoteDownloadButton: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @ObservedObject private var tracker = WallhavenDownloadTracker.shared
-    let wallpaper: WallhavenWallpaper
+    let wallpaper: RemoteWallpaper
     let isInLibrary: Bool
 
     private var phase: DownloadActionButton.Phase {

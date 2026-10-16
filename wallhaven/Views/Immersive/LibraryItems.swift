@@ -30,7 +30,7 @@ enum LibrarySource: String, CaseIterable, Identifiable {
 extension GalleryItem {
     var libraryTitle: String {
         switch origin {
-        case .remote(let wallpaper): "wallhaven #\(wallpaper.id)"
+        case .remote(let wallpaper): wallpaper.displayTitle
         case .local(let item): item.displayName
         case .workshop(let item): item.title
         }
@@ -38,7 +38,7 @@ extension GalleryItem {
 
     var libraryKindLabel: String {
         switch origin {
-        case .remote: "wallhaven"
+        case .remote(let wallpaper): wallpaper.sourceName
         case .local(let item): "\(item.source == .wallhaven ? "Wallhaven" : "本地导入") · \(item.isVideo ? "视频" : "图片")"
         case .workshop(let item): "工坊 · \(item.type.label)"
         }

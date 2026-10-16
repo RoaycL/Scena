@@ -5,11 +5,11 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct DiscoverySearchTests {
-    private func wallpaper(_ id: String) throws -> WallhavenWallpaper {
+    private func wallpaper(_ id: String) throws -> RemoteWallpaper {
         let data = Data("""
         {"id":"\(id)","url":"https://wallhaven.cc/w/\(id)","path":"https://example.com/\(id).jpg","resolution":"1920x1080","category":"general","favorites":1,"ratio":"1.777","purity":"sfw"}
         """.utf8)
-        return try JSONDecoder().decode(WallhavenWallpaper.self, from: data)
+        return try JSONDecoder().decode(RemoteWallpaper.self, from: data)
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -70,11 +70,12 @@ struct DiscoverySearchTests {
         let model = WallpaperViewModel(discoveryDefaults: UserDefaults(suiteName: UUID().uuidString)!, searchLoader: service.load)
         model.query = "first"; model.search(reset: true, debounce: true)
         model.query = "second"; model.search(reset: true, debounce: true)
-        model.query = "final"; model.toggleAnime()
+        let categories = try #require(model.descriptor.filters.first { $0.id == "categories" })
+        model.query = "final"; model.toggle(categories.options.first { $0.id == "anime" }, in: categories)
         #expect(service.requests.isEmpty)
         try await waitUntil { service.pending["final:1"] != nil }
         #expect(service.requests.count == 1)
-        #expect(service.requests.first?.categories == "101")
+        #expect(service.requests.first?.selection("categories") == ["general", "people"])
         service.finish("final:1", with: .success([]))
         try await waitUntil { !model.isLoading }
     }
@@ -103,13 +104,13 @@ struct DiscoverySearchTests {
 /// 故意忽略任务取消，复现网络回调在新搜索完成后才返回的情况。
 @MainActor
 private final class ControlledSearch {
-    var pending: [String: CheckedContinuation<[WallhavenWallpaper], Error>] = [:]
-    var requests: [WallhavenSearchRequest] = []
-    func load(_ request: WallhavenSearchRequest, page: Int) async throws -> [WallhavenWallpaper] {
+    var pending: [String: CheckedContinuation<[RemoteWallpaper], Error>] = [:]
+    var requests: [WallpaperQuery] = []
+    func load(_ request: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {
         requests.append(request)
-        return try await withCheckedThrowingContinuation { pending["\(request.query):\(page)"] = $0 }
+        return try await withCheckedThrowingContinuation { pending["\(request.text):\(page)"] = $0 }
     }
-    func finish(_ key: String, with result: Result<[WallhavenWallpaper], Error>) {
+    func finish(_ key: String, with result: Result<[RemoteWallpaper], Error>) {
         pending.removeValue(forKey: key)?.resume(with: result)
     }
 }

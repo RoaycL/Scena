@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct WallhavenClient: Sendable {
+nonisolated struct WallhavenClient: Sendable {
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 20
@@ -59,12 +59,12 @@ struct WallhavenClient: Sendable {
         return try JSONDecoder().decode(WallhavenCollectionWallpapersResponse.self, from: data)
     }
 
-    func search(query: String, page: Int, sorting: SortOrder, categories: String, purity: String, resolutions: [String] = [], apiKey: String?) async throws -> [WallhavenWallpaper] {
+    func search(query: String, page: Int, sorting: String, categories: String, purity: String, resolutions: [String] = [], apiKey: String?) async throws -> [WallhavenWallpaper] {
         var components = URLComponents(string: "https://wallhaven.cc/api/v1/search")!
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var items: [URLQueryItem] = [
             .init(name: "page", value: String(page)),
-            .init(name: "sorting", value: sorting.rawValue),
+            .init(name: "sorting", value: sorting),
             .init(name: "purity", value: purity),
             .init(name: "categories", value: categories)
         ]
@@ -134,6 +134,6 @@ nonisolated extension URLComponents {
 }
 
 /// wallhaven API 每分钟最多 45 次请求，超出返回 429
-nonisolated struct WallhavenRateLimited: LocalizedError {
+nonisolated struct WallhavenRateLimited: LocalizedError, TransientSourceError {
     var errorDescription: String? { "请求太频繁（wallhaven 每分钟最多 45 次），请稍后再试" }
 }
