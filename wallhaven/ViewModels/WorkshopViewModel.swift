@@ -796,6 +796,7 @@ final class WorkshopViewModel: ObservableObject {
             if !result.downloaded.isEmpty, !usesSteamCDN { setSteamCMDLogin(valid: true) }
             for (id, folder) in result.downloaded {
                 await WorkshopLibraryIndex.shared.invalidate(folder: folder)
+                AutoBakeScheduler.shared.didDownload(folder: folder)
                 if let video = WorkshopItem.load(from: folder, computeSize: false)?.nativeVideoURL {
                     Task(priority: .utility) { await VideoPosterCache.shared.prewarm([video]) }
                 }

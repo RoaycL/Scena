@@ -80,7 +80,15 @@ final class WallpaperBaker: ObservableObject {
     @Published private(set) var revision = 0
 
     private var queue: [WorkshopItem] = []
-    private var currentID: String?
+    /// 后台自动转换的条目：不弹提示，结果交给 AutoBakeScheduler
+    private var automaticIDs: Set<String> = []
+    /// 每个条目结束时回调（成功 / 取消 / 失败）
+    var onFinish: ((String, Outcome) -> Void)?
+
+    enum Outcome { case success, cancelled, failed }
+
+    var isBusy: Bool { currentTask != nil || !queue.isEmpty }
+    private(set) var currentID: String?
     private var currentTask: Task<Void, Never>?
 
     /// 录制时长：留足空间找循环点
@@ -90,8 +98,9 @@ final class WallpaperBaker: ObservableObject {
 
     func isBaked(_ item: WorkshopItem) -> Bool { BakedWallpapers.videoURL(for: item) != nil }
 
-    func bake(_ item: WorkshopItem) {
+    func bake(_ item: WorkshopItem, automatic: Bool = false) {
         guard BakedWallpapers.canBake(item), phases[item.id] == nil || phases[item.id].map(\.isFailure) == true else { return }
+        if automatic { automaticIDs.insert(item.id) } else { automaticIDs.remove(item.id) }
         phases[item.id] = .queued
         queue.append(item)
         startNext()
@@ -117,18 +126,30 @@ final class WallpaperBaker: ObservableObject {
         currentID = item.id
         currentTask = Task { [weak self] in
             guard let self else { return }
+            let automatic = automaticIDs.remove(item.id) != nil
+            let outcome: Outcome
             do {
                 try await run(item)
                 phases[item.id] = nil
                 revision += 1
-                ToastCenter.shared.show("「\(item.title)」已转为视频", style: .success)
+                if !automatic { ToastCenter.shared.show("「\(item.title)」已转为视频", style: .success) }
                 LiveWallpaperController.shared.reloadIfShowing(item)
+                outcome = .success
             } catch is CancellationError {
                 phases[item.id] = nil
+                outcome = .cancelled
+            } catch BakeError.interrupted {
+                // 画面被挡住：不算失败，之后再试
+                phases[item.id] = nil
+                if !automatic { ToastCenter.shared.show("转为视频中断：录制时画面被遮挡，请稍后重试", style: .info) }
+                outcome = .cancelled
             } catch {
+                // 自动转换失败不打扰用户，按钮上仍可看到失败状态、手动重试
                 phases[item.id] = .failed(error.localizedDescription)
-                ToastCenter.shared.show("转为视频失败：\(error.localizedDescription)", style: .error)
+                if !automatic { ToastCenter.shared.show("转为视频失败：\(error.localizedDescription)", style: .error) }
+                outcome = .failed
             }
+            onFinish?(item.id, outcome)
             currentID = nil
             currentTask = nil
             startNext()
@@ -151,6 +172,11 @@ final class WallpaperBaker: ObservableObject {
         try FileManager.default.createDirectory(at: BakedWallpapers.folder, withIntermediateDirectories: true)
         let output = BakedWallpapers.videoFile(for: item.id)
         try await Self.export(asset, range: loop, to: output)
+        // 编码不一定响应取消：结束后再检查一次，被取消的结果不保留
+        if Task.isCancelled {
+            try? FileManager.default.removeItem(at: output)
+            throw CancellationError()
+        }
         let record = BakedWallpapers.Record(projectSize: stamp.size, projectModified: stamp.modified,
                                             loopDuration: loop.duration.seconds, createdAt: Date())
         try JSONEncoder().encode(record).write(to: BakedWallpapers.recordFile(for: item.id), options: .atomic)
@@ -194,6 +220,9 @@ final class WallpaperBaker: ObservableObject {
 
         let seconds = recordSeconds
         let warmUp = warmUpSeconds
+        // 取消时要让等待中的 continuation 立即结束（否则要等到超时兜底）
+        final class Finisher { var finish: ((Result<Void, Error>) -> Void)? }
+        let finisher = Finisher()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 var finished = false
@@ -202,8 +231,10 @@ final class WallpaperBaker: ObservableObject {
                     guard !finished else { return }
                     finished = true
                     player.onMessage = nil
+                    finisher.finish = nil
                     continuation.resume(with: result)
                 }
+                finisher.finish = finish
                 player.onMessage = { [weak self] message in
                     switch message["type"] as? String {
                     case "recordStarted":
@@ -214,6 +245,8 @@ final class WallpaperBaker: ObservableObject {
                             finish(.failure(BakeError.recording)); return
                         }
                         nextIndex += 1
+                        // 屏保、息屏或其他窗口挡住后 WebKit 停止渲染，再录下去就是静止画面
+                        guard window.occlusionState.contains(.visible) else { finish(.failure(BakeError.interrupted)); return }
                         do { try handle.write(contentsOf: data) } catch { finish(.failure(error)); return }
                         self?.phases[item.id] = .recording(min(1, Double(nextIndex) / seconds))
                     case "recordDone":
@@ -238,7 +271,7 @@ final class WallpaperBaker: ObservableObject {
                 }
             }
         } onCancel: {
-            Task { @MainActor in player.stop() }
+            Task { @MainActor in finisher.finish?(.failure(CancellationError())) }
         }
     }
 
@@ -332,7 +365,7 @@ final class WallpaperBaker: ObservableObject {
     }
 
     enum BakeError: LocalizedError {
-        case missing, render, unsupported, recording, timeout, export
+        case missing, render, unsupported, recording, timeout, export, interrupted
 
         var errorDescription: String? {
             switch self {
@@ -342,6 +375,7 @@ final class WallpaperBaker: ObservableObject {
             case .recording: "录制没有得到画面。"
             case .timeout: "录制超时。"
             case .export: "视频编码失败。"
+            case .interrupted: "录制时画面被遮挡。"
             }
         }
     }

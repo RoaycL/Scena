@@ -568,6 +568,7 @@ private struct GlobalHotKeySection: View {
 private struct WorkshopSettings: View {
     @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.openWindow) private var openWindow
+    @ObservedObject private var autoBake = AutoBakeScheduler.shared
 
     var body: some View {
         Form {
@@ -602,6 +603,35 @@ private struct WorkshopSettings: View {
                 Text("下载")
             } footer: {
                 SettingsFootnote("同一个 Steam 账号同时只能运行一个 steamcmd，一批里的壁纸会逐个下载，下载速度不会因为数量变大而变快。数量越大，登录次数越少；数量越小，暂停、停止单个任务时影响的范围越小。")
+            }
+
+            Section {
+                Toggle("下载后自动转为视频", isOn: $autoBake.isEnabled)
+                if autoBake.isEnabled || !autoBake.pending.isEmpty {
+                    HStack {
+                        Text(autoBake.activeID != nil ? "正在转换…" : (autoBake.pending.isEmpty ? "队列为空" : "\(autoBake.pending.count) 个等待转换"))
+                        if let reason = autoBake.waitingReason, autoBake.activeID == nil, !autoBake.pending.isEmpty {
+                            Text("· \(reason)").foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !autoBake.pending.isEmpty {
+                            Button("清空队列") { autoBake.clearQueue() }
+                        }
+                    }
+                }
+                let candidates = autoBake.candidateCount(in: workshop.libraryItems)
+                if candidates > 0 {
+                    HStack {
+                        Text("资料库中还有 \(candidates) 个场景 / 网页壁纸未转换")
+                        Spacer()
+                        Button("全部加入队列") { autoBake.enqueueLibrary(workshop.libraryItems) }
+                            .disabled(!autoBake.isEnabled)
+                    }
+                }
+            } header: {
+                Text("转为视频")
+            } footer: {
+                SettingsFootnote("场景和网页壁纸转成循环视频后，桌面改用硬件解码播放，几乎不占 CPU 和 GPU（鼠标、音乐等互动效果会消失）。自动转换只在接通电源、电脑 3 分钟没有操作、系统不热时进行，一次一个；一动鼠标或键盘就立即停下，下次空闲再继续。也可以在壁纸信息面板里点 🎞 手动转换。")
             }
 
             Section {
@@ -718,9 +748,7 @@ private struct StorageSettings: View {
                 }
                 usageRow("本地导入", storage.usage.imported, .green)
                 usageRow("创意工坊壁纸", storage.usage.workshop, .purple)
-                if storage.usage.baked > 0 {
-                    usageRow("工坊转成的视频", storage.usage.baked, .indigo)
-                }
+                usageRow("工坊转成的视频", storage.usage.baked, .indigo)
                 usageRow("缓存", storage.usage.cache, .gray)
                 HStack {
                     Spacer()

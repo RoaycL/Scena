@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PlaylistManager.shared.restore()
         DockIcon.apply()
         GlobalHotKeys.shared.registerAll()
+        AutoBakeScheduler.shared.activate()
         #if DEBUG
         // 调试：SCENA_DEBUG_BAKE=<工坊壁纸文件夹> 启动后直接烘焙这个壁纸
         if let path = ProcessInfo.processInfo.environment["SCENA_DEBUG_BAKE"],
