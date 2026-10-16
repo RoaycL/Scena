@@ -13,6 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 不需要窗口标签页，去掉「显示」菜单里的 Show Tab Bar
         NSWindow.allowsAutomaticWindowTabbing = false
         StorageManager.configureImageCache()
+        // 测试通过注入会话验证，不读取用户真实的 Pixiv 钥匙串。
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil && NSClassFromString("XCTestCase") == nil {
+            _ = PixivAccountSession.shared
+        }
         LiveWallpaperController.shared.restore()
         PlaylistManager.shared.restore()
         DockIcon.apply()
@@ -142,6 +146,13 @@ struct wallhavenApp: App {
 
         Window("登录 Steam", id: SteamLoginWindow.id) {
             SteamLoginView()
+                .scenaTheme(transparentWindow: false)
+        }
+        .defaultSize(width: 520, height: 680)
+        .windowResizability(.contentMinSize)
+
+        Window("登录 Pixiv", id: PixivLoginWindow.id) {
+            PixivLoginView()
                 .scenaTheme(transparentWindow: false)
         }
         .defaultSize(width: 520, height: 680)

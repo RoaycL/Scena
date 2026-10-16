@@ -52,8 +52,8 @@ nonisolated struct PixivSource: WallpaperSource {
 
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {
         let isSearch = !query.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        // 未登录搜索最多显示十页；榜单没有下一页时返回 404。
-        guard page > 0, !isSearch || page <= 10 else { return [] }
+        // 未登录搜索最多显示十页；已登录 Pixiv 账号解除翻页限制；榜单没有下一页时返回 404。
+        guard page > 0, !isSearch || page <= 10 || PixivCookieVault.shared.isAuthenticated else { return [] }
         let url = isSearch ? Self.searchURL(query, page: page) : Self.rankingURL(query, page: page)
         let data = try await load(url, page > 1)
         guard !data.isEmpty else { return [] }

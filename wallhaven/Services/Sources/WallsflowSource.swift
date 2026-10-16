@@ -78,10 +78,10 @@ nonisolated struct WallsflowSource: WallpaperSource {
         .network("Wallsflow 页面格式无法识别，请稍后重试或在官网查看。")
     }
 
-    private static func checkPage(_ html: String) throws {
+    private static func checkPage(_ html: String, pageURL: URL? = nil) throws {
         let lower = html.lowercased()
-        if lower.contains("cf-chl-") || lower.contains("challenges.cloudflare.com") || lower.contains("<title>just a moment") {
-            throw WallperError.network("Wallsflow 要求浏览器安全验证，暂时无法在应用中加载。请稍后重试或在官网查看。")
+        if lower.contains("cf-chl-") || lower.contains("challenges.cloudflare.com") || lower.contains("<title>just a moment") || lower.contains("_cf_chl_opt") {
+            throw CloudflareChallengeRequiredError(domain: "wallsflow.com", challengeURL: pageURL ?? URL(string: site)!)
         }
     }
 

@@ -175,6 +175,7 @@ private struct AccountSettings: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
     @ObservedObject private var steamAccount = SteamAccountSession.shared
+    @ObservedObject private var pixivAccount = PixivAccountSession.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -183,6 +184,7 @@ private struct AccountSettings: View {
             if viewModel.isAuthenticated { wallhavenSyncSection }
             steamSection
             if !workshop.usesSteamCDN { steamCMDSection }
+            pixivSection
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -354,6 +356,39 @@ private struct AccountSettings: View {
             Label("备用下载方式（steamcmd）", systemImage: "arrow.down.circle")
         } footer: {
             SettingsFootnote("未扫码登录 Steam 时使用。账号需已购买 Wallpaper Engine；首次需在终端输入密码和 Steam 令牌，之后 steamcmd 会缓存登录状态。")
+        }
+    }
+
+    private var pixivSection: some View {
+        Section {
+            AccountStatusRow(
+                isConnected: pixivAccount.isLoggedIn,
+                title: pixivAccount.isLoggedIn ? (pixivAccount.userName ?? "已登录") : "未登录",
+                subtitle: pixivAccount.userID.map { "UID: \($0)" }
+            ) {
+                if pixivAccount.isLoggedIn {
+                    Button("退出登录") {
+                        Task { await pixivAccount.logout() }
+                    }
+                } else {
+                    Button("登录 Pixiv") { openWindow(id: PixivLoginWindow.id) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            if let error = pixivAccount.errorMessage {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+            }
+            if pixivAccount.isLoggedIn {
+                Label(pixivAccount.isPersistent ? "登录已验证，凭据已保存到钥匙串" : "登录已验证，仅本次有效；重启后需重新登录", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                if !pixivAccount.isPersistent {
+                    Button("重新保存登录") { _ = pixivAccount.retryPersistence() }
+                }
+            }
+        } header: {
+            Label("Pixiv 账号", systemImage: "paintpalette")
+        } footer: {
+            SettingsFootnote("通过 Pixiv 官方网页登录，验证成功后保存凭据。可访问账号有权限的内容；本站限制和会员权限仍由 Pixiv 决定。")
         }
     }
 }

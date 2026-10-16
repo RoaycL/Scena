@@ -90,6 +90,17 @@ nonisolated struct WallpaperQuery: Equatable, Sendable {
 /// 网络繁忙一类、稍后重试可能成功的错误
 nonisolated protocol TransientSourceError: Error {}
 
+/// Cloudflare 浏览器人机验证需求
+nonisolated struct CloudflareChallengeRequiredError: LocalizedError, Identifiable, Sendable {
+    let id = UUID()
+    let domain: String
+    let challengeURL: URL
+
+    var errorDescription: String? {
+        "\(domain) 要求安全验证，请完成 Cloudflare 人机验证后继续。"
+    }
+}
+
 nonisolated enum WallpaperSources {
     static let all: [any WallpaperSource] = [
         WallhavenSource(),
@@ -124,9 +135,26 @@ nonisolated enum WallpaperSources {
     /// 某个图片 / 视频地址需要附带的请求头（按域名匹配图源）
     static func requestHeaders(for url: URL) -> [String: String] {
         guard let host = url.host?.lowercased() else { return [:] }
-        return all.first { source in
+        var headers = all.first { source in
             source.descriptor.mediaHosts.contains { host == $0 || host.hasSuffix("." + $0) }
         }?.descriptor.requestHeaders ?? [:]
+
+        // 注入 Pixiv 登录 Cookie
+        if let cookie = PixivCookieVault.shared.header(for: url) {
+            headers["Cookie"] = cookie
+        }
+
+        // 注入 Cloudflare Clearance 凭据（Wallsflow 等受保护图源）
+        if let cfCookie = CloudflareClearanceStore.shared.cookieHeader(for: url) {
+            headers["User-Agent"] = SourceHTTP.userAgent
+            if let existing = headers["Cookie"], !existing.isEmpty {
+                headers["Cookie"] = "\(existing); \(cfCookie)"
+            } else {
+                headers["Cookie"] = cfCookie
+            }
+        }
+
+        return headers
     }
 }
 
@@ -136,6 +164,8 @@ nonisolated enum SourceHTTP {
 
     static let session: URLSession = {
         let config = URLSessionConfiguration.default
+        config.httpShouldSetCookies = false
+        config.httpCookieStorage = nil
         config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 60
         return URLSession(configuration: config)
@@ -145,23 +175,37 @@ nonisolated enum SourceHTTP {
         var errorDescription: String? { "图源暂时繁忙，请稍后再试" }
     }
 
-    static func data(from url: URL, accept: String = "text/html,application/xhtml+xml", emptyOnNotFound: Bool = true) async throws -> Data {
+    static func data(from url: URL, accept: String = "text/html,application/xhtml+xml", emptyOnNotFound: Bool = true,
+                     extraHeaders: [String: String] = [:]) async throws -> Data {
         var request = URLRequest(url: url)
+        request.httpShouldHandleCookies = false
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
         for (field, value) in WallpaperSources.requestHeaders(for: url) {
             request.setValue(value, forHTTPHeaderField: field)
         }
+        for (field, value) in extraHeaders { request.setValue(value, forHTTPHeaderField: field) }
         let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "cf-mitigated") == "challenge" {
-            throw WallperError.network("图源要求浏览器安全验证，暂时无法在应用中加载。请稍后重试或在官网查看。")
+        let httpResponse = response as? HTTPURLResponse
+        let status = httpResponse?.statusCode ?? 0
+        if let challenge = challenge(data: data, response: httpResponse, pageURL: url) {
+            CloudflareClearanceStore.shared.clear(for: challenge.domain)
+            throw challenge
         }
+
         if status == 429 || status == 503 { throw Busy() }
         // 翻过最后一页时网页类站点返回 404：当作没有更多
         if status == 404, emptyOnNotFound { return Data() }
         guard (200...299).contains(status) else { throw WallperError.network("加载壁纸失败（\(status)）。") }
         return data
+    }
+
+    static func challenge(data: Data, response: HTTPURLResponse?, pageURL: URL) -> CloudflareChallengeRequiredError? {
+        let preview = String(decoding: data.prefix(4096), as: UTF8.self).lowercased()
+        let marked = response?.value(forHTTPHeaderField: "cf-mitigated")?.lowercased() == "challenge"
+        guard marked || preview.contains("<title>just a moment") || preview.contains("cf-chl-") ||
+                preview.contains("challenges.cloudflare.com") || preview.contains("_cf_chl_opt") else { return nil }
+        return CloudflareChallengeRequiredError(domain: pageURL.host?.lowercased() ?? "", challengeURL: pageURL)
     }
 
     static func string(from url: URL) async throws -> String {

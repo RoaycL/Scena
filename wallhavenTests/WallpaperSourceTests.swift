@@ -143,6 +143,55 @@ struct WallpaperSourceTests {
                 == "https://wallsflow.com/live-wallpapers/anime/page/2/")
     }
 
+    @Test func cloudflareClearanceStoreManagesCookies() throws {
+        let store = CloudflareClearanceStore(defaults: testDefaults.make())
+        store.clearAll()
+
+        #expect(!store.hasClearance(for: "wallsflow.com"))
+
+        let dummyCookies = [
+            HTTPCookie(properties: [
+                .domain: ".wallsflow.com",
+                .path: "/",
+                .name: "cf_clearance",
+                .value: "test_clearance_token_12345",
+                .expires: Date().addingTimeInterval(3600)
+            ])!,
+            HTTPCookie(properties: [
+                .domain: "wallsflow.com",
+                .path: "/",
+                .name: "__cf_bm",
+                .value: "test_bm_token_67890",
+                .expires: Date().addingTimeInterval(1800)
+            ])!
+        ]
+
+        let saved = store.saveClearance(from: dummyCookies, for: "wallsflow.com")
+        #expect(saved)
+        #expect(store.hasClearance(for: "wallsflow.com"))
+        #expect(store.hasClearance(for: "cloud.wallsflow.com"))
+
+        let header = store.cookieHeader(for: "wallsflow.com")
+        #expect(header?.contains("cf_clearance=test_clearance_token_12345") == true)
+        #expect(header?.contains("__cf_bm=test_bm_token_67890") == true)
+
+        store.clearAll()
+        #expect(!store.hasClearance(for: "wallsflow.com"))
+    }
+
+    @Test func wallsflowDetectsCloudflareChallenge() throws {
+        let challengeHTML = """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Just a moment...</title></head>
+        <body><div id="cf-challenge">Verifying you are human...</div></body>
+        </html>
+        """
+        #expect(throws: CloudflareChallengeRequiredError.self) {
+            _ = try WallsflowSource.parse(challengeHTML)
+        }
+    }
+
     @Test func singleChoiceFilterTogglesBackToAny() throws {
         let defaults = testDefaults.make()
         let model = WallpaperViewModel(discoveryDefaults: defaults, searchLoader: { _, _ in [] })

@@ -31,6 +31,19 @@ final class WallpaperViewModel: ObservableObject {
     @Published var isSyncing = false
     @Published var syncProgress = ""
     @Published var errorMessage: String?
+    @Published var pendingCloudflareChallenge: CloudflareChallengeRequiredError?
+    @Published private(set) var lastCloudflareChallenge: CloudflareChallengeRequiredError?
+    private struct BlockedSourceAction {
+        let challenge: CloudflareChallengeRequiredError
+        let searchGeneration: UUID?
+        let resume: @MainActor () -> Void
+    }
+    private var blockedActions: [BlockedSourceAction] = []
+    private var activeChallenge: CloudflareChallengeRequiredError?
+    private var verifiedChallengeID: UUID?
+    private let downloadLoader: (@MainActor (RemoteWallpaper) async throws -> URL)?
+    private let applyDownloaded: @MainActor (URL) throws -> Void
+    private let manualApplyAction: @MainActor () -> Void
     @Published private(set) var statusMessage = "就绪"
     @Published var favoriteFolders: [FavoriteFolder] = []
     @Published var selectedFolderID: UUID? = nil  // nil = 显示全部收藏
@@ -74,8 +87,14 @@ final class WallpaperViewModel: ObservableObject {
 
     init(discoveryDefaults: UserDefaults = .standard,
          sources: [any WallpaperSource] = WallpaperSources.all,
-         searchLoader: (@MainActor (WallpaperQuery, Int) async throws -> [RemoteWallpaper])? = nil) {
+         searchLoader: (@MainActor (WallpaperQuery, Int) async throws -> [RemoteWallpaper])? = nil,
+         downloadLoader: (@MainActor (RemoteWallpaper) async throws -> URL)? = nil,
+         applyDownloaded: (@MainActor (URL) throws -> Void)? = nil,
+         manualApplyAction: (@MainActor () -> Void)? = nil) {
         self.searchLoader = searchLoader
+        self.downloadLoader = downloadLoader
+        self.applyDownloaded = applyDownloaded ?? { try WallpaperManager.applyWallpaper(from: $0) }
+        self.manualApplyAction = manualApplyAction ?? { PlaylistManager.shared.userDidApplyManually() }
         self.discoveryDefaults = discoveryDefaults
         let savedID = discoveryDefaults.string(forKey: Self.selectedSourceKey)
         source = sources.first { $0.descriptor.id == savedID } ?? sources[0]
@@ -199,7 +218,7 @@ final class WallpaperViewModel: ObservableObject {
         startSearch(request: searchRequest, page: 1, replacing: true, debounce: debounce)
     }
 
-    private func startSearch(request: WallpaperQuery, page: Int, replacing: Bool, debounce: Bool) {
+    private func startSearch(request: WallpaperQuery, page: Int, replacing: Bool, debounce: Bool, verificationAttempts: Int = 0) {
         searchTask?.cancel()
         let generation = UUID()
         searchGeneration = generation
@@ -207,13 +226,27 @@ final class WallpaperViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         loadError = nil
-        searchTask = Task {
+        lastCloudflareChallenge = nil
+        blockedActions.removeAll { $0.searchGeneration != nil }
+        if let activeChallenge, !blockedActions.contains(where: { $0.challenge.domain == activeChallenge.domain }) {
+            pendingCloudflareChallenge = nil
+        }
+        searchTask = Task { [self] in
             do {
                 if debounce { try await Task.sleep(for: .milliseconds(300)) }
                 try Task.checkCancellation()
                 try await fetch(request: request, page: page, replacing: replacing, generation: generation)
             } catch {
                 guard generation == searchGeneration, !Task.isCancelled else { return }
+                if let challenge = error as? CloudflareChallengeRequiredError {
+                    self.lastCloudflareChallenge = challenge
+                    if verificationAttempts == 0 {
+                        self.enqueueVerification(challenge, searchGeneration: generation) { [weak self] in
+                            guard let self, self.searchGeneration == generation else { return }
+                            self.startSearch(request: request, page: page, replacing: replacing, debounce: false, verificationAttempts: 1)
+                        }
+                    }
+                }
                 errorMessage = error.localizedDescription
                 loadError = error.localizedDescription
             }
@@ -479,38 +512,84 @@ final class WallpaperViewModel: ObservableObject {
     }
 
     func downloadImage(_ wallpaper: RemoteWallpaper) {
+        performDownload(wallpaper, apply: false)
+    }
+
+    func downloadAndApply(_ wallpaper: RemoteWallpaper) {
+        manualApplyAction()
+        performDownload(wallpaper, apply: true)
+    }
+
+    private func performDownload(_ wallpaper: RemoteWallpaper, apply: Bool, verificationAttempts: Int = 0) {
         guard downloadingIDs.insert(wallpaper.id).inserted else { return }
-        Task {
+        let feedbackID = GalleryItem(origin: .remote(wallpaper)).id
+        if apply { ApplyFeedback.shared.begin(feedbackID) }
+        Task { [self] in
             defer { downloadingIDs.remove(wallpaper.id) }
             do {
-                // 进度和完成都显示在下载按钮上（转圈 → 绿色对勾），不再弹提示条
-                _ = try await downloader.download(wallpaper)
+                let local: URL
+                if let downloadLoader { local = try await downloadLoader(wallpaper) }
+                else { local = try await downloader.download(wallpaper) }
                 downloadedIDs.insert(wallpaper.id)
+                if apply { try applyDownloaded(local); ApplyFeedback.shared.finish(feedbackID, success: true) }
                 NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
             } catch {
-                ToastCenter.shared.show("下载失败：\(error.localizedDescription)", style: .error)
+                if apply { ApplyFeedback.shared.finish(feedbackID, success: false) }
+                if let challenge = error as? CloudflareChallengeRequiredError, verificationAttempts == 0 {
+                    enqueueVerification(challenge) { [weak self] in
+                        self?.performDownload(wallpaper, apply: apply, verificationAttempts: 1)
+                    }
+                } else {
+                    let text = error is CloudflareChallengeRequiredError ? "验证后图源仍拒绝下载，请稍后重试或在官网查看。" : error.localizedDescription
+                    ToastCenter.shared.show("\(apply ? "设置" : "下载")失败：\(text)", style: .error)
+                }
             }
         }
     }
 
-    func downloadAndApply(_ wallpaper: RemoteWallpaper) {
-        PlaylistManager.shared.userDidApplyManually()
-        downloadingIDs.insert(wallpaper.id)
-        // 进度和结果显示在「设为壁纸」按钮上：设置中 → 已设为壁纸
-        let feedbackID = GalleryItem(origin: .remote(wallpaper)).id
-        ApplyFeedback.shared.begin(feedbackID)
-        Task {
-            defer { downloadingIDs.remove(wallpaper.id) }
-            do {
-                let localURL = try await downloader.download(wallpaper)
-                downloadedIDs.insert(wallpaper.id)
-                try WallpaperManager.applyWallpaper(from: localURL)
-                ApplyFeedback.shared.finish(feedbackID, success: true)
-                NotificationCenter.default.post(name: .localMediaDidChange, object: nil)
-            } catch {
-                ApplyFeedback.shared.finish(feedbackID, success: false)
-                ToastCenter.shared.show("设置失败：\(error.localizedDescription)", style: .error)
-            }
+    private func enqueueVerification(_ challenge: CloudflareChallengeRequiredError, searchGeneration: UUID? = nil,
+                                     resume: @escaping @MainActor () -> Void) {
+        blockedActions.append(BlockedSourceAction(challenge: challenge, searchGeneration: searchGeneration, resume: resume))
+        presentNextVerification()
+    }
+
+    private func presentNextVerification() {
+        guard activeChallenge == nil, let first = blockedActions.first else { return }
+        activeChallenge = first.challenge
+        pendingCloudflareChallenge = first.challenge
+    }
+
+    func cloudflareVerificationSucceeded(_ id: UUID) {
+        guard activeChallenge?.id == id else { return }
+        verifiedChallengeID = id
+        pendingCloudflareChallenge = nil
+    }
+
+    /// 在 sheet 真正关闭后再恢复，避免再次质询时与正在关闭的 sheet 冲突。
+    func cloudflareVerificationDismissed() {
+        guard let active = activeChallenge else { return }
+        let actions = blockedActions.filter { $0.challenge.domain == active.domain }
+        blockedActions.removeAll { $0.challenge.domain == active.domain }
+        let passed = verifiedChallengeID == active.id
+        activeChallenge = nil; verifiedChallengeID = nil; pendingCloudflareChallenge = nil
+        if passed {
+            for action in actions where action.searchGeneration == nil || action.searchGeneration == searchGeneration { action.resume() }
+        }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.presentNextVerification()
+        }
+    }
+
+    func requestCloudflareVerification() {
+        guard let challenge = lastCloudflareChallenge else { return }
+        let replacing = needsReplacement || wallpapers.isEmpty
+        let request = replacing ? searchRequest : (committedSearch ?? searchRequest)
+        let page = replacing ? 1 : currentPage + 1
+        let generation = searchGeneration
+        enqueueVerification(challenge, searchGeneration: generation) { [weak self] in
+            guard let self, self.searchGeneration == generation else { return }
+            self.startSearch(request: request, page: page, replacing: replacing, debounce: false, verificationAttempts: 1)
         }
     }
 

@@ -59,12 +59,20 @@ struct DownloadService {
         }
 
         var request = URLRequest(url: resource)
+        request.httpShouldHandleCookies = false
         request.setValue(SourceHTTP.userAgent, forHTTPHeaderField: "User-Agent")
         for (field, value) in WallpaperSources.requestHeaders(for: resource) {
             request.setValue(value, forHTTPHeaderField: field)
         }
         let (tempURL, response) = try await session.download(for: request)
         defer { try? fm.removeItem(at: tempURL) }
+        let handle = try FileHandle(forReadingFrom: tempURL)
+        let prefix = try handle.read(upToCount: 4096) ?? Data()
+        try? handle.close()
+        if let challenge = SourceHTTP.challenge(data: prefix, response: response as? HTTPURLResponse, pageURL: wallpaper.pageURL) {
+            CloudflareClearanceStore.shared.clear(for: challenge.domain)
+            throw challenge
+        }
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
             throw WallperError.network("下载失败。")
         }

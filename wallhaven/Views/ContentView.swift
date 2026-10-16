@@ -737,6 +737,11 @@ struct ContentView: View {
         } message: {
             Text("请输入新的名称")
         }
+        .sheet(item: $viewModel.pendingCloudflareChallenge, onDismiss: viewModel.cloudflareVerificationDismissed) { challenge in
+            CloudflareVerificationSheet(challenge: challenge) {
+                viewModel.cloudflareVerificationSucceeded(challenge.id)
+            }
+        }
     }
 
     /// 筛选 / 下载面板浮层：从触发按钮的位置「长」出来，点击面板外部关闭
@@ -1269,9 +1274,20 @@ struct ContentView: View {
         VStack(spacing: 12) {
             switch page {
             case .home:
-                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34, weight: .light))
-                Text("未找到符合当前筛选条件的壁纸")
-                Button("调整筛选") { isFilterPresented = true }.buttonStyle(.bordered)
+                if viewModel.lastCloudflareChallenge != nil {
+                    Image(systemName: "shield.checkerboard").font(.system(size: 34, weight: .light))
+                    Text("图源需要完成安全验证")
+                    Button("完成安全验证") { viewModel.requestCloudflareVerification() }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Image(systemName: "photo.on.rectangle.angled").font(.system(size: 34, weight: .light))
+                    Text(viewModel.loadError ?? "未找到符合当前筛选条件的壁纸")
+                    if viewModel.loadError != nil {
+                        Button("重试") { viewModel.retryLoading() }.buttonStyle(.bordered)
+                    } else {
+                        Button("调整筛选") { isFilterPresented = true }.buttonStyle(.bordered)
+                    }
+                }
             case .favorites:
                 Image(systemName: "heart").font(.system(size: 34, weight: .light))
                 if collectionSource == .all {
