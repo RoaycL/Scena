@@ -201,10 +201,7 @@ nonisolated enum SourceHTTP {
     }
 
     static func challenge(data: Data, response: HTTPURLResponse?, pageURL: URL) -> CloudflareChallengeRequiredError? {
-        let preview = String(decoding: data.prefix(4096), as: UTF8.self).lowercased()
-        let marked = response?.value(forHTTPHeaderField: "cf-mitigated")?.lowercased() == "challenge"
-        guard marked || preview.contains("<title>just a moment") || preview.contains("cf-chl-") ||
-                preview.contains("challenges.cloudflare.com") || preview.contains("_cf_chl_opt") else { return nil }
+        guard CloudflareChallengeDetector.isChallenge(data, response: response) else { return nil }
         return CloudflareChallengeRequiredError(domain: pageURL.host?.lowercased() ?? "", challengeURL: pageURL)
     }
 

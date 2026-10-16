@@ -79,8 +79,7 @@ nonisolated struct WallsflowSource: WallpaperSource {
     }
 
     private static func checkPage(_ html: String, pageURL: URL? = nil) throws {
-        let lower = html.lowercased()
-        if lower.contains("cf-chl-") || lower.contains("challenges.cloudflare.com") || lower.contains("<title>just a moment") || lower.contains("_cf_chl_opt") {
+        if CloudflareChallengeDetector.isChallenge(Data(html.utf8)) {
             throw CloudflareChallengeRequiredError(domain: "wallsflow.com", challengeURL: pageURL ?? URL(string: site)!)
         }
     }

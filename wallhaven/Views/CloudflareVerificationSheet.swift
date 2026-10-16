@@ -10,6 +10,12 @@
 import SwiftUI
 import WebKit
 
+/// 图源安全验证专用的持久网页资料：和 Steam 网页登录、Pixiv 登录各自隔离，
+/// 验证留下的 Cookie 不会混进其他账号的网页会话
+@MainActor enum CloudflareWebSession {
+    static let dataStore = WKWebsiteDataStore(forIdentifier: UUID(uuidString: "6AA9FA67-9ABB-4B7F-ACF6-7EAC81970076")!)
+}
+
 struct CloudflareVerificationSheet: View {
     let challenge: CloudflareChallengeRequiredError
     let onVerified: () -> Void
@@ -91,7 +97,7 @@ private struct CloudflareVerificationWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = CloudflareWebSession.dataStore
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = SourceHTTP.userAgent
@@ -142,7 +148,7 @@ private struct CloudflareVerificationWebView: NSViewRepresentable {
             inspectionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 defer { self.inspectionTask = nil }
-                let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+                let cookies = await CloudflareWebSession.dataStore.httpCookieStore.allCookies()
                 guard !self.isStopped, !Task.isCancelled else { return }
                 let success = await self.parent.verification.inspect(cookies: cookies, challenge: self.parent.challenge)
                 guard !self.isStopped, !Task.isCancelled else { return }

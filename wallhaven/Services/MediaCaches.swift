@@ -105,7 +105,9 @@ nonisolated enum CacheLocations {
         URLCache.shared.removeAllCachedResponses()
         // 只清网页缓存，不动 Cookie（Steam 网页登录状态保留）
         let types: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache]
-        await WKWebsiteDataStore.default().removeData(ofTypes: types, modifiedSince: .distantPast)
+        for store in [WKWebsiteDataStore.default(), CloudflareWebSession.dataStore, PixivWebSession.dataStore] {
+            await store.removeData(ofTypes: types, modifiedSince: .distantPast)
+        }
     }
 
     static func files(in directory: URL) -> [(url: URL, size: Int64, modified: Date)] {
