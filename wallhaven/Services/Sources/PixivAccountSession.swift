@@ -173,11 +173,22 @@ nonisolated enum PixivSessionError: LocalizedError {
         let epoch = generation
         let cookies = await readCookies()
         guard epoch == generation, !Task.isCancelled else { return false }
+        return await authenticate(cookies: cookies)
+    }
+
+    /// 登录窗口使用独立网页会话，只校验该窗口提供的 Cookie。
+    @discardableResult func authenticate(cookies: [HTTPCookie]) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard let cookie = Self.usableCookie(in: cookies) else {
             errorMessage = "尚未检测到有效的 Pixiv 登录，请在网页中完成登录。"
             return false
         }
         return await beginValidation(PixivCredential(phpsessid: cookie.value, userID: nil, userName: nil, updatedAt: Date())).value
+    }
+
+    func prepareForWebLogin() {
+        cancelAuthentication()
+        if !isLoggedIn { errorMessage = nil }
     }
 
     @discardableResult func checkLoginState() async -> Bool {

@@ -77,6 +77,38 @@ import Testing
         #expect(store.value?.phpsessid == candidate.value && vault.header == "PHPSESSID=123_fake")
     }
 
+    @Test func isolatedWebLoginValidatesItsOwnCookiesInsteadOfSharedStore() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests()
+        var sharedCookieReads = 0
+        let session = account(store, network, read: {
+            sharedCookieReads += 1
+            return [cookie("111_stale_shared")]
+        })
+        let login = Task { await session.authenticate(cookies: [cookie("456_fresh_window")]) }
+        try await waitFor { network.pending[0] != nil }
+        #expect(sharedCookieReads == 0)
+        #expect(network.requests[0].value(forHTTPHeaderField: "Cookie") == "PHPSESSID=456_fresh_window")
+        network.finish(0, body: #"{"error":false,"body":{"id":"456","name":"New"}}"#)
+        #expect(await login.value)
+        #expect(session.userID == "456" && store.value?.phpsessid == "456_fresh_window")
+    }
+
+    @Test func restartingLoginClearsStaleErrorAndRejectsOldValidation() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests()
+        let session = account(store, network, read: { [] })
+        #expect(await session.authenticate(cookies: []) == false)
+        #expect(session.errorMessage != nil)
+        session.prepareForWebLogin()
+        #expect(session.errorMessage == nil)
+        let login = Task { await session.authenticate(cookies: [cookie()]) }
+        try await waitFor { network.pending[0] != nil }
+        session.prepareForWebLogin()
+        #expect(!session.isChecking && session.errorMessage == nil)
+        network.finish(0)
+        #expect(await login.value == false)
+        #expect(!session.isLoggedIn && store.value == nil && session.errorMessage == nil)
+    }
+
     @Test func logoutRejectsLateSuccessAndLateFailure() async throws {
         for status in [200, 401] {
             let store = MemoryPixivKeychain(), network = ControlledPixivRequests(), vault = PixivCookieVault()

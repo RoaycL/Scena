@@ -42,7 +42,7 @@ nonisolated struct WallsflowSource: WallpaperSource {
 
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {
         guard let url = Self.listURL(query, page: page) else { return [] }
-        return try Self.parse(String(decoding: await load(url, page > 1), as: UTF8.self))
+        return try Self.parse(String(decoding: await load(url, page > 1), as: UTF8.self), pageURL: url)
     }
 
     func filters(for query: WallpaperQuery) -> [SourceFilter] {
@@ -91,38 +91,25 @@ nonisolated struct WallsflowSource: WallpaperSource {
         return (String(match.1), String(match.2))
     }
 
-    /// 每次只处理一个完整锚点；属性顺序、单双引号和懒加载图片均不影响匹配。
-    static func parse(_ html: String) throws -> [RemoteWallpaper] {
+    /// 官网卡片的图片、视频和覆盖链接是兄弟节点，必须在 article 内配对。
+    /// 同时保留旧版「链接内嵌图片」的结构，不能跨卡片查找图片。
+    static func parse(_ html: String, pageURL: URL? = nil) throws -> [RemoteWallpaper] {
         if html.isEmpty { return [] }
-        try checkPage(html)
+        try checkPage(html, pageURL: pageURL)
+        var candidates: [(position: String.Index, item: RemoteWallpaper)] = []
+        for match in html.matches(of: /<article\b([^>]*)>(.*?)<\/article\s*>/.dotMatchesNewlines().ignoresCase()) {
+            if let item = parseCard(String(match.2), metadata: attributes(String(match.1))) {
+                candidates.append((match.range.lowerBound, item))
+            }
+        }
+        for match in html.matches(of: /<a\b[^>]*>.*?<\/a\s*>/.dotMatchesNewlines().ignoresCase()) {
+            if let item = parseCard(String(match.0)) {
+                candidates.append((match.range.lowerBound, item))
+            }
+        }
         var seen = Set<String>()
-        let items = html.matches(of: /<a\b([^>]*)>(.*?)<\/a\s*>/.dotMatchesNewlines().ignoresCase()).compactMap { match -> RemoteWallpaper? in
-            let anchor = attributes(String(match.1))
-            guard let href = anchor["href"], let page = URL(string: href, relativeTo: URL(string: site))?.absoluteURL,
-                  let article = article(page),
-                  let image = match.2.firstMatch(of: /<img\b([^>]*)>/.ignoresCase()) else { return nil }
-            let imageAttributes = attributes(String(image.1))
-            let rawImage = imageAttributes["data-src"] ?? imageAttributes["src"] ?? ""
-            guard !rawImage.isEmpty, let thumb = URL(string: rawImage, relativeTo: page)?.absoluteURL,
-                  thumb.scheme == "https", let host = thumb.host?.lowercased(),
-                  (host == "wallsflow.com" || host.hasSuffix(".wallsflow.com")),
-                  seen.insert(article.id).inserted else { return nil }
-            let cleanTitle = (imageAttributes["alt"] ?? anchor["title"] ?? article.slug.replacingOccurrences(of: "-", with: " "))
-                .replacingOccurrences(of: #"(?i)\s*[-_]?\s*wallsflow(-com|\.com)?$"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"(?i)\s*Live Wallpapers?$"#, with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "-_")))
-            // 列表没有附件 ID。保留详情页，点击下载时再解析真实附件链接。
-            return RemoteWallpaper(
-                id: "\(Self.id)-\(article.id)",
-                sourceID: Self.id,
-                pageURL: page,
-                imageURL: page,
-                thumbURL: thumb,
-                posterURL: thumb,
-                previewVideoURL: nil,
-                mediaType: .video,
-                title: cleanTitle.isEmpty ? "Wallsflow #\(article.id)" : cleanTitle
-            )
+        let items = candidates.sorted { $0.position < $1.position }.compactMap { candidate in
+            seen.insert(candidate.item.id).inserted ? candidate.item : nil
         }
         if items.isEmpty {
             let lower = html.lowercased()
@@ -133,8 +120,47 @@ nonisolated struct WallsflowSource: WallpaperSource {
         return items
     }
 
+    private static func parseCard(_ html: String, metadata: [String: String] = [:]) -> RemoteWallpaper? {
+        let links = html.matches(of: /<a\b([^>]*)>/.ignoresCase()).map { attributes(String($0.1)) }
+        guard let link = links.first(where: { attributes in
+            guard let href = attributes["href"], let url = URL(string: href, relativeTo: URL(string: site))?.absoluteURL else { return false }
+            return article(url) != nil
+        }), let href = link["href"], let url = URL(string: href, relativeTo: URL(string: site))?.absoluteURL,
+              var canonical = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let article = article(url),
+              let image = html.firstMatch(of: /<img\b([^>]*)>/.ignoresCase()) else { return nil }
+        canonical.fragment = nil
+        canonical.query = nil
+        guard let page = canonical.url else { return nil }
+        let imageAttributes = attributes(String(image.1))
+        // 只检查卡片的封面图；不能在封面无效时误用后面的作者头像。
+        let thumb = [imageAttributes["data-src"], imageAttributes["src"]].compactMap { value in
+            value.flatMap { mediaURL($0, relativeTo: page) }
+        }.first
+        guard let thumb else { return nil }
+        let cleanTitle = (link["aria-label"] ?? imageAttributes["alt"] ?? link["title"] ?? article.slug.replacingOccurrences(of: "-", with: " "))
+            .replacingOccurrences(of: #"(?i)\s*[-_]?\s*wallsflow(-com|\.com)?$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\s*Live Wallpapers?(?: for desktop)?$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "-_")))
+        let source = html.firstMatch(of: /<source\b([^>]*)>/.ignoresCase()).map { attributes(String($0.1)) }
+        let preview = [metadata["data-video-src"], source?["data-src"], source?["src"]].compactMap { value in
+            value.flatMap { mediaURL($0, relativeTo: page) }
+        }.first { $0.pathExtension.lowercased() == "mp4" }
+        // 预览地址不等于原始附件；下载仍需解析详情页的真实附件编号。
+        return RemoteWallpaper(id: "\(Self.id)-\(article.id)", sourceID: Self.id, pageURL: page, imageURL: page,
+            thumbURL: thumb, posterURL: thumb, previewVideoURL: preview, mediaType: .video,
+            title: cleanTitle.isEmpty ? "Wallsflow #\(article.id)" : cleanTitle)
+    }
+
+    private static func mediaURL(_ value: String, relativeTo page: URL) -> URL? {
+        guard !value.isEmpty, let url = URL(string: value, relativeTo: page)?.absoluteURL,
+              url.scheme == "https", url.user == nil, url.password == nil, let host = url.host?.lowercased(),
+              host == "wallsflow.com" || host.hasSuffix(".wallsflow.com") else { return nil }
+        return url
+    }
+
     static func parseDownloadURL(_ html: String, pageURL: URL) throws -> URL {
-        try checkPage(html)
+        try checkPage(html, pageURL: pageURL)
         for anchor in html.matches(of: /<a\b([^>]*)>/.ignoresCase()) {
             guard let href = attributes(String(anchor.1))["href"],
                   let url = URL(string: href, relativeTo: pageURL)?.absoluteURL,
