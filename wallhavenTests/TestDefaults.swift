@@ -1,23 +1,27 @@
 import Foundation
 
-/// 测试专用的偏好域。作为测试套件的存储属性：每个测试结束、套件实例释放时，清空这些偏好域并删除 plist 文件。
-/// removePersistentDomain 只清空内容，系统仍会留下一个空的 plist，所以还要删文件，
-/// 否则每次跑测试都会在 ~/Library/Preferences 里多出几十个残留文件
+/// 测试专用的偏好域。作为测试套件的存储属性：每个测试结束、套件实例释放时删除这些偏好文件。
+/// 偏好域名使用临时目录下的绝对路径，文件直接写在临时目录里，不进入 ~/Library/Preferences：
+/// 即使删除后 cfprefsd 又异步写回一个空文件，也只会落在系统会自动清理的临时目录
 final class TestDefaults {
+    private static let folder: URL = {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("scena-tests", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }()
+
     private var names: [String] = []
 
     func make() -> UserDefaults {
-        let name = "scena.tests.\(UUID().uuidString)"
+        let name = Self.folder.appendingPathComponent(UUID().uuidString).path
         names.append(name)
         return UserDefaults(suiteName: name)!
     }
 
     deinit {
-        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Preferences", isDirectory: true)
         for name in names {
             UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
-            CFPreferencesAppSynchronize(name as CFString)
-            try? FileManager.default.removeItem(at: folder.appendingPathComponent("\(name).plist"))
+            try? FileManager.default.removeItem(atPath: name + ".plist")
         }
     }
 }
