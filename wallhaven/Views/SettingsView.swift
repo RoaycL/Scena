@@ -669,38 +669,6 @@ private struct WorkshopSettings: View {
                 SettingsFootnote("场景和网页壁纸转成循环视频后，桌面改用硬件解码播放，几乎不占 CPU 和 GPU（鼠标、音乐等互动效果会消失）。自动转换只在接通电源、电脑 3 分钟没有操作、系统不热时进行，一次一个；一动鼠标或键盘就立即停下，下次空闲再继续。也可以在壁纸信息面板里点 🎞 手动转换。")
             }
 
-            Section {
-                ForEach(workshop.libraryRoots, id: \.self) { url in
-                    HStack {
-                        Image(systemName: "folder").foregroundStyle(.secondary)
-                        Text(url.path)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        if url == StorageManager.shared.workshopContentFolder {
-                            Text("存储位置").font(.caption).foregroundStyle(.secondary)
-                        } else if url == WorkshopLibrary.steamContentFolder {
-                            Text("Steam 默认").font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            Button {
-                                workshop.removeLibraryFolder(url)
-                            } label: {
-                                Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("从库中移除（不删除文件）")
-                        }
-                    }
-                }
-                HStack {
-                    Spacer()
-                    Button("添加文件夹…") { workshop.addLibraryFolder() }
-                }
-            } header: {
-                Text("壁纸库扫描位置")
-            } footer: {
-                SettingsFootnote("「存储位置」是 App 下载创意工坊壁纸的地方，跟随 设置 → 存储 变化。另外两类只读取、不会被移动：Steam 默认目录，以及你额外添加的文件夹（例如从 Windows 电脑拷贝的 steamapps/workshop/content/431960）。")
-            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)

@@ -93,6 +93,68 @@ import Testing
         #expect(session.userID == "456" && store.value?.phpsessid == "456_fresh_window")
     }
 
+    @Test func loginAndTwoFactorPagesNeverStartCookieValidation() {
+        let blocked = [
+            "https://accounts.pixiv.net/login", "https://accounts.pixiv.net/login/two-factor-authentication",
+            "https://accounts.pixiv.net/two-factor-authentication", "https://www.pixiv.net/login.php",
+            "https://www.pixiv.net/signup.php", "https://www.pixiv.net/ajax/user/extra",
+            "http://www.pixiv.net/", "https://www.pixiv.net.evil.example/", "https://pixiv.net/",
+            "https://name@www.pixiv.net/"
+        ]
+        for url in blocked {
+            #expect(!PixivLoginNavigation.canInspectCookies(at: URL(string: url), isLoading: false))
+        }
+        #expect(!PixivLoginNavigation.canInspectCookies(at: nil, isLoading: false))
+        #expect(!PixivLoginNavigation.canInspectCookies(at: URL(string: "https://www.pixiv.net/"), isLoading: true))
+        #expect(PixivLoginNavigation.canInspectCookies(at: URL(string: "https://www.pixiv.net/"), isLoading: false))
+        #expect(PixivLoginNavigation.canInspectCookies(at: URL(string: "https://www.pixiv.net/en/"), isLoading: false))
+    }
+
+    @Test(arguments: [401, 200])
+    func incompleteWebSessionDoesNotExpireSavedAccount(status: Int) async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests(), defaults = preferences.make()
+        store.value = PixivCredential(phpsessid: "123_saved", userID: "123", userName: "Saved", updatedAt: Date())
+        let session = account(store, network, defaults: defaults, read: { [] })
+        let login = Task { await session.authenticate(cookies: [cookie("456_intermediate")]) }
+        try await waitFor { network.pending[0] != nil }
+        network.finish(0, status: status, body: #"{"error":true,"body":[]}"#)
+        #expect(await login.value == false)
+        #expect(store.value?.phpsessid == "123_saved")
+        #expect(!defaults.bool(forKey: "pixiv.auth.signedOut.v1"))
+        #expect(session.errorMessage?.contains("会话已过期") == false)
+        let restore = Task { await session.checkLoginState() }
+        try await waitFor { network.pending[1] != nil }
+        network.finish(1)
+        #expect(await restore.value)
+    }
+
+    @Test func anonymousWebCookieCannotRemoveAlreadyVerifiedAccount() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests(), vault = PixivCookieVault()
+        let session = account(store, network, vault: vault, read: { [] })
+        let login = Task { await session.authenticate(cookies: [cookie("123_verified")]) }
+        try await waitFor { network.pending[0] != nil }
+        network.finish(0)
+        #expect(await login.value)
+        let incomplete = Task { await session.authenticate(cookies: [cookie("456_intermediate")]) }
+        try await waitFor { network.pending[1] != nil }
+        network.finish(1, status: 401)
+        #expect(await incomplete.value == false)
+        #expect(session.isLoggedIn && session.userID == "123" && session.isPersistent)
+        #expect(store.value?.phpsessid == "123_verified" && vault.header == "PHPSESSID=123_verified")
+    }
+
+    @Test func rejectedSavedSessionStillExpiresWhenRestoring() async throws {
+        let store = MemoryPixivKeychain(), network = ControlledPixivRequests(), vault = PixivCookieVault()
+        store.value = PixivCredential(phpsessid: "123_expired", userID: "123", userName: nil, updatedAt: Date())
+        let session = account(store, network, vault: vault, read: { [] })
+        let restore = Task { await session.checkLoginState() }
+        try await waitFor { network.pending[0] != nil }
+        network.finish(0, body: #"{"error":true,"body":[]}"#)
+        #expect(await restore.value == false)
+        #expect(!session.isLoggedIn && store.value == nil && vault.header == nil)
+        #expect(session.errorMessage?.contains("会话已过期") == true)
+    }
+
     @Test func restartingLoginClearsStaleErrorAndRejectsOldValidation() async throws {
         let store = MemoryPixivKeychain(), network = ControlledPixivRequests()
         let session = account(store, network, read: { [] })

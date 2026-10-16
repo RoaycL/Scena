@@ -26,7 +26,8 @@ struct PixivLoginView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            PixivLoginWebView(isLoading: $isLoading, pageError: $pageError, retryID: retryID) { cookies in
+            PixivLoginWebView(isLoading: $isLoading, pageError: $pageError, retryID: retryID,
+                              onNavigationStarted: { session.cancelAuthentication() }) { cookies in
                 let success = await session.authenticate(cookies: cookies)
                 if success, session.isPersistent {
                     ToastCenter.shared.show("已登录 Pixiv", style: .success)
@@ -63,7 +64,7 @@ struct PixivLoginView: View {
             Button(action: reloadLoginPage) {
                 Image(systemName: "arrow.clockwise")
             }
-            .help("重新加载登录页（使用新的网页会话）")
+            .help("重新加载登录页，保留此浏览器的双重验证状态")
             .accessibilityLabel("重新加载登录页")
             Button("关闭") {
                 dismissWindow(id: PixivLoginWindow.id)
@@ -93,7 +94,7 @@ struct PixivLoginView: View {
             }
             Text("在 Pixiv 官方页面中完成登录。验证成功后保存到系统钥匙串；保存失败会明确提示仅本次有效。")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("登录页使用独立网页会话，不与 Safari 共享登录；页面报错时可重新加载。")
+            Text("登录页使用独立浏览器资料，保留双重验证的浏览器状态；不与 Safari 共享登录。")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,6 +113,7 @@ private struct PixivLoginWebView: NSViewRepresentable {
     @Binding var isLoading: Bool
     @Binding var pageError: String?
     let retryID: UUID
+    let onNavigationStarted: @MainActor () -> Void
     let onLoginDetected: @MainActor ([HTTPCookie]) async -> Bool
 
     func makeCoordinator() -> Coordinator {
@@ -120,9 +122,8 @@ private struct PixivLoginWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        // 钥匙串负责长期保存登录；网页每次打开 / 重新加载均使用全新会话，
-        // 避免过期的 PHPSESSID、CSRF Cookie 和网页缓存影响登录页面。
-        config.websiteDataStore = .nonPersistent()
+        // 独立的持久网页资料允许 Pixiv 保存双重验证的浏览器信任状态。
+        config.websiteDataStore = PixivWebSession.dataStore
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = SourceHTTP.userAgent
@@ -130,14 +131,14 @@ private struct PixivLoginWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.startCookieInspection()
 
-        webView.load(URLRequest(url: PixivAccountSession.loginURL))
+        webView.load(URLRequest(url: PixivAccountSession.loginURL, cachePolicy: .reloadIgnoringLocalCacheData))
         return webView
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
         let retry = context.coordinator.parent.retryID != retryID
         context.coordinator.parent = self
-        if retry { context.coordinator.lastAttemptedCookie = nil; context.coordinator.inspectCookies() }
+        if retry { context.coordinator.retryCookieInspection() }
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
@@ -153,6 +154,7 @@ private struct PixivLoginWebView: NSViewRepresentable {
         private var isHandlingSuccess = false
         private var isStopped = false
         private var inspectionTask: Task<Void, Never>?
+        private var navigationGeneration = UUID()
         var lastAttemptedCookie: String?
 
         init(_ parent: PixivLoginWebView) {
@@ -175,18 +177,21 @@ private struct PixivLoginWebView: NSViewRepresentable {
         }
 
         func inspectCookies() {
-            guard !isStopped, !isHandlingSuccess, inspectionTask == nil else { return }
+            guard !isStopped, !isHandlingSuccess, inspectionTask == nil, let webView,
+                  PixivLoginNavigation.canInspectCookies(at: webView.url, isLoading: webView.isLoading) else { return }
+            let epoch = navigationGeneration
             inspectionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 defer { self.inspectionTask = nil }
                 guard let webView = self.webView else { return }
                 let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-                guard !self.isStopped, !Task.isCancelled,
+                guard !self.isStopped, !Task.isCancelled, self.navigationGeneration == epoch,
+                      PixivLoginNavigation.canInspectCookies(at: webView.url, isLoading: webView.isLoading),
                       let cookie = PixivAccountSession.usableCookie(in: cookies),
                       cookie.value != self.lastAttemptedCookie else { return }
                 self.lastAttemptedCookie = cookie.value
                 let success = await self.parent.onLoginDetected(cookies)
-                guard !self.isStopped, !Task.isCancelled else { return }
+                guard !self.isStopped, !Task.isCancelled, self.navigationGeneration == epoch else { return }
                 if success {
                     self.isHandlingSuccess = true
                     self.stopCookieInspection()
@@ -194,8 +199,22 @@ private struct PixivLoginWebView: NSViewRepresentable {
             }
         }
 
+        func retryCookieInspection() {
+            guard let webView,
+                  PixivLoginNavigation.canInspectCookies(at: webView.url, isLoading: webView.isLoading) else {
+                parent.pageError = "请先在网页中完成登录及双重认证，返回 Pixiv 主站后会自动检查。"
+                return
+            }
+            parent.pageError = nil
+            lastAttemptedCookie = nil
+            inspectCookies()
+        }
+
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             guard !isStopped else { return }
+            navigationGeneration = UUID()
+            inspectionTask?.cancel()
+            parent.onNavigationStarted()
             parent.isLoading = true
             parent.pageError = nil
         }

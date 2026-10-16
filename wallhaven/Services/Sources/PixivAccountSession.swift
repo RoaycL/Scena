@@ -130,8 +130,8 @@ nonisolated enum PixivSessionError: LocalizedError {
     init(keychain: (any PixivCredentialStoring)? = nil, session: URLSession? = nil,
          defaults: UserDefaults = .standard, vault: PixivCookieVault? = nil, restoreAutomatically: Bool = true,
          requestLoader: (@MainActor (URLRequest) async throws -> (Data, URLResponse))? = nil,
-         readCookies: @escaping @MainActor () async -> [HTTPCookie] = { await WKWebsiteDataStore.default().httpCookieStore.allCookies() },
-         deleteCookie: @escaping @MainActor (HTTPCookie) async -> Void = { await WKWebsiteDataStore.default().httpCookieStore.deleteCookie($0) }) {
+         readCookies: @escaping @MainActor () async -> [HTTPCookie] = { await PixivWebSession.dataStore.httpCookieStore.allCookies() },
+         deleteCookie: @escaping @MainActor (HTTPCookie) async -> Void = { await PixivWebSession.dataStore.httpCookieStore.deleteCookie($0) }) {
         self.keychain = keychain ?? PixivKeychain()
         if let session { self.session = session } else {
             let config = URLSessionConfiguration.ephemeral
@@ -183,7 +183,7 @@ nonisolated enum PixivSessionError: LocalizedError {
             errorMessage = "尚未检测到有效的 Pixiv 登录，请在网页中完成登录。"
             return false
         }
-        return await beginValidation(PixivCredential(phpsessid: cookie.value, userID: nil, userName: nil, updatedAt: Date())).value
+        return await beginValidation(PixivCredential(phpsessid: cookie.value, userID: nil, userName: nil, updatedAt: Date()), origin: .web).value
     }
 
     func prepareForWebLogin() {
@@ -197,7 +197,9 @@ nonisolated enum PixivSessionError: LocalizedError {
         return await beginValidation(candidate).value
     }
 
-    @discardableResult private func beginValidation(_ candidate: PixivCredential) -> Task<Bool, Never> {
+    private enum ValidationOrigin { case stored, web }
+
+    @discardableResult private func beginValidation(_ candidate: PixivCredential, origin: ValidationOrigin = .stored) -> Task<Bool, Never> {
         validationTask?.cancel()
         let epoch = UUID()
         generation = epoch
@@ -208,7 +210,7 @@ nonisolated enum PixivSessionError: LocalizedError {
             defer {
                 if self.generation == epoch { self.isChecking = false; self.validationTask = nil }
             }
-            return await self.validate(candidate, epoch: epoch)
+            return await self.validate(candidate, epoch: epoch, origin: origin)
         }
         validationTask = task
         return task
@@ -217,6 +219,14 @@ nonisolated enum PixivSessionError: LocalizedError {
     private struct Envelope: Decodable {
         let error: Bool
         let body: Body?
+        enum CodingKeys: CodingKey { case error, body }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            error = try values.decode(Bool.self, forKey: .error)
+            // 登录未完成时 body 可以为 []，不能让它掩盖明确的 error 标志。
+            if error { body = nil }
+            else { body = try values.decodeIfPresent(Body.self, forKey: .body) }
+        }
         struct Body: Decodable {
             let id: String?
             let name: String?
@@ -232,7 +242,7 @@ nonisolated enum PixivSessionError: LocalizedError {
         }
     }
 
-    private func validate(_ candidate: PixivCredential, epoch: UUID) async -> Bool {
+    private func validate(_ candidate: PixivCredential, epoch: UUID, origin: ValidationOrigin) async -> Bool {
         guard Self.validToken(candidate.phpsessid) else { errorMessage = PixivSessionError.invalidResponse.localizedDescription; return false }
         var request = URLRequest(url: URL(string: "https://www.pixiv.net/ajax/user/extra")!)
         request.httpShouldHandleCookies = false
@@ -244,10 +254,10 @@ nonisolated enum PixivSessionError: LocalizedError {
             let (data, response) = try await requestLoader(request)
             guard epoch == generation, !Task.isCancelled else { return false }
             guard let http = response as? HTTPURLResponse, http.url?.host == "www.pixiv.net" else { throw PixivSessionError.invalidResponse }
-            if http.statusCode == 401 { expire(epoch: epoch); return false }
+            if http.statusCode == 401 { reject(candidate, epoch: epoch, origin: origin); return false }
             guard (200..<300).contains(http.statusCode) else { throw PixivSessionError.connection }
             let envelope = try JSONDecoder().decode(Envelope.self, from: data)
-            if envelope.error { expire(epoch: epoch); return false }
+            if envelope.error { reject(candidate, epoch: epoch, origin: origin); return false }
             guard let body = envelope.body else { throw PixivSessionError.invalidResponse }
             var verified = candidate
             verified.userID = body.id ?? body.userData?.id ?? candidate.phpsessid.split(separator: "_").first.flatMap { part in
@@ -288,6 +298,16 @@ nonisolated enum PixivSessionError: LocalizedError {
         guard let credential, isLoggedIn else { return false }
         isPersistent = persist(credential)
         return isPersistent
+    }
+
+    private func reject(_ candidate: PixivCredential, epoch: UUID, origin: ValidationOrigin) {
+        guard generation == epoch else { return }
+        // 匿名 / 双重认证中的 Cookie 不是已保存账号，拒绝它不能删除另一个有效会话。
+        if origin == .stored || credential?.phpsessid == candidate.phpsessid || savedCandidate?.phpsessid == candidate.phpsessid {
+            expire(epoch: epoch)
+        } else {
+            errorMessage = "尚未检测到已完成的 Pixiv 登录，请先在网页中完成验证码及双重认证。"
+        }
     }
 
     private func expire(epoch: UUID) {
