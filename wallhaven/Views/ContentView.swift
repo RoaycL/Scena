@@ -1397,17 +1397,11 @@ struct ContentView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.primary.opacity(0.7))
             } else if state == .queued || state == .downloading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.primary)
-                    Text(state.label).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.primary)
-                    Button("取消") { workshop.cancelDownload(workshopItem) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.primary.opacity(0.7))
+                WorkshopDownloadCapsule(progress: workshop.progress, itemID: workshopItem.id, state: state) {
+                    workshop.cancelDownload(workshopItem)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .sceneGlass(in: Capsule())
+                .frame(width: 240)
+                .background(Capsule().fill(.clear).sceneGlass(in: Capsule()))
             } else if workshopItem.isDownloaded {
                 ApplyWallpaperButton(item: item) { workshop.apply(workshopItem) }.id("apply-\(item.id)")
             } else {

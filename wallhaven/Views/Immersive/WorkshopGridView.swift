@@ -370,22 +370,8 @@ private struct WorkshopDetailPanel: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.primary)
             } else if isDownloading {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.white)
-                    Text(workshop.downloadState(of: item).label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                    Spacer()
-                    Button("暂停") { workshop.pauseDownload(item.id) }
-                        .buttonStyle(.plain)
-                    Button("停止") { workshop.cancelDownload(item) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.primary.opacity(0.7))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(Color.primary.opacity(0.06), in: Capsule())
+                WorkshopDownloadCapsule(progress: workshop.progress, itemID: item.id, state: workshop.downloadState(of: item),
+                                        onPause: { workshop.pauseDownload(item.id) }, onCancel: { workshop.cancelDownload(item) })
             } else {
                 Button { workshop.apply(item) } label: {
                     Text(item.isDownloaded ? "设为壁纸" : "下载并应用")
