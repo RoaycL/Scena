@@ -1168,9 +1168,10 @@ final class WorkshopDownloadProgress: ObservableObject {
                 }
                 if next != self.entries { self.entries = next }
                 let total = sizes.values.reduce(0, +)
-                if let lastTotal { self.bytesPerSecond = max(0, total - lastTotal) }
+                if let lastTotal { self.bytesPerSecond = max(0, (total - lastTotal) * 2) }
                 lastTotal = total
-                try? await Task.sleep(for: .seconds(1))
+                // 小壁纸几秒就下完，轮询太慢会直接从「等待」跳到「完成」
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }

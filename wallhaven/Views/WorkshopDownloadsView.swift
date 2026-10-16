@@ -166,6 +166,11 @@ private struct WorkshopDownloadsList: View {
                     }
                     Text(progressText(entry))
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                } else if job.state == .downloading, job.id == workshop.downloadJobs.first(where: { $0.state == .downloading })?.id {
+                    // 本批正在处理的条目：还没有字节进度（连接 Steam、获取清单中，或 steamcmd 估算不到）时显示不确定进度
+                    ProgressView().progressViewStyle(.linear).controlSize(.small)
+                    Text(workshop.usesSteamCDN ? "正在连接 Steam…" : "正在通过 steamcmd 下载…")
+                        .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text(statusText(job))
                         .font(.caption)
