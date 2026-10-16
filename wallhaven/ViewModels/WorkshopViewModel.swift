@@ -752,7 +752,13 @@ final class WorkshopViewModel: ObservableObject {
         let sizes = Dictionary(batch.compactMap { id in
             (downloadJobs.first { $0.id == id }?.totalBytes ?? known[id]).map { (id, $0) }
         }, uniquingKeysWith: { a, _ in a })
-        progress.start(ids: batch, totalBytes: sizes, stagingFolder: Self.stagingFolder)
+        // 扫码登录的账号直接从 Steam CDN 下载；没有时退回 steamcmd
+        let usesSteamCDN = usesSteamCDN
+        if usesSteamCDN {
+            progress.track(ids: batch, totalBytes: sizes)
+        } else {
+            progress.start(ids: batch, totalBytes: sizes, stagingFolder: Self.stagingFolder)
+        }
         Task {
             defer {
                 progress.stop()
@@ -764,6 +770,18 @@ final class WorkshopViewModel: ObservableObject {
             do {
                 if batchInterrupted || isShuttingDown {
                     result = .init()
+                } else if usesSteamCDN {
+                    guard let access = await account.contentCredential() else { throw SteamContentError.signedOut }
+                    let downloaded = try await SteamContentDownloader.shared.download(
+                        ids: batch, credential: access.credential, loginID: access.loginID,
+                        contentRoot: StorageManager.shared.workshopContentFolder, stagingRoot: Self.contentStagingFolder
+                    ) { [weak self] event in
+                        switch event {
+                        case .progress(let id, let received, let total): self?.progress.report(id: id, bytes: received, total: total)
+                        case .downloaded(let id, _): self?.progress.finish(id: id); self?.markDownloaded(id)
+                        }
+                    }
+                    result = .init(downloaded: downloaded.downloaded, failed: downloaded.failed)
                 } else {
                     let relay = DownloadProgressRelay(self)
                     result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername) { id in
@@ -772,9 +790,10 @@ final class WorkshopViewModel: ObservableObject {
                 }
             } catch {
                 if case SteamCMDError.notLoggedIn = error { setSteamCMDLogin(valid: false) }
+                if case SteamContentError.credentialsExpired = error { _ = await account.ensureAuthenticated(forceRefresh: true) }
                 result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
             }
-            if !result.downloaded.isEmpty { setSteamCMDLogin(valid: true) }
+            if !result.downloaded.isEmpty, !usesSteamCDN { setSteamCMDLogin(valid: true) }
             for (id, folder) in result.downloaded {
                 await WorkshopLibraryIndex.shared.invalidate(folder: folder)
                 if let video = WorkshopItem.load(from: folder, computeSize: false)?.nativeVideoURL {
@@ -797,6 +816,7 @@ final class WorkshopViewModel: ObservableObject {
             }?.id
             downloadJobs = WorkshopDownloadQueue.settle(downloadJobs, batch: Set(batch),
                 downloaded: Set(result.downloaded.keys), failures: result.failed, interrupted: batchInterrupted)
+            for job in downloadJobs where batch.contains(job.id) && job.state == .cancelled { discardStaging(job.id) }
             forcedValidation.subtract(result.downloaded.keys)
             if !batchInterrupted {
                 let failed = downloadJobs.filter { batch.contains($0.id) && $0.state == .failed }
@@ -830,7 +850,26 @@ final class WorkshopViewModel: ObservableObject {
         if activeDownloads.contains(id) {
             batchInterrupted = true
             SteamCMDDownloader.shared.cancel(id)
+            SteamContentDownloader.shared.cancelAll()
+        } else if state == .cancelled {
+            discardStaging(id)
         }
+    }
+
+    /// 是否用扫码登录的账号直接从 Steam CDN 下载
+    var usesSteamCDN: Bool {
+        SteamContentDownloader.shared.isAvailable && account.canDownloadContent
+    }
+
+    /// CDN 下载的暂存目录（和 steamcmd 的 downloads/431960 分开）：<安装目录>/steamapps/workshop/downloads/scena/<id>
+    private static var contentStagingFolder: URL {
+        stagingFolder.deletingLastPathComponent().appendingPathComponent("scena", isDirectory: true)
+    }
+
+    /// 停止下载时删掉已下载的部分；暂停则保留，恢复时继续
+    private func discardStaging(_ id: String) {
+        let folder = Self.contentStagingFolder.appendingPathComponent(id, isDirectory: true)
+        Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: folder) }
     }
 
     func resumeDownload(_ id: String) {
@@ -858,6 +897,7 @@ final class WorkshopViewModel: ObservableObject {
         if !activeDownloads.isEmpty {
             batchInterrupted = true
             SteamCMDDownloader.shared.terminateAll()
+            SteamContentDownloader.shared.cancelAll()
         }
     }
 
@@ -888,6 +928,7 @@ final class WorkshopViewModel: ObservableObject {
         if !activeDownloads.isEmpty {
             batchInterrupted = true
             SteamCMDDownloader.shared.terminateAll()
+            SteamContentDownloader.shared.cancelAll()
         }
     }
 
@@ -1132,6 +1173,38 @@ final class WorkshopDownloadProgress: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    /// CDN 下载：进度由组件直接报告，不用估算暂存目录大小
+    func track(ids: [String], totalBytes: [String: Int64]) {
+        task?.cancel()
+        task = nil
+        batch = Set(ids)
+        entries = [:]
+        bytesPerSecond = 0
+        speedSamples = []
+    }
+
+    func report(id: String, bytes: Int64, total: Int64) {
+        guard batch.contains(id) else { return }
+        let entry = Entry(bytes: bytes, total: total > 0 ? total : entries[id]?.total)
+        if entries[id] != entry { entries[id] = entry }
+        // 按最近约 2 秒的累计字节估算速度，避免每 0.25 秒跳动
+        let now = Date()
+        let received = entries.values.reduce(0) { $0 + $1.bytes }
+        speedSamples.append((now, received))
+        speedSamples.removeAll { now.timeIntervalSince($0.time) > 2 }
+        if let first = speedSamples.first, now.timeIntervalSince(first.time) > 0.5 {
+            bytesPerSecond = max(0, Int64(Double(received - first.bytes) / now.timeIntervalSince(first.time)))
+        }
+    }
+
+    private var speedSamples: [(time: Date, bytes: Int64)] = []
+
+    /// 条目完成：移出进度列表（批次统计只算还在传输的）
+    func finish(id: String) {
+        entries[id] = nil
+        speedSamples = []
     }
 
     func stop() {

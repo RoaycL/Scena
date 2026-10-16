@@ -180,13 +180,22 @@ private struct WorkshopDownloadsList: View {
     private func progressText(_ entry: WorkshopDownloadProgress.Entry) -> String {
         let done = FileSizeText.string(entry.bytes)
         guard let total = entry.total, let fraction = entry.fraction else { return "已下载 \(done)" }
-        return "\(done) / \(FileSizeText.string(total)) · \(Int(fraction * 100))%"
+        var text = "\(done) / \(FileSizeText.string(total)) · \(Int(fraction * 100))%"
+        // 剩余时间：同一时间只有一个条目在传输，整体速度就是它的速度
+        if progress.bytesPerSecond > 0, total > entry.bytes {
+            let seconds = Double(total - entry.bytes) / Double(progress.bytesPerSecond)
+            let formatter = DateComponentsFormatter()
+            formatter.unitsStyle = .short
+            formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : (seconds >= 60 ? [.minute] : [.second])
+            if let remaining = formatter.string(from: max(1, seconds)) { text += " · 剩余 \(remaining)" }
+        }
+        return text
     }
 
     private func statusText(_ job: WorkshopDownloadJob) -> String {
         let size = job.totalBytes.map { " · " + FileSizeText.string($0) } ?? ""
         switch job.state {
-        // 同一批里 steamcmd 逐个下载，还没轮到的显示为等待
+        // 同一批里逐个下载，还没轮到的显示为等待
         case .downloading: return "等待下载（本批次）" + size
         case .queued: return "排队中" + size
         default: return job.state.label + size

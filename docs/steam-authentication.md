@@ -8,7 +8,14 @@
 
 持久凭据保存在 macOS 登录钥匙串。重新启动时静默恢复，短期社区会话过期前按需刷新；明确撤销或失效才要求重新授权。断网和服务器故障保留持久凭据，允许重试。仍可明确选择网页登录，其会话有效期由 Steam 决定。
 
-本阶段仅统一订阅认证。下载仍由 SteamCMD 执行，沿用独立登录缓存、持久任务、暂停和恢复机制。扫码成功不代表 SteamCMD 已登录，也不证明账号具备某个受限条目的下载权限。
+扫码登录后，创意工坊下载也使用此账号，直接从 Steam 内容 CDN 获取，不需要 steamcmd（账号需拥有 Wallpaper Engine，否则拿不到 depot 密钥）。网页登录或未登录时退回 SteamCMD，沿用其独立登录缓存。
+
+## CDN 下载
+
+- helper 方法 `download`：用钥匙串中的 refresh token 登录（LoginID 为订阅会话的 +1，两者可同时在线），不续签令牌。`PublishedFile.GetDetails` 取 `hcontent_file`，再取 manifest 请求码、depot 431960 的解密密钥和可用 CDN 服务器。
+- 分片按服务器轮询并发下载（默认 8 路，失败换服务器重试），由 SteamKit 解密、解压并做 Adler32 校验，按偏移写入 `steamapps/workshop/downloads/scena/<id>`。完成后整体替换 `content/431960/<id>`，旧目录在移动成功后才删除。
+- 暂停保留暂存文件，恢复时校验已有分片只补缺失部分；已安装目录中 SHA1 一致的文件直接复用。停止下载删除暂存。
+- 清单中的文件名视为不可信，越出条目目录的路径被拒绝。事件：`progress`（字节）、`itemDone`、`itemError`（`unavailable` / `storage` / `connection`）、`done`；账号没有 Wallpaper Engine 时 `error: notOwned` 结束整批。
 
 ## 组件与凭据边界
 

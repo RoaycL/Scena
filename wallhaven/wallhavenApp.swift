@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         PlaylistManager.shared.flushPendingSave()
         SteamCMDDownloader.shared.terminateAll()
+        SteamContentDownloader.shared.cancelAll()
         UpdateManager.shared.cancelDownload()
     }
 

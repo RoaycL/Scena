@@ -6,13 +6,14 @@ using SteamKit2.Authentication;
 
 // One operation per process. stdin/stdout are private pipes owned by Scena;
 // no HTTP listener, passwords, credential files, or token-bearing log messages.
-internal static class Program
+internal static partial class Program
 {
     private static readonly object OutputLock = new();
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private sealed record Request(int V, string Id, string Method, uint LoginId = 0,
-        string? AccountName = null, string? RefreshToken = null);
+        string? AccountName = null, string? RefreshToken = null,
+        string[]? Ids = null, string? ContentRoot = null, string? StagingRoot = null, int Concurrency = 8);
     private sealed class ServiceFailure(string code) : Exception { public string Code { get; } = code; }
 
     private static void Emit(object message)
@@ -38,14 +39,17 @@ internal static class Program
                 Emit(new { v = 1, id = request.Id, type = "pong" });
                 return 0;
             }
-            if (request.Method is not ("qr" or "restore")) throw new ServiceFailure("protocol");
+            if (request.Method is not ("qr" or "restore" or "download")) throw new ServiceFailure("protocol");
             if (request.LoginId == 0) throw new ServiceFailure("protocol");
-            using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(request.Method == "qr" ? 240 : 50));
+            // Downloads end on completion, cancellation, or parent EOF; large items can take hours.
+            var limit = request.Method switch { "qr" => TimeSpan.FromSeconds(240), "restore" => TimeSpan.FromSeconds(50), _ => TimeSpan.FromHours(12) };
+            using var lifetime = new CancellationTokenSource(limit);
             // EOF means the parent went away; cancel rather than leaving a login alive.
             // Console.In can synchronously block even in ReadLineAsync; keep the
             // parent monitor off the authentication continuation.
             _ = Task.Run(() => WatchParent(lifetime));
-            await Authenticate(request, lifetime.Token);
+            if (request.Method == "download") await Download(request, lifetime.Token);
+            else await Authenticate(request, lifetime.Token);
             return 0;
         }
         catch (OperationCanceledException)
@@ -80,74 +84,113 @@ internal static class Program
         catch (ObjectDisposedException) { }
     }
 
-    private static async Task Authenticate(Request request, CancellationToken cancellation)
+    /// A connected CM session with a callback pump; disposing disconnects and stops the pump.
+    private sealed class Session : IAsyncDisposable
     {
-        var client = new SteamClient(SteamConfiguration.Create(builder => builder
-            .WithProtocolTypes(ProtocolTypes.WebSocket).WithConnectionTimeout(TimeSpan.FromSeconds(20))));
-        var manager = new CallbackManager(client);
-        var user = client.GetHandler<SteamUser>() ?? throw new ServiceFailure("protocol");
-        var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var loggedOn = new TaskCompletionSource<SteamUser.LoggedOnCallback>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var onConnected = manager.Subscribe<SteamClient.ConnectedCallback>(_ => connected.TrySetResult());
-        using var onDisconnected = manager.Subscribe<SteamClient.DisconnectedCallback>(_ =>
+        public SteamClient Client { get; }
+        public SteamUser User { get; }
+        private readonly CallbackManager manager;
+        private readonly CancellationTokenSource pumpCancellation;
+        private readonly Task pump;
+        private readonly List<IDisposable> subscriptions = [];
+        private readonly TaskCompletionSource connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<SteamUser.LoggedOnCallback> loggedOn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource disconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// Completes when Steam drops the connection after logon.
+        public Task Disconnected => disconnected.Task;
+
+        public Session(CancellationToken cancellation)
         {
-            connected.TrySetException(new ServiceFailure("connection"));
-            loggedOn.TrySetException(new ServiceFailure("connection"));
-        });
-        using var onLoggedOn = manager.Subscribe<SteamUser.LoggedOnCallback>(callback => loggedOn.TrySetResult(callback));
-        using var pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        var pump = Task.Run(() =>
+            Client = new SteamClient(SteamConfiguration.Create(builder => builder
+                .WithProtocolTypes(ProtocolTypes.WebSocket).WithConnectionTimeout(TimeSpan.FromSeconds(20))));
+            manager = new CallbackManager(Client);
+            User = Client.GetHandler<SteamUser>() ?? throw new ServiceFailure("protocol");
+            subscriptions.Add(manager.Subscribe<SteamClient.ConnectedCallback>(_ => connected.TrySetResult()));
+            subscriptions.Add(manager.Subscribe<SteamClient.DisconnectedCallback>(_ =>
+            {
+                connected.TrySetException(new ServiceFailure("connection"));
+                loggedOn.TrySetException(new ServiceFailure("connection"));
+                disconnected.TrySetResult();
+            }));
+            subscriptions.Add(manager.Subscribe<SteamUser.LoggedOnCallback>(callback => loggedOn.TrySetResult(callback)));
+            pumpCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+            var token = pumpCancellation.Token;
+            pump = Task.Run(() =>
+            {
+                while (!token.IsCancellationRequested) manager.RunWaitCallbacks(TimeSpan.FromMilliseconds(50));
+            }, CancellationToken.None);
+        }
+
+        public async Task ConnectAsync(CancellationToken cancellation)
         {
-            while (!pumpCancellation.IsCancellationRequested) manager.RunWaitCallbacks(TimeSpan.FromMilliseconds(50));
-        }, CancellationToken.None);
-        try
-        {
-            Emit(new { v = 1, id = request.Id, type = "connecting" });
-            client.Connect();
+            Client.Connect();
             await connected.Task.WaitAsync(cancellation);
-            string accountName;
-            string refreshToken;
-            if (request.Method == "qr")
-            {
-                var auth = await client.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
-                {
-                    DeviceFriendlyName = "Scena for macOS", IsPersistentSession = true, WebsiteID = "Client"
-                }).WaitAsync(cancellation);
-                void PublishChallenge() => Emit(new { v = 1, id = request.Id, type = "qr", challengeUrl = auth.ChallengeURL });
-                auth.ChallengeURLChanged = PublishChallenge;
-                PublishChallenge();
-                var result = await auth.PollingWaitForResultAsync(cancellation);
-                accountName = result.AccountName;
-                refreshToken = result.RefreshToken;
-                auth.ChallengeURLChanged = null;
-            }
-            else
-            {
-                accountName = request.AccountName ?? throw new ServiceFailure("protocol");
-                refreshToken = request.RefreshToken ?? throw new ServiceFailure("protocol");
-                if (string.IsNullOrWhiteSpace(accountName) || refreshToken.Length is < 32 or > 16384)
-                    throw new ServiceFailure("protocol");
-            }
-            Emit(new { v = 1, id = request.Id, type = "authorizing" });
-            user.LogOn(new SteamUser.LogOnDetails { Username = accountName, AccessToken = refreshToken,
-                LoginID = request.LoginId, ShouldRememberPassword = true });
+        }
+
+        public async Task<SteamID> LogOnAsync(string accountName, string refreshToken, uint loginId, CancellationToken cancellation)
+        {
+            User.LogOn(new SteamUser.LogOnDetails { Username = accountName, AccessToken = refreshToken,
+                LoginID = loginId, ShouldRememberPassword = true });
             var login = await loggedOn.Task.WaitAsync(cancellation);
             if (login.Result != EResult.OK) throw new ServiceFailure(ErrorCode(login.Result));
-            var steamId = login.ClientSteamID ?? throw new ServiceFailure("protocol");
-            // CM-authenticated refresh supports SteamClient tokens. Handle token rotation.
-            var tokens = await client.Authentication.GenerateAccessTokenForAppAsync(steamId, refreshToken, allowRenewal: true)
-                .WaitAsync(cancellation);
-            if (!string.IsNullOrEmpty(tokens.RefreshToken)) refreshToken = tokens.RefreshToken;
-            var expiresAt = Expiration(tokens.AccessToken);
-            Emit(new { v = 1, id = request.Id, type = "result", accountName,
-                steamId = steamId.ConvertToUInt64().ToString(), refreshToken, accessToken = tokens.AccessToken, expiresAt });
+            return login.ClientSteamID ?? throw new ServiceFailure("protocol");
         }
-        finally
+
+        public async ValueTask DisposeAsync()
         {
-            client.Disconnect();
+            Client.Disconnect();
             await pumpCancellation.CancelAsync();
             await pump;
+            subscriptions.ForEach(subscription => subscription.Dispose());
+            pumpCancellation.Dispose();
         }
+    }
+
+    private static void ValidateStoredCredential(Request request)
+    {
+        if (string.IsNullOrWhiteSpace(request.AccountName) || request.RefreshToken is null
+            || request.RefreshToken.Length is < 32 or > 16384)
+            throw new ServiceFailure("protocol");
+    }
+
+    private static async Task Authenticate(Request request, CancellationToken cancellation)
+    {
+        await using var session = new Session(cancellation);
+        var client = session.Client;
+        Emit(new { v = 1, id = request.Id, type = "connecting" });
+        await session.ConnectAsync(cancellation);
+        string accountName;
+        string refreshToken;
+        if (request.Method == "qr")
+        {
+            var auth = await client.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+            {
+                DeviceFriendlyName = "Scena for macOS", IsPersistentSession = true, WebsiteID = "Client"
+            }).WaitAsync(cancellation);
+            void PublishChallenge() => Emit(new { v = 1, id = request.Id, type = "qr", challengeUrl = auth.ChallengeURL });
+            auth.ChallengeURLChanged = PublishChallenge;
+            PublishChallenge();
+            var result = await auth.PollingWaitForResultAsync(cancellation);
+            accountName = result.AccountName;
+            refreshToken = result.RefreshToken;
+            auth.ChallengeURLChanged = null;
+        }
+        else
+        {
+            ValidateStoredCredential(request);
+            accountName = request.AccountName!;
+            refreshToken = request.RefreshToken!;
+        }
+        Emit(new { v = 1, id = request.Id, type = "authorizing" });
+        var steamId = await session.LogOnAsync(accountName, refreshToken, request.LoginId, cancellation);
+        // CM-authenticated refresh supports SteamClient tokens. Handle token rotation.
+        var tokens = await client.Authentication.GenerateAccessTokenForAppAsync(steamId, refreshToken, allowRenewal: true)
+            .WaitAsync(cancellation);
+        if (!string.IsNullOrEmpty(tokens.RefreshToken)) refreshToken = tokens.RefreshToken;
+        var expiresAt = Expiration(tokens.AccessToken);
+        Emit(new { v = 1, id = request.Id, type = "result", accountName,
+            steamId = steamId.ConvertToUInt64().ToString(), refreshToken, accessToken = tokens.AccessToken, expiresAt });
     }
 
     private static long Expiration(string token)

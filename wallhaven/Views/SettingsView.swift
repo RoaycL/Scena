@@ -182,7 +182,7 @@ private struct AccountSettings: View {
             wallhavenSection
             if viewModel.isAuthenticated { wallhavenSyncSection }
             steamSection
-            steamCMDSection
+            if !workshop.usesSteamCDN { steamCMDSection }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -258,6 +258,13 @@ private struct AccountSettings: View {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
             if steamAccount.isLoggedIn {
+                if workshop.usesSteamCDN {
+                    Label("创意工坊壁纸直接从 Steam 下载，无需 steamcmd", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("网页登录只能同步订阅；改用扫码登录后可直接下载", systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("在 Mac 上下载时同时订阅", isOn: $workshop.subscribeOnDownload)
                 Toggle("自动下载其他设备上新订阅的壁纸", isOn: $workshop.autoDownloadSubscriptions)
                 HStack {
@@ -273,9 +280,9 @@ private struct AccountSettings: View {
                 }
             }
         } header: {
-            Label("Steam 账号（创意工坊订阅）", systemImage: "arrow.triangle.2.circlepath")
+            Label("Steam 账号（订阅与下载）", systemImage: "arrow.triangle.2.circlepath")
         } footer: {
-            SettingsFootnote("支持 Steam 手机扫码，登录凭据保存在系统钥匙串并自动恢复；也可使用网页登录。此账号用于订阅同步，下载账号仍在「创意工坊」中配置。")
+            SettingsFootnote("用 Steam 手机 App 扫码登录，凭据保存在系统钥匙串并自动恢复。扫码登录后订阅同步和壁纸下载都使用此账号，账号需已购买 Wallpaper Engine。")
         }
     }
 
@@ -344,9 +351,9 @@ private struct AccountSettings: View {
             TextField("Steam 用户名", text: $workshop.steamUsername, prompt: Text("登录 steamcmd 使用的账号名"))
             steamCMDStatusRow
         } header: {
-            Label("Steam 下载（steamcmd）", systemImage: "arrow.down.circle")
+            Label("备用下载方式（steamcmd）", systemImage: "arrow.down.circle")
         } footer: {
-            SettingsFootnote("账号需已购买 Wallpaper Engine。首次需在终端输入密码和 Steam 令牌，之后 steamcmd 会缓存登录状态，App 内即可下载。")
+            SettingsFootnote("未扫码登录 Steam 时使用。账号需已购买 Wallpaper Engine；首次需在终端输入密码和 Steam 令牌，之后 steamcmd 会缓存登录状态。")
         }
     }
 }

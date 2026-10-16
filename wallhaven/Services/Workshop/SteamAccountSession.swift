@@ -194,6 +194,24 @@ final class SteamAccountSession: ObservableObject {
         return result
     }
 
+    /// 扫码登录的账号能直接从 Steam CDN 下载工坊内容（网页登录没有可用于下载的凭据）
+    var canDownloadContent: Bool {
+        // 启动后还没恢复登录时也要知道有没有扫码凭据，否则第一批下载会误退回 steamcmd
+        if !credentialsLoaded, !defaults.bool(forKey: Self.signedOutKey), let stored = try? credentials.load() {
+            nativeCredential = stored
+            credentialsLoaded = true
+        }
+        return hasRememberedAccount && authenticator.isAvailable
+    }
+
+    /// 下载用的凭据：先确认登录有效（必要时续签，令牌可能轮换），再取最新的持久令牌。
+    /// 下载用另一个 LoginID，和订阅同步的连接同时在线时不会互相踢下线
+    func contentCredential() async -> (credential: SteamCredential, loginID: UInt32)? {
+        guard await ensureAuthenticated(), let nativeCredential else { return nil }
+        let downloadID = loginID &+ 1
+        return (nativeCredential, downloadID == 0 ? 1 : downloadID)
+    }
+
     private func accept(_ result: SteamAuthenticationResult) throws {
         try result.validate()
         // 原子更新钥匙串成功后才发布登录成功，不能悄悄退化成一次性会话。
