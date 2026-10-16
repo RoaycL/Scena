@@ -116,6 +116,7 @@ final class LocalMediaViewModel: ObservableObject {
 
         let fm = FileManager.default
         var imported = 0
+        var videos: [URL] = []
         do {
             try fm.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             for source in panel.urls where MediaType.isSupported(source) {
@@ -123,8 +124,11 @@ final class LocalMediaViewModel: ObservableObject {
                 guard !fm.fileExists(atPath: destination.path) else { continue }
                 try fm.copyItem(at: source, to: destination)
                 imported += 1
+                if MediaType.isVideo(destination) { videos.append(destination) }
             }
             loadMedia()
+            let importedVideos = videos
+            Task(priority: .utility) { await VideoPosterCache.shared.prewarm(importedVideos) }
             toast.show(imported > 0 ? "已导入 \(imported) 个文件" : "没有新文件需要导入", style: .success)
         } catch {
             toast.show("导入失败：\(error.localizedDescription)", style: .error)

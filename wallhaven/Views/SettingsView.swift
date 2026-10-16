@@ -245,9 +245,17 @@ private struct AccountSettings: View {
                 if steamAccount.isLoggedIn {
                     Button("退出登录") { workshop.logoutSteam() }
                 } else {
+                    if steamAccount.loginState == .restoring { ProgressView().controlSize(.small) }
+                    if steamAccount.hasRememberedAccount {
+                        Button("重试恢复") { Task { await steamAccount.ensureAuthenticated(forceRefresh: true) } }
+                            .disabled(steamAccount.loginState.isBusy)
+                    }
                     Button("登录 Steam") { openWindow(id: SteamLoginWindow.id) }
                         .buttonStyle(.borderedProminent)
                 }
+            }
+            if case .failed(let message) = steamAccount.loginState {
+                Text(message).font(.caption).foregroundStyle(.secondary)
             }
             if steamAccount.isLoggedIn {
                 Toggle("在 Mac 上下载时同时订阅", isOn: $workshop.subscribeOnDownload)
@@ -267,7 +275,7 @@ private struct AccountSettings: View {
         } header: {
             Label("Steam 账号（创意工坊订阅）", systemImage: "arrow.triangle.2.circlepath")
         } footer: {
-            SettingsFootnote("在 Steam 官方登录页登录，只使用登录后的会话读写订阅，不会读取或保存密码。同步在启动、打开工坊页或手动点击时进行，请求会限速。")
+            SettingsFootnote("支持 Steam 手机扫码，登录凭据保存在系统钥匙串并自动恢复；也可使用网页登录。此账号用于订阅同步，下载账号仍在「创意工坊」中配置。")
         }
     }
 

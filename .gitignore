@@ -10,3 +10,7 @@ build/
 # SwiftPM
 .build/
 .swiftpm/
+
+# Steam authentication helper build output
+helpers/**/bin/
+helpers/**/obj/

@@ -951,8 +951,7 @@ struct ContentView: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.primary.opacity(0.85))
-                            .rotationEffect(.degrees(workshop.isSyncing && !Motion.reducesMotion ? 360 : 0))
-                            .animation(workshop.isSyncing ? Motion.syncing : Motion.hover, value: workshop.isSyncing)
+                            .rotatingWhileVisible(workshop.isSyncing)
                             .frame(width: 34, height: 34)
                             .sceneGlass(in: Circle(), interactive: true)
                     }

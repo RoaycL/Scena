@@ -55,7 +55,7 @@ struct GalleryItem: Identifiable, Equatable {
             return (wallpaper.thumbURL ?? wallpaper.path).convertToSource()
         case .local(let item):
             if item.isVideo {
-                return .provider(AVAssetImageDataProvider(assetURL: item.url, seconds: 1))
+                return .provider(VideoPosterProvider(url: item.url, tier: .list))
             }
             return .provider(LocalFileImageDataProvider(fileURL: item.url))
         case .workshop(let item):

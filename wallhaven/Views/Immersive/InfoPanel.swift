@@ -264,18 +264,12 @@ struct DownloadActionButton: View {
 
 /// 下载中：沿按钮边缘旋转的一段弧线；减少动态效果时静止
 private struct DownloadingRing: View {
-    @State private var spinning = false
-
     var body: some View {
         Circle()
             .trim(from: 0, to: 0.28)
             .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            .rotationEffect(.degrees(spinning ? 360 : 0))
+            .rotatingWhileVisible(duration: 0.9)
             .padding(1)
-            .onAppear {
-                guard !Motion.reducesMotion else { return }
-                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { spinning = true }
-            }
     }
 }
 

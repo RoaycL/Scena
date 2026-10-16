@@ -198,7 +198,8 @@ final class LiveWallpaperController: ObservableObject {
         case .video:
             return LoopingVideoNSView(url: content.url, includeAudio: playsSound)
         case .workshop:
-            guard let item = WorkshopItem.load(from: content.url) else { return nil }
+            // 播放只需要入口元数据，不在主线程遍历整份壁纸的资源大小。
+            guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return nil }
             // 视频类工坊壁纸优先用 AVFoundation 播放，更省电
             if let videoURL = item.nativeVideoURL {
                 return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
@@ -471,7 +472,7 @@ final class LiveWallpaperController: ObservableObject {
         case .video:
             cgImage = try await firstFrame(of: content.url)
         case .workshop:
-            let item = WorkshopItem.load(from: content.url)
+            let item = WorkshopItem.load(from: content.url, computeSize: false)
             if let videoURL = item?.nativeVideoURL {
                 cgImage = try await firstFrame(of: videoURL)
             } else if let preview = item?.previewURL, let cg = posterFrame(ofImageAt: preview) {

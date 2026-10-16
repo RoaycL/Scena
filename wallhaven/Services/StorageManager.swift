@@ -129,7 +129,7 @@ final class StorageManager: ObservableObject {
             async let wallpapers = Task.detached { Self.size(of: wallpaperFolder) }.value
             async let imported = Task.detached { Self.size(of: importFolder) }.value
             async let workshop = Task.detached { Self.size(of: workshopFolder) }.value
-            let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0)
+            let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0) + (await VideoPosterCache.shared.diskSize())
             var usage = Usage(wallpapers: await wallpapers, imported: await imported, workshop: await workshop, cache: cache)
             // 默认位置下导入文件夹在壁纸文件夹里面，避免重复计算
             if importFolder.path.hasPrefix(wallpaperFolder.path + "/") { usage.wallpapers -= usage.imported }
@@ -140,6 +140,7 @@ final class StorageManager: ObservableObject {
     func clearImageCache() {
         ImageCache.default.clearMemoryCache()
         Task {
+            await VideoPosterCache.shared.clear()
             await ImageCache.default.clearDiskCache()
             refreshUsage()
             ToastCenter.shared.show("图片缓存已清除", style: .success)

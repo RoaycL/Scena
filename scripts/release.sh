@@ -26,6 +26,7 @@ if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
 fi
 
 echo "==> 构建 Release"
+bash scripts/build-steam-service.sh
 # generic 目标才会同时构建 Apple 芯片和 Intel；不指定时 xcodebuild 会选本机，只得到 arm64
 xcodebuild -project wallhaven.xcodeproj -scheme wallhaven -configuration Release -destination 'generic/platform=macOS' build -quiet
 

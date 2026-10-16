@@ -115,6 +115,7 @@
 				84ACC9662F92266200CE2095 /* Sources */,
 				84ACC9672F92266200CE2095 /* Frameworks */,
 				84ACC9682F92266200CE2095 /* Resources */,
+				C3EAA0012FDE000000000001 /* Embed Steam Authentication Service */,
 			);
 			buildRules = (
 			);
@@ -248,6 +249,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+        C3EAA0012FDE000000000001 /* Embed Steam Authentication Service */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = (
+                "$(SRCROOT)/scripts/embed-steam-service.sh",
+                "$(SRCROOT)/helpers/ScenaSteamService",
+                "$(SRCROOT)/helpers/ScenaSteamService/helper-entitlements.plist",
+                "$(SRCROOT)/build/steam-service",
+            );
+            inputFileListPaths = ("$(SRCROOT)/build/steam-service-inputs.xcfilelist",);
+            outputFileListPaths = ("$(SRCROOT)/build/steam-service-outputs.xcfilelist",);
+            name = "Embed Steam Authentication Service";
+            outputPaths = ();
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/bash;
+            shellScript = "bash \"$SRCROOT/scripts/embed-steam-service.sh\"\n";
+        };
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		84ACC9662F92266200CE2095 /* Sources */ = {

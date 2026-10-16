@@ -91,6 +91,8 @@ macOS 14 的适配已通过双架构编译和最低版本检查，尚未完成 m
 
 SteamCMD 管理自己的登录缓存，Steam 网页登录成功不代表 SteamCMD 已登录。可在设置中分别查看订阅与下载的登录状态。
 
+**源码开发版（尚未发布）：** Steam 登录默认支持手机扫码，持久登录令牌保存在 macOS 钥匙串；重新启动时自动恢复，社区会话过期时按需刷新。仍保留网页登录入口，下载暂时继续使用独立的 SteamCMD 登录。令牌可能被撤销或过期，届时需要重新授权。实现与验证说明见 [Steam 认证文档](docs/steam-authentication.md)。
+
 Scena 与 Windows 上的 Wallpaper Engine 使用同一 Steam 账号的订阅列表。启用「自动下载其他设备上新订阅的壁纸」后，应用会先扫描本地素材，再将缺失的可播放内容加入下载队列。**同步的是订阅列表，壁纸文件仍需在每台设备上分别下载。**
 
 ### 下载暂停与恢复
@@ -142,7 +144,13 @@ Scena/
 
 当前发布构建使用 Xcode 27.0；应用最低系统版本为 macOS 14.0。
 
+当前源码还需要 Python 3 和 .NET SDK（`helpers/ScenaSteamService/global.json` 固定为 10.0.402，允许同一功能带的更新补丁）。先生成两种架构的认证组件及 Xcode 文件清单，再构建应用。普通用户安装打包后的 `.app` 无需安装 .NET 或 Python。
+
 ```bash
+# 首次构建，或认证组件源码/依赖变更后执行
+bash scripts/build-steam-service.sh
+# dotnet 不在 PATH 时：SCENA_DOTNET=/路径/dotnet bash scripts/build-steam-service.sh
+
 # 开发构建
 xcodebuild -project wallhaven.xcodeproj -scheme wallhaven -configuration Debug build
 
@@ -164,7 +172,7 @@ xcodebuild test -project wallhaven.xcodeproj -scheme wallhaven \
 3. 上传包含顶层 `Scena.app` 的 ZIP 到 GitHub Release，并附上说明和 `SHA256SUMS.txt`。
 4. 核对线上版本、架构、签名及下载文件的完整性。
 
-[`scripts/release.sh`](scripts/release.sh) 提供构建、打包和创建 Release 的辅助流程，支持 `--draft`。应用的更新功能读取本仓库最新的正式 Release。
+[`scripts/release.sh`](scripts/release.sh) 提供认证组件构建、应用打包和创建 Release 的辅助流程，支持 `--draft`。应用的更新功能读取本仓库最新的正式 Release。认证组件采用自包含运行时，会增加安装包体积；完整依赖许可随组件一起打包。
 
 </details>
 
@@ -172,6 +180,7 @@ xcodebuild test -project wallhaven.xcodeproj -scheme wallhaven \
 
 - [webwallgl](https://github.com/oneincase/webwallgl)（MIT）：Wallpaper Engine 场景与网页渲染。
 - [Kingfisher](https://github.com/onevcat/Kingfisher)（MIT）：图片加载与缓存。
+- [SteamKit2](https://github.com/SteamRE/SteamKit)（LGPL）：源码开发版的 Steam 扫码认证与社区会话；通过独立进程调用，依赖许可见应用内 `Contents/Resources/SteamService/`。
 - [linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine)、[RePKG](https://github.com/notscuffed/repkg)：目录与格式约定参考。
 
 Scena 与 Steam、Wallpaper Engine、Wallhaven 均无官方关联。壁纸内容的版权归各自作者所有，请遵守作者及平台的使用要求。

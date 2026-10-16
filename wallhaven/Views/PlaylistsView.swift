@@ -649,7 +649,7 @@ struct PlaylistsView: View {
     static func thumbnailSource(for entry: PlaylistEntry) -> Source? {
         if entry.kind == .local, let path = entry.path {
             let url = URL(fileURLWithPath: path)
-            if MediaType.isVideo(url) { return .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1)) }
+            if MediaType.isVideo(url) { return .provider(VideoPosterProvider(url: url, tier: .list)) }
         }
         return entry.thumbnailURL.map { $0.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: $0)) : $0.convertToSource() }
     }

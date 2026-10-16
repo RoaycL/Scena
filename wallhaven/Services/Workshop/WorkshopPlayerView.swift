@@ -215,10 +215,19 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     private var wantsPlaying = true
     private var volume = 0.0
     private var lastPointerPush = Date.distantPast
+    private let pausesWhenHidden: Bool
+    private var isWindowVisible = false
+    private var lastPlaybackState: Bool?
+    private var isStopped = false
+    private lazy var visibility = WindowVisibilityObserver { [weak self] visible in
+        self?.isWindowVisible = visible
+        self?.updatePlayback()
+    }
 
-    init(item: WorkshopItem, fps: Int = 30, tracksMouse: Bool = false) {
+    init(item: WorkshopItem, fps: Int = 30, tracksMouse: Bool = false, pausesWhenHidden: Bool = false) {
         self.item = item
         self.fps = fps
+        self.pausesWhenHidden = pausesWhenHidden
 
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(WorkshopSchemeHandler.shared, forURLScheme: WorkshopSchemeHandler.scheme)
@@ -260,6 +269,11 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         webView.frame = bounds
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if pausesWhenHidden && !isStopped { visibility.attach(to: window) }
+    }
+
     /// 不拦截鼠标事件，让上层 SwiftUI 界面正常交互
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -271,12 +285,21 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
 
     func play() {
         wantsPlaying = true
-        call("__host.resume()")
+        updatePlayback()
     }
 
     func pause() {
         wantsPlaying = false
-        call("__host.pause()")
+        updatePlayback()
+    }
+
+    private func updatePlayback() {
+        guard !isStopped, isPageLoaded else { return }
+        let playing = PreviewPlaybackPolicy.shouldPlay(wantsPlaying: wantsPlaying,
+            isReady: state == .ready, isVisible: !pausesWhenHidden || isWindowVisible)
+        guard playing != lastPlaybackState else { return }
+        lastPlaybackState = playing
+        call(playing ? "__host.resume()" : "__host.pause()")
     }
 
     func snapshot() async -> CGImage? {
@@ -290,7 +313,13 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     }
 
     func stop() {
+        guard !isStopped else { return }
+        isStopped = true
+        visibility.stop()
+        wantsPlaying = false
         call("__host.pause()")
+        isPageLoaded = false
+        readyCallbacks.removeAll()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "host")
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
@@ -304,6 +333,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     }
 
     fileprivate func handle(message: [String: Any]) {
+        guard !isStopped else { return }
         switch message["type"] as? String {
         case "loaded":
             isPageLoaded = true
@@ -312,7 +342,8 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         case "ready":
             state = .ready
             call("__host.setVolume(\(volume))")
-            if !wantsPlaying { call("__host.pause()") }
+            lastPlaybackState = nil
+            updatePlayback()
         case "error":
             state = .failed(message["message"] as? String ?? "渲染失败")
         default:
@@ -346,7 +377,7 @@ struct WorkshopPlayerView: NSViewRepresentable {
     var onStateChange: (WorkshopPlayerNSView.State) -> Void = { _ in }
 
     func makeNSView(context: Context) -> WorkshopPlayerNSView {
-        let view = WorkshopPlayerNSView(item: item, fps: 60, tracksMouse: true)
+        let view = WorkshopPlayerNSView(item: item, fps: 60, tracksMouse: true, pausesWhenHidden: true)
         view.onStateChange = onStateChange
         return view
     }

@@ -34,7 +34,7 @@ nonisolated enum WEProjectType: String, Codable, CaseIterable, Sendable {
     var isPlayable: Bool { self != .application }
 }
 
-nonisolated struct WorkshopItem: Identifiable, Hashable, Sendable {
+nonisolated struct WorkshopItem: Identifiable, Hashable, Codable, Sendable {
     /// 工坊 ID（publishedfileid）；本地无 ID 的工程用文件夹名
     let id: String
     var title: String

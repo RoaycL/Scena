@@ -132,6 +132,9 @@ final class WorkshopViewModel: ObservableObject {
     private var searchTask: Task<Void, Never>?
     private var filterDebounce: Task<Void, Never>?
     private let account = SteamAccountSession.shared
+    private var accountObserver: AnyCancellable?
+    private var subscriptionSyncTask: Task<Void, Never>?
+    private var subscriptionGeneration = UUID()
     /// 下载队列：串行执行，每批最多 10 个条目共用一次 steamcmd 登录
     private var batchInterrupted = false
     private var isProcessingQueue = false
@@ -183,6 +186,16 @@ final class WorkshopViewModel: ObservableObject {
             MainActor.assumeIsolated { self?.refreshSteamCMDStatus() }
         }
         refreshSteamCMDStatus()
+        accountObserver = account.$steamID.removeDuplicates().dropFirst().sink { [weak self] id in
+            guard let self else { return }
+            resetAccountSubscriptions()
+            if let id {
+                Task { [weak self] in
+                    guard let self, account.steamID == id else { return }
+                    syncSubscriptions(force: true)
+                }
+            }
+        }
     }
 
     // MARK: - steamcmd login status
@@ -314,7 +327,11 @@ final class WorkshopViewModel: ObservableObject {
         let generation = UUID()
         libraryGeneration = generation
         let roots = libraryRoots
-        let scanned = await Task.detached { WorkshopLibrary.scan(roots: roots) }.value
+        if libraryItems.isEmpty {
+            let cached = await WorkshopLibraryIndex.shared.cachedItems(roots: roots)
+            if libraryGeneration == generation, roots == libraryRoots, !cached.isEmpty { libraryItems = cached }
+        }
+        let scanned = await WorkshopLibraryIndex.shared.scan(roots: roots)
         guard roots == libraryRoots else { return await refreshLibraryAndWait() }
         if libraryGeneration == generation {
             if libraryItems != scanned { libraryItems = scanned }
@@ -757,6 +774,10 @@ final class WorkshopViewModel: ObservableObject {
             }
             if !result.downloaded.isEmpty { setSteamCMDLogin(valid: true) }
             for (id, folder) in result.downloaded {
+                await WorkshopLibraryIndex.shared.invalidate(folder: folder)
+                if let video = WorkshopItem.load(from: folder, computeSize: false)?.nativeVideoURL {
+                    Task(priority: .utility) { await VideoPosterCache.shared.prewarm([video]) }
+                }
                 if let receipt = await Task.detached(priority: .utility, operation: {
                     WorkshopDownloadReceipt.capture(folder: folder)
                 }).value {
@@ -875,16 +896,22 @@ final class WorkshopViewModel: ObservableObject {
         guard !isSyncing else { return }
         if !force, let lastSyncAt, Date().timeIntervalSince(lastSyncAt) < 600 { return }
         isSyncing = true
-        Task {
-            defer { isSyncing = false }
-            guard await account.refreshFromCookies() else { return }
+        let operation = UUID()
+        subscriptionGeneration = operation
+        subscriptionSyncTask = Task {
+            defer { if subscriptionGeneration == operation { isSyncing = false; subscriptionSyncTask = nil } }
+            guard await account.ensureAuthenticated(), !Task.isCancelled else { return }
+            let accountEpoch = account.sessionIdentifier
             do {
                 let list = try await account.subscriptions()
                 let ids = list.entries.map(\.id)
                 var fetched: [WorkshopItem] = []
                 for start in stride(from: 0, to: ids.count, by: 100) {
+                    try Task.checkCancellation()
                     fetched += try await api.details(ids: Array(ids[start..<min(start + 100, ids.count)]))
                 }
+                guard !Task.isCancelled, subscriptionGeneration == operation,
+                      account.sessionIdentifier == accountEpoch else { return }
                 // 公开详情接口查不到的条目（被作者删除、隐藏或受限）用订阅页上的标题和预览图补上，保证不丢
                 let byID = Dictionary(fetched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 let details = list.entries.map { entry in
@@ -904,6 +931,8 @@ final class WorkshopViewModel: ObservableObject {
                 // Windows 上新订阅的壁纸自动下载到 Mac
                 if autoDownloadSubscriptions {
                     let scanned = await refreshLibraryAndWait()
+                    guard !Task.isCancelled, subscriptionGeneration == operation,
+                          account.sessionIdentifier == accountEpoch else { return }
                     let localIDs = Set(scanned.map(\.id))
                     let missing = details.filter { !localIDs.contains($0.id) && $0.type.isPlayable }
                     if !missing.isEmpty { enqueueDownloads(missing, automatic: true) }
@@ -920,6 +949,8 @@ final class WorkshopViewModel: ObservableObject {
                 }
                 UserDefaults.standard.set(unavailableIDs, forKey: Keys.notifiedUnavailable)
             } catch {
+                guard !Task.isCancelled, subscriptionGeneration == operation,
+                      account.sessionIdentifier == accountEpoch else { return }
                 toast.show("同步订阅失败：\(error.localizedDescription)", style: .error)
             }
         }
@@ -934,6 +965,7 @@ final class WorkshopViewModel: ObservableObject {
             toast.show(SteamSessionError.notLoggedIn.localizedDescription, style: .error)
             return
         }
+        let accountEpoch = account.sessionIdentifier
         // 先更新界面，失败再回滚（回滚时放回原来的位置）
         let originalIndex = subscribedItems.firstIndex { $0.id == item.id }
         if subscribed {
@@ -950,8 +982,10 @@ final class WorkshopViewModel: ObservableObject {
                 } else {
                     try await account.unsubscribe(item.id)
                 }
+                guard account.sessionIdentifier == accountEpoch else { return }
                 if !quiet { toast.show(subscribed ? "已订阅「\(item.title)」" : "已取消订阅「\(item.title)」", style: .success) }
             } catch {
+                guard account.sessionIdentifier == accountEpoch, !Task.isCancelled else { return }
                 if subscribed {
                     subscribedIDs.remove(item.id)
                     subscribedItems.removeAll { $0.id == item.id }
@@ -967,6 +1001,7 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func logoutSteam() {
+        resetAccountSubscriptions()
         Task {
             await account.logout()
             subscribedIDs = []
@@ -974,6 +1009,16 @@ final class WorkshopViewModel: ObservableObject {
             lastSyncAt = nil
             if mode == .subscribed { mode = .library }
         }
+    }
+
+    private func resetAccountSubscriptions() {
+        subscriptionGeneration = UUID()
+        subscriptionSyncTask?.cancel()
+        subscriptionSyncTask = nil
+        isSyncing = false
+        subscribedIDs = []
+        subscribedItems = []
+        lastSyncAt = nil
     }
 
     /// 撤销删除：文件夹从废纸篓移回，删除时一起取消的订阅也恢复

@@ -123,9 +123,9 @@ private struct BackgroundLayer: View {
             }
     }
 
-    /// 视频文件本身的一帧作为封面（按窗口大小解码）；读不出来时退回壁纸预览图的模糊底色
+    /// 视频文件本身的有尺寸上限的海报；读不出来时退回壁纸预览图的模糊底色
     private func videoPoster(_ url: URL, size: CGSize) -> some View {
-        KFImage(source: .provider(AVAssetImageDataProvider(assetURL: url, seconds: 1)))
+        KFImage(source: .provider(VideoPosterProvider(url: url, tier: .poster)))
             .setProcessor(DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
             .scaleFactor(ImageSizing.scale)
             .loadDiskFileSynchronously(false)
@@ -140,8 +140,8 @@ private struct BackgroundLayer: View {
 
     /// 动态壁纸的封面：清晰显示（不模糊），读取失败时什么也不显示，由外层保留上一张
     private func poster(size: CGSize) -> some View {
-        KFImage(source: item.thumbnailSource)
-            // 工坊预览图和缩略图条用同一个处理器，命中内存缓存、立即显示；本地视频的封面帧按窗口大小解码
+        KFImage(source: item.local.flatMap { $0.isVideo ? Source.provider(VideoPosterProvider(url: $0.url, tier: .poster)) : nil } ?? item.thumbnailSource)
+            // 工坊预览图与缩略图共享处理器；本地视频使用独立的大图海报缓存。
             .setProcessor(item.workshop != nil ? item.thumbnailProcessor : DownsamplingImageProcessor(size: ImageSizing.backgroundSize))
             .scaleFactor(ImageSizing.scale)
             .loadDiskFileSynchronously(false)
