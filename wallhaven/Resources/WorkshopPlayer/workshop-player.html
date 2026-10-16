@@ -51,7 +51,63 @@
     // 桌面窗口不接收鼠标事件，指针（视差效果）由宿主推送
     pointer(u, v) { wp && wp.pushPointer(u, v, 0, 0); },
     pointerLeave() { wp && wp.pointerLeave(); },
+    // 烘焙：把渲染画面录成 MP4，分段以 base64 交给宿主拼接
+    record(seconds, bitrate) {
+      const canvas = largestCanvas();
+      if (!canvas || !canvas.captureStream || typeof MediaRecorder === "undefined") {
+        post("recordError", { message: "unsupported" });
+        return;
+      }
+      const mime = ["video/mp4;codecs=avc1.640033", "video/mp4;codecs=avc1", "video/mp4"]
+        .find((t) => MediaRecorder.isTypeSupported(t));
+      if (!mime) { post("recordError", { message: "mp4" }); return; }
+      let recorder;
+      try {
+        recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: bitrate });
+      } catch (e) {
+        post("recordError", { message: errorText(e) });
+        return;
+      }
+      let index = 0;
+      let pending = Promise.resolve();
+      recorder.ondataavailable = (e) => {
+        if (!e.data || !e.data.size) return;
+        const i = index++;
+        pending = pending.then(async () => {
+          post("recordChunk", { index: i, data: toBase64(new Uint8Array(await e.data.arrayBuffer())) });
+        });
+      };
+      recorder.onerror = (e) => post("recordError", { message: errorText(e.error || e) });
+      recorder.onstop = () => pending.then(() => post("recordDone", { chunks: index }));
+      recorder.start(1000);
+      setTimeout(() => recorder.state !== "inactive" && recorder.stop(), seconds * 1000);
+      post("recordStarted", { width: canvas.width, height: canvas.height });
+    },
   };
+
+  // 渲染画面所在的 canvas：页面（以及同源 iframe）里面积最大、正在显示的那个
+  function largestCanvas() {
+    const docs = [document];
+    for (const frame of document.querySelectorAll("iframe")) {
+      try { if (frame.contentDocument) docs.push(frame.contentDocument); } catch (_) {}
+    }
+    let best = null;
+    for (const doc of docs) {
+      for (const c of doc.querySelectorAll("canvas")) {
+        if (!c.offsetWidth || !c.offsetHeight) continue;
+        if (!best || c.width * c.height > best.width * best.height) best = c;
+      }
+    }
+    return best;
+  }
+
+  function toBase64(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  }
 
   post("loaded");
 </script>

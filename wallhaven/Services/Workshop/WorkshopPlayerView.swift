@@ -347,9 +347,15 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         case "error":
             state = .failed(message["message"] as? String ?? "渲染失败")
         default:
-            break
+            onMessage?(message)
         }
     }
+
+    /// 播放页发来的其他消息（烘焙录制的进度和数据）
+    var onMessage: (([String: Any]) -> Void)?
+
+    /// 在播放页里执行脚本（页面加载完成后）
+    func evaluate(_ script: String) { call(script) }
 
     private func call(_ script: String) {
         guard isPageLoaded else { return }

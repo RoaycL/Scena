@@ -182,7 +182,7 @@ private struct BackgroundLayer: View {
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
                 }
-            } else if let videoURL = item.playableWorkshopItem?.nativeVideoURL {
+            } else if let videoURL = item.playableWorkshopItem?.playbackVideoURL {
                 // 工坊视频壁纸：直接用 AVFoundation 硬件解码、从磁盘流式播放（网页渲染器要先把整个文件读进来，大文件很慢）。
                 // 封面取视频本身的画面，构图和随后淡入的视频完全一致
                 videoPoster(videoURL, size: size)

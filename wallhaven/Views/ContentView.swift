@@ -1458,6 +1458,9 @@ struct ContentView: View {
                 AddToPlaylistButton(item: item)
                     .id("playlist-\(item.id)")
             }
+            if BakedWallpapers.canBake(workshopItem) {
+                BakeVideoButton(item: workshopItem).id("bake-\(item.id)")
+            }
             if let folder = workshopItem.localFolder {
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
                     NSWorkspace.shared.activateFileViewerSelecting([folder])

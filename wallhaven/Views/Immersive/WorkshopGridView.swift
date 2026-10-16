@@ -290,7 +290,7 @@ private struct WorkshopDetailPanel: View {
                     .placeholder { Color.white.opacity(0.06) }
                     .resizable()
                     .scaledToFill()
-                if let videoURL = item.nativeVideoURL {
+                if let videoURL = item.playbackVideoURL {
                     // 已下载的视频壁纸直接播放实际效果（硬件解码，窗口隐藏时自动暂停）
                     LoopingVideoView(url: videoURL)
                         .id(videoURL)
@@ -417,6 +417,9 @@ private struct WorkshopDetailPanel: View {
                 }
                 if item.workshopPageURL != nil {
                     CircleIconButton(systemImage: "arrow.up.forward.app", help: "在 Steam 中打开（可订阅）") { workshop.openInSteam(item) }
+                }
+                if BakedWallpapers.canBake(item) {
+                    BakeVideoButton(item: item).id("bake-\(item.id)")
                 }
                 if let folder = item.localFolder {
                     CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {

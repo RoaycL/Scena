@@ -141,6 +141,13 @@ final class LiveWallpaperController: ObservableObject {
         try start(LiveContent(kind: .video, path: url.path, title: url.deletingPathExtension().lastPathComponent))
     }
 
+    /// 这个工坊壁纸正在桌面上播放时重建窗口（烘焙完成或删除后切换播放方式）
+    func reloadIfShowing(_ item: WorkshopItem) {
+        guard let current, current.kind == .workshop,
+              current.url.standardizedFileURL == item.localFolder?.standardizedFileURL else { return }
+        rebuildWindows()
+    }
+
     func start(workshop item: WorkshopItem) throws {
         guard let folder = item.localFolder else { throw WallperError.wallpaper("壁纸尚未下载。") }
         guard item.type.isPlayable else { throw WallperError.wallpaper("「应用」类型的壁纸是 Windows 程序，无法在 macOS 上运行。") }
@@ -200,8 +207,8 @@ final class LiveWallpaperController: ObservableObject {
         case .workshop:
             // 播放只需要入口元数据，不在主线程遍历整份壁纸的资源大小。
             guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return nil }
-            // 视频类工坊壁纸优先用 AVFoundation 播放，更省电
-            if let videoURL = item.nativeVideoURL {
+            // 视频类工坊壁纸（以及烘焙成视频的场景 / 网页壁纸）优先用 AVFoundation 播放，更省电
+            if let videoURL = item.playbackVideoURL {
                 return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
             }
             let player = WorkshopPlayerNSView(item: item, fps: frameRate)
@@ -473,7 +480,7 @@ final class LiveWallpaperController: ObservableObject {
             cgImage = try await firstFrame(of: content.url)
         case .workshop:
             let item = WorkshopItem.load(from: content.url, computeSize: false)
-            if let videoURL = item?.nativeVideoURL {
+            if let videoURL = item?.playbackVideoURL {
                 cgImage = try await firstFrame(of: videoURL)
             } else if let preview = item?.previewURL, let cg = posterFrame(ofImageAt: preview) {
                 cgImage = cg

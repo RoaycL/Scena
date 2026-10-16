@@ -17,6 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PlaylistManager.shared.restore()
         DockIcon.apply()
         GlobalHotKeys.shared.registerAll()
+        #if DEBUG
+        // 调试：SCENA_DEBUG_BAKE=<工坊壁纸文件夹> 启动后直接烘焙这个壁纸
+        if let path = ProcessInfo.processInfo.environment["SCENA_DEBUG_BAKE"],
+           let item = WorkshopItem.load(from: URL(fileURLWithPath: path, isDirectory: true), computeSize: false) {
+            WallpaperBaker.shared.bake(item)
+        }
+        #endif
         // 启动几秒后在后台检查 GitHub 更新（每天最多一次，可在设置中关闭）
         Task {
             try? await Task.sleep(for: .seconds(5))
