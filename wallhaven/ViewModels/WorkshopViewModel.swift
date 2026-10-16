@@ -332,6 +332,8 @@ final class WorkshopViewModel: ObservableObject {
             if libraryGeneration == generation, roots == libraryRoots, !cached.isEmpty { libraryItems = cached }
         }
         let scanned = await WorkshopLibraryIndex.shared.scan(roots: roots)
+        // 扫描被取消时返回空数组（例如切换 Steam 账号取消订阅同步），不能当成资料库已清空
+        guard !Task.isCancelled else { return libraryItems }
         guard roots == libraryRoots else { return await refreshLibraryAndWait() }
         if libraryGeneration == generation {
             if libraryItems != scanned { libraryItems = scanned }
