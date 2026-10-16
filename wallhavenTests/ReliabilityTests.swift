@@ -5,6 +5,8 @@ import Testing
 @testable import wallhaven
 
 struct ReliabilityTests {
+    private let testDefaults = TestDefaults()
+
     private func fixtureApp(_ folder: URL, version: String, bundleID: String = "test.scena") throws {
         let fm = FileManager.default
         try fm.createDirectory(at: folder.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
@@ -77,9 +79,7 @@ struct ReliabilityTests {
     }
 
     @Test @MainActor func rejectedHotKeyPreservesRegistrationAndPreferences() throws {
-        let suite = "test.scena.hotkey.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = testDefaults.make()
         var removed = 0
         let keys = GlobalHotKeys(defaults: defaults, registration: { combo, _ in
             combo.keyCode == 1 ? EventHotKeyRef(bitPattern: 1) : nil

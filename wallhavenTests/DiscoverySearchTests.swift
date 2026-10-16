@@ -5,6 +5,7 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct DiscoverySearchTests {
+    private let testDefaults = TestDefaults()
     private func wallpaper(_ id: String) throws -> RemoteWallpaper {
         let data = Data("""
         {"id":"\(id)","url":"https://wallhaven.cc/w/\(id)","path":"https://example.com/\(id).jpg","resolution":"1920x1080","category":"general","favorites":1,"ratio":"1.777","purity":"sfw"}
@@ -24,7 +25,7 @@ struct DiscoverySearchTests {
 
     @Test func staleEmptyResultCannotEndNewSearchOrChangeItsPagination() async throws {
         let service = ControlledSearch()
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = testDefaults.make()
         let model = WallpaperViewModel(discoveryDefaults: defaults, searchLoader: service.load)
         model.query = "seed"; model.search(reset: true)
         try await waitUntil { service.pending["seed:1"] != nil }
@@ -50,7 +51,7 @@ struct DiscoverySearchTests {
 
     @Test func lateFailureDoesNotOverwriteNewResultsOrErrorState() async throws {
         let service = ControlledSearch()
-        let model = WallpaperViewModel(discoveryDefaults: UserDefaults(suiteName: UUID().uuidString)!, searchLoader: service.load)
+        let model = WallpaperViewModel(discoveryDefaults: testDefaults.make(), searchLoader: service.load)
         model.query = "old"; model.search(reset: true)
         try await waitUntil { service.pending["old:1"] != nil }
         model.query = "new"; model.search(reset: true)
@@ -67,7 +68,7 @@ struct DiscoverySearchTests {
 
     @Test func rapidFilterChangesSubmitOnlyTheFinalSnapshot() async throws {
         let service = ControlledSearch()
-        let model = WallpaperViewModel(discoveryDefaults: UserDefaults(suiteName: UUID().uuidString)!, searchLoader: service.load)
+        let model = WallpaperViewModel(discoveryDefaults: testDefaults.make(), searchLoader: service.load)
         model.query = "first"; model.search(reset: true, debounce: true)
         model.query = "second"; model.search(reset: true, debounce: true)
         let categories = try #require(model.descriptor.filters.first { $0.id == "categories" })
@@ -82,7 +83,7 @@ struct DiscoverySearchTests {
 
     @Test func failedReplacementPreservesContentAndRetriesFirstPage() async throws {
         let service = ControlledSearch()
-        let model = WallpaperViewModel(discoveryDefaults: UserDefaults(suiteName: UUID().uuidString)!, searchLoader: service.load)
+        let model = WallpaperViewModel(discoveryDefaults: testDefaults.make(), searchLoader: service.load)
         model.query = "seed"; model.search(reset: true)
         try await waitUntil { service.pending["seed:1"] != nil }
         service.finish("seed:1", with: .success([try wallpaper("seed01")]))

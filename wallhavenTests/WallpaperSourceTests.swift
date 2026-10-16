@@ -4,6 +4,7 @@ import Testing
 
 @MainActor
 struct WallpaperSourceTests {
+    private let testDefaults = TestDefaults()
     /// 1.0.26 及更早版本保存的收藏（与 Wallhaven 接口同格式，没有 source 字段）
     private let legacyFavorite = Data("""
     {"id":"abc123","url":"https://wallhaven.cc/w/abc123","path":"https://w.wallhaven.cc/full/ab/wallhaven-abc123.png",
@@ -34,7 +35,7 @@ struct WallpaperSourceTests {
     }
 
     @Test func legacyDiscoveryPreferencesMigrate() {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = testDefaults.make()
         defaults.set(["query": "forest", "sortOrder": "toplist", "general": false, "anime": true, "people": true,
                       "sfw": true, "sketchy": false, "nsfw": false, "resolutions": ["2560x1440"]],
                      forKey: "wallper.discovery.preferences.v1")
@@ -47,7 +48,7 @@ struct WallpaperSourceTests {
     }
 
     @Test func atLeastOneFilterKeepsItsLastOption() throws {
-        let model = WallpaperViewModel(discoveryDefaults: UserDefaults(suiteName: UUID().uuidString)!, searchLoader: { _, _ in [] })
+        let model = WallpaperViewModel(discoveryDefaults: testDefaults.make(), searchLoader: { _, _ in [] })
         let purity = try #require(model.descriptor.filters.first { $0.id == "purity" })
         model.toggle(purity.options.first { $0.id == "sfw" }, in: purity)
         #expect(model.filterSelections["purity"] == ["sfw"])
@@ -108,7 +109,7 @@ struct WallpaperSourceTests {
     }
 
     @Test func singleChoiceFilterTogglesBackToAny() throws {
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = testDefaults.make()
         let model = WallpaperViewModel(discoveryDefaults: defaults, searchLoader: { _, _ in [] })
         model.selectSource(KonachanSource())
         let size = try #require(model.descriptor.filters.first { $0.id == "size" })

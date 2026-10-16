@@ -5,6 +5,7 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct PlaylistPlaybackTests {
+    private let testDefaults = TestDefaults()
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<100 {
             if condition() { return }
@@ -17,7 +18,7 @@ struct PlaylistPlaybackTests {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let service = ControlledPlayback()
-        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let defaults = testDefaults.make()
         let manager = PlaylistManager(storageURL: folder.appendingPathComponent("playlists.json"),
                                       playbackDefaults: defaults, applier: service.apply)
         return (manager, service, folder)

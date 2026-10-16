@@ -145,7 +145,8 @@ struct SteamAuthenticationTests {
             session: session, requestInterval: 0, readCookies: { cookies }, deleteCookies: {})
     }
 
-    private func preferences() -> UserDefaults { UserDefaults(suiteName: "scena.steam.tests.\(UUID().uuidString)")! }
+    private let testDefaults = TestDefaults()
+    private func preferences() -> UserDefaults { testDefaults.make() }
 
     @Test func concurrentRestoreSharesOneLoginAndRotatesPersistedToken() async throws {
         let store = MemorySteamCredentials(), auth = SteamAuthStub(), defaults = preferences()
