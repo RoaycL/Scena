@@ -24,7 +24,8 @@ nonisolated struct MotionBGSource: WallpaperSource {
         ],
         sorts: [SourceOption(id: "latest", title: "最新")],
         defaultSort: "latest",
-        randomSort: nil
+        randomSort: nil,
+        folderName: "MotionBG"
     )
 
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {

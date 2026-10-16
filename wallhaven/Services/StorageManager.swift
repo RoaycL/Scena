@@ -34,8 +34,12 @@ final class StorageManager: ObservableObject {
 
     struct Usage {
         var wallpapers: Int64 = 0
+        /// 其他在线图源各自文件夹的占用（按图源顺序）
+        var sources: [(name: String, bytes: Int64)] = []
         var imported: Int64 = 0
         var workshop: Int64 = 0
+        /// 工坊场景 / 网页壁纸转成的视频
+        var baked: Int64 = 0
         var cache: Int64 = 0
     }
 
@@ -125,15 +129,21 @@ final class StorageManager: ObservableObject {
         let wallpaperFolder = wallpaperFolder
         let importFolder = importFolder
         let workshopFolder = workshopContentFolder
+        let sourceFolders = WallpaperSources.downloadFolders
         Task {
             async let wallpapers = Task.detached { Self.size(of: wallpaperFolder) }.value
             async let imported = Task.detached { Self.size(of: importFolder) }.value
             async let workshop = Task.detached { Self.size(of: workshopFolder) }.value
+            async let sources = Task.detached { sourceFolders.map { ($0.name, $0.folder, Self.size(of: $0.folder)) } }.value
+            async let baked = Task.detached { Self.size(of: BakedWallpapers.folder) }.value
             async let others = Task.detached { CacheLocations.otherCachesSize() }.value
             let cache = Int64((try? await ImageCache.default.diskStorageSize) ?? 0) + (await VideoPosterCache.shared.diskSize()) + (await others)
-            var usage = Usage(wallpapers: await wallpapers, imported: await imported, workshop: await workshop, cache: cache)
-            // 默认位置下导入文件夹在壁纸文件夹里面，避免重复计算
+            let sourceSizes = await sources
+            var usage = Usage(wallpapers: await wallpapers, sources: sourceSizes.map { ($0.0, $0.2) }, imported: await imported,
+                              workshop: await workshop, baked: await baked, cache: cache)
+            // 默认位置下导入文件夹和其他图源的文件夹在壁纸文件夹里面，避免重复计算
             if importFolder.path.hasPrefix(wallpaperFolder.path + "/") { usage.wallpapers -= usage.imported }
+            for (_, folder, bytes) in sourceSizes where folder.path.hasPrefix(wallpaperFolder.path + "/") { usage.wallpapers -= bytes }
             self.usage = usage
         }
     }
@@ -192,8 +202,14 @@ final class StorageManager: ObservableObject {
             .appendingPathComponent(Layout.workshopContent, isDirectory: true)
             ?? WorkshopLibrary.steamContentFolder
 
-        // 先移导入文件夹：默认位置下它在壁纸文件夹里面，不能被当作壁纸一起移到 Wallhaven/
-        let pairs = [(oldImports, newImports), (oldWallpapers, newWallpapers), (oldWorkshop, newWorkshop)]
+        // 其他在线图源的文件夹：和 Imported 一样，有存储目录时与 Wallhaven 并列，否则在下载目录里面
+        let sourcePairs = WallpaperSources.downloadFolders.compactMap { entry -> (URL, URL)? in
+            guard let name = WallpaperSources.source(id: entry.sourceID)?.descriptor.folderName else { return nil }
+            return (entry.folder, (newRoot ?? newWallpapers).appendingPathComponent(name, isDirectory: true))
+        }
+
+        // 先移导入文件夹和图源文件夹：默认位置下它们在壁纸文件夹里面，不能被当作壁纸一起移到 Wallhaven/
+        let pairs = ([(oldImports, newImports)] + sourcePairs + [(oldWallpapers, newWallpapers), (oldWorkshop, newWorkshop)])
             .filter { $0.0.standardizedFileURL != $0.1.standardizedFileURL }
 
         isMigrating = true
@@ -295,7 +311,8 @@ final class StorageManager: ObservableObject {
         let defaults = UserDefaults.standard
 
         // 1. 旧版本自动创建的 wallhaven 根目录改名为 Scena（只在里面只有本 App 的文件夹时）
-        let knownNames: Set<String> = [Layout.wallhaven, "Workshop", Layout.workshop, Layout.imported, ".DS_Store"]
+        let knownNames = Set([Layout.wallhaven, "Workshop", Layout.workshop, Layout.imported, ".DS_Store"]
+            + WallpaperSources.all.compactMap(\.descriptor.folderName))
         let renamedRoot = root.deletingLastPathComponent().appendingPathComponent(Layout.root, isDirectory: true)
         if root.lastPathComponent.lowercased() == "wallhaven",
            let contents = try? fm.contentsOfDirectory(atPath: root.path),

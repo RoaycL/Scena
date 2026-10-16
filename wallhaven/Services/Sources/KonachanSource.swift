@@ -29,7 +29,8 @@ nonisolated struct KonachanSource: WallpaperSource {
             SourceOption(id: "random", title: "随机"),
         ],
         defaultSort: "score",
-        randomSort: "random"
+        randomSort: "random",
+        folderName: "Konachan"
     )
 
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {

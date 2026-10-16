@@ -708,13 +708,19 @@ private struct StorageSettings: View {
             } header: {
                 Text("存储位置")
             } footer: {
-                SettingsFootnote("所选位置里会创建 Scena 文件夹，内含 Wallhaven（wallhaven 下载）、Wallpaper Engine（创意工坊）、Imported（导入的图片和视频）。可以设到外接盘；更改位置时会移动已有内容，并更新播放列表和动态壁纸的引用。")
+                SettingsFootnote("所选位置里会创建 Scena 文件夹，内含 Wallhaven、Konachan、4K Wallpapers、MotionBG（各图源下载的壁纸）、Wallpaper Engine（创意工坊）、Imported（导入的图片和视频）。可以设到外接盘；更改位置时会移动已有内容，并更新播放列表和动态壁纸的引用。")
             }
 
             Section {
-                usageRow("在线下载", storage.usage.wallpapers, .blue)
+                usageRow("Wallhaven", storage.usage.wallpapers, .blue)
+                ForEach(Array(storage.usage.sources.enumerated()), id: \.offset) { _, source in
+                    usageRow(source.name, source.bytes, .cyan)
+                }
                 usageRow("本地导入", storage.usage.imported, .green)
                 usageRow("创意工坊壁纸", storage.usage.workshop, .purple)
+                if storage.usage.baked > 0 {
+                    usageRow("工坊转成的视频", storage.usage.baked, .indigo)
+                }
                 usageRow("缓存", storage.usage.cache, .gray)
                 HStack {
                     Spacer()

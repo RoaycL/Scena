@@ -132,9 +132,12 @@ extension RemoteWallpaper {
     /// 资料库、播放列表里显示的名称
     var displayTitle: String { "\(sourceName) #\(id.hasPrefix(sourceID + "-") ? String(id.dropFirst(sourceID.count + 1)) : id)" }
 
-    /// 已下载到下载目录的本地文件（下载时以 id 命名）
+    /// 下载到的文件夹（每个图源一个）
+    var downloadFolder: URL { WallpaperSources.downloadFolder(for: sourceID) }
+
+    /// 已下载的本地文件（下载时以 id 命名）
     var localFileURL: URL? {
-        let url = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true).appendingPathComponent(downloadFileName)
+        let url = downloadFolder.appendingPathComponent(downloadFileName)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 

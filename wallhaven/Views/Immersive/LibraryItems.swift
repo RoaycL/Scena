@@ -41,7 +41,7 @@ extension GalleryItem {
     var libraryKindLabel: String {
         switch origin {
         case .remote(let wallpaper): wallpaper.sourceName
-        case .local(let item): "\(item.source == .wallhaven ? "在线下载" : "本地导入") · \(item.isVideo ? "视频" : "图片")"
+        case .local(let item): "\(item.source == .imported ? "本地导入" : (item.onlineSourceID.flatMap { WallpaperSources.source(id: $0)?.descriptor.name } ?? "Wallhaven")) · \(item.isVideo ? "视频" : "图片")"
         case .workshop(let item): "工坊 · \(item.type.label)"
         }
     }

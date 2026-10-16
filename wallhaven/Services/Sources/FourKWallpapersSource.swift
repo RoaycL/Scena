@@ -31,7 +31,8 @@ nonisolated struct FourKWallpapersSource: WallpaperSource {
             SourceOption(id: "random", title: "随机"),
         ],
         defaultSort: "popular",
-        randomSort: "random"
+        randomSort: "random",
+        folderName: "4K Wallpapers"
     )
 
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper] {

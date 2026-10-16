@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 
 /// 本地文件的来源
 enum LocalMediaSource: Hashable, Sendable {
-    /// 从 wallhaven 下载（文件名是 6 位壁纸 ID，如 l8vp7y.jpg）
+    /// 从在线图源下载（Wallhaven 的文件名是 6 位壁纸 ID，如 l8vp7y.jpg；其他图源在各自文件夹里）
     case wallhaven
     /// 用户导入的图片 / 视频
     case imported
@@ -23,6 +23,8 @@ struct LocalMediaItem: Identifiable, Hashable, Sendable {
     let creationDate: Date
     let fileSize: Int
     let source: LocalMediaSource
+    /// 在线图源下载的文件属于哪个图源（Wallhaven 以外的图源各有文件夹）
+    var onlineSourceID: String? = nil
 
     // 用文件路径作为稳定 ID，重新加载后选中状态不会丢失
     var id: URL { url }
@@ -80,6 +82,15 @@ final class LocalMediaViewModel: ObservableObject {
 
         let keys: [URLResourceKey] = [.creationDateKey, .fileSizeKey]
         var loadedItems: [LocalMediaItem] = []
+        // 其他在线图源的文件夹：里面都是下载的壁纸
+        for (sourceID, _, folder) in WallpaperSources.downloadFolders {
+            guard let urls = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: .skipsHiddenFiles) else { continue }
+            for url in urls where MediaType.isSupported(url) {
+                let attrs = try? url.resourceValues(forKeys: Set(keys))
+                loadedItems.append(LocalMediaItem(url: url, creationDate: attrs?.creationDate ?? .distantPast,
+                                                  fileSize: attrs?.fileSize ?? 0, source: .wallhaven, onlineSourceID: sourceID))
+            }
+        }
         // 根目录：wallhaven 下载的壁纸，以及旧版本导入的文件（按文件名区分）；Imported/：导入的文件
         for (folder, isImportFolder) in [(directoryURL, false), (importedURL, true)] {
             guard let urls = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: .skipsHiddenFiles) else { continue }

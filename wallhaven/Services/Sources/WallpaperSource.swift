@@ -32,6 +32,8 @@ nonisolated struct WallpaperSourceDescriptor: Sendable {
     /// 加载这个图源的图片、视频时附带的请求头（防盗链的 Referer 等），只对 mediaHosts 里的域名生效
     var requestHeaders: [String: String] = [:]
     var mediaHosts: [String] = []
+    /// 下载文件夹名（存储目录里和 Wallhaven、Imported 并列）；nil 表示使用下载目录本身（Wallhaven）
+    var folderName: String? = nil
 }
 
 nonisolated struct SourceOption: Identifiable, Hashable, Sendable {
@@ -85,6 +87,23 @@ nonisolated enum WallpaperSources {
 
     static func source(id: String) -> (any WallpaperSource)? {
         all.first { $0.descriptor.id == id }
+    }
+
+    /// 图源的下载文件夹：Wallhaven 用下载目录本身；其他图源在存储目录下各有一个文件夹，
+    /// 没有设置存储目录时放在下载目录里面（和 Imported 的规则一致）
+    static func downloadFolder(for sourceID: String) -> URL {
+        let downloads = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true)
+        guard let name = source(id: sourceID)?.descriptor.folderName else { return downloads }
+        let root = UserDefaults.standard.string(forKey: StorageManager.rootKey).map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return (root ?? downloads).appendingPathComponent(name, isDirectory: true)
+    }
+
+    /// 所有有独立文件夹的图源（名称、文件夹）
+    static var downloadFolders: [(sourceID: String, name: String, folder: URL)] {
+        all.compactMap { source in
+            source.descriptor.folderName == nil ? nil
+                : (source.descriptor.id, source.descriptor.name, downloadFolder(for: source.descriptor.id))
+        }
     }
 
     /// 某个图片 / 视频地址需要附带的请求头（按域名匹配图源）

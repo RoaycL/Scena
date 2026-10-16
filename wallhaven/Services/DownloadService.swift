@@ -27,7 +27,7 @@ struct DownloadService {
 
     func download(_ wallpaper: RemoteWallpaper) async throws -> URL {
         try StorageManager.shared.ensureAvailable()
-        let destinationFolder = URL(fileURLWithPath: DownloadLocation.currentPath, isDirectory: true)
+        let destinationFolder = wallpaper.downloadFolder
         if !fm.fileExists(atPath: destinationFolder.path) {
             try fm.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
         }
