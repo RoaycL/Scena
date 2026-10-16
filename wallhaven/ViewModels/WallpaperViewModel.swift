@@ -93,6 +93,7 @@ final class WallpaperViewModel: ObservableObject {
     }
 
     var descriptor: WallpaperSourceDescriptor { source.descriptor }
+    var activeFilters: [SourceFilter] { source.filters(for: searchRequest) }
 
     /// 切换图源：恢复该图源上次的搜索条件并重新搜索
     func selectSource(_ newSource: any WallpaperSource) {

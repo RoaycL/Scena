@@ -137,8 +137,15 @@ extension RemoteWallpaper {
 
     /// 已下载的本地文件（下载时以 id 命名）
     var localFileURL: URL? {
-        let url = downloadFolder.appendingPathComponent(downloadFileName)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        localFileURL(in: downloadFolder)
+    }
+
+    /// 详情接口解析出的原图可能是 PNG，而列表预览为 JPEG；两者仍使用相同的条目 ID。
+    func localFileURL(in folder: URL) -> URL? {
+        let extensions = WallpaperSources.source(id: sourceID)?.descriptor.alternateDownloadExtensions ?? []
+        let alternatives = isVideo ? [] : extensions.filter { $0 != imageURL.pathExtension.lowercased() }.map { "\(id).\($0)" }
+        return ([downloadFileName] + alternatives).lazy.map { folder.appendingPathComponent($0) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     var isVideo: Bool { mediaType == .video }
@@ -147,7 +154,12 @@ extension RemoteWallpaper {
     var displayURL: URL { posterURL ?? (isVideo ? (thumbURL ?? imageURL) : imageURL) }
 
     var downloadFileName: String {
-        let ext = isVideo ? "mp4" : (imageURL.pathExtension.isEmpty ? "jpg" : imageURL.pathExtension)
+        downloadFileName(for: imageURL)
+    }
+
+    func downloadFileName(for resolvedURL: URL) -> String {
+        let candidate = resolvedURL.pathExtension.lowercased()
+        let ext = isVideo ? "mp4" : (wallhaven.MediaType.imageExtensions.contains(candidate) ? candidate : "jpg")
         return "\(id).\(ext)"
     }
 }

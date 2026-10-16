@@ -57,7 +57,7 @@ struct FilterPanel: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.primary)
 
-            ForEach(descriptor.filters) { filter in
+            ForEach(viewModel.activeFilters) { filter in
                 let note = viewModel.isAuthenticated ? filter.note : (filter.signedOutNote ?? filter.note)
                 GlassSection(title: filter.title, trailing: note) {
                     FlowLayout {

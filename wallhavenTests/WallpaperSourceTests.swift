@@ -108,6 +108,41 @@ struct WallpaperSourceTests {
                 == "https://motionbgs.com/tag:anime/3/")
     }
 
+    @Test func pixivParsesRankingResponse() throws {
+        let json = Data("""
+        {"contents":[{"title":"やる気ない日の名画たち","date":"2026年10月14日 00:01","tags":["名画","3000users入り"],"url":"https://i.pximg.net/c/240x480/img-master/img/2026/10/14/00/01/10/150822243_p0_master1200.jpg","illust_id":150822243,"width":1000,"height":1414,"user_name":"魔木","rating_count":3381,"view_count":24190}]}
+        """.utf8)
+        let items = try PixivSource.parse(json)
+        let wallpaper = try #require(items.first)
+        #expect(wallpaper.id == "pixiv-150822243")
+        #expect(wallpaper.title == "やる気ない日の名画たち")
+        #expect(wallpaper.imageURL.absoluteString == "https://i.pximg.net/img-master/img/2026/10/14/00/01/10/150822243_p0_master1200.jpg")
+        #expect(wallpaper.thumbURL?.absoluteString == "https://i.pximg.net/c/240x480/img-master/img/2026/10/14/00/01/10/150822243_p0_master1200.jpg")
+        #expect(wallpaper.pageURL.absoluteString == "https://www.pixiv.net/artworks/150822243")
+        #expect(wallpaper.favorites == 3381)
+        #expect(wallpaper.views == 24190)
+        #expect(wallpaper.tags == ["名画", "3000users入り", "魔木"])
+        #expect(PixivSource.rankingURL(WallpaperQuery(text: "", sort: "default", filters: ["mode": ["weekly"], "content": ["illust"]]), page: 2).absoluteString
+                == "https://www.pixiv.net/ranking.php?mode=weekly&content=illust&p=2&format=json")
+    }
+
+    @Test func wallsflowParsesVideoCards() throws {
+        let html = """
+        <a href="https://wallsflow.com/live-wallpapers/4521-neon-samurai.html" title="Neon Samurai - Live Wallpapers">
+        <img src="https://cloud.wallsflow.com/posts/2026-08/neon-samurai.jpg" alt="Neon Samurai - wallsflow-com">
+        </a>
+        """
+        let items = try WallsflowSource.parse(html)
+        let wallpaper = try #require(items.first)
+        #expect(wallpaper.id == "wallsflow-4521")
+        #expect(wallpaper.isVideo)
+        #expect(wallpaper.title == "Neon Samurai")
+        #expect(wallpaper.thumbURL?.absoluteString == "https://cloud.wallsflow.com/posts/2026-08/neon-samurai.jpg")
+        #expect(wallpaper.imageURL == wallpaper.pageURL)
+        #expect(WallsflowSource.listURL(WallpaperQuery(text: "", sort: "latest", filters: ["category": ["anime"]]), page: 2)?.absoluteString
+                == "https://wallsflow.com/live-wallpapers/anime/page/2/")
+    }
+
     @Test func singleChoiceFilterTogglesBackToAny() throws {
         let defaults = testDefaults.make()
         let model = WallpaperViewModel(discoveryDefaults: defaults, searchLoader: { _, _ in [] })

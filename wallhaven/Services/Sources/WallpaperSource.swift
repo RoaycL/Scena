@@ -14,10 +14,16 @@ nonisolated protocol WallpaperSource: Sendable {
     func search(_ query: WallpaperQuery, page: Int) async throws -> [RemoteWallpaper]
     /// 详情标签；列表接口已经带标签的图源不必实现
     func tags(for wallpaper: RemoteWallpaper, credential: String?) async throws -> [String]
+    /// 某些站点的原文件地址只能从详情接口取得；下载时解析，避免列表逐项请求。
+    func downloadURL(for wallpaper: RemoteWallpaper) async throws -> URL
+    /// 仅展示当前查询确实支持的筛选条件，保留隐藏条件的选择以便返回时恢复。
+    func filters(for query: WallpaperQuery) -> [SourceFilter]
 }
 
 extension WallpaperSource {
-    func tags(for wallpaper: RemoteWallpaper, credential: String?) async throws -> [String] { wallpaper.tags }
+    nonisolated func tags(for wallpaper: RemoteWallpaper, credential: String?) async throws -> [String] { wallpaper.tags }
+    nonisolated func downloadURL(for wallpaper: RemoteWallpaper) async throws -> URL { wallpaper.imageURL }
+    nonisolated func filters(for query: WallpaperQuery) -> [SourceFilter] { descriptor.filters }
 }
 
 /// 图源能力的描述：筛选面板据此生成，不需要为每个图源单独写界面
@@ -34,6 +40,8 @@ nonisolated struct WallpaperSourceDescriptor: Sendable {
     var mediaHosts: [String] = []
     /// 下载文件夹名（存储目录里和 Wallhaven、Imported 并列）；nil 表示使用下载目录本身（Wallhaven）
     var folderName: String? = nil
+    /// 仅原文件扩展名需要详情解析的图源，查找已下载文件时使用备选扩展名。
+    var alternateDownloadExtensions: [String] = []
 }
 
 nonisolated struct SourceOption: Identifiable, Hashable, Sendable {
@@ -83,7 +91,14 @@ nonisolated struct WallpaperQuery: Equatable, Sendable {
 nonisolated protocol TransientSourceError: Error {}
 
 nonisolated enum WallpaperSources {
-    static let all: [any WallpaperSource] = [WallhavenSource(), KonachanSource(), FourKWallpapersSource(), MotionBGSource()]
+    static let all: [any WallpaperSource] = [
+        WallhavenSource(),
+        KonachanSource(),
+        PixivSource(),
+        FourKWallpapersSource(),
+        MotionBGSource(),
+        WallsflowSource(),
+    ]
 
     static func source(id: String) -> (any WallpaperSource)? {
         all.first { $0.descriptor.id == id }
@@ -130,15 +145,21 @@ nonisolated enum SourceHTTP {
         var errorDescription: String? { "图源暂时繁忙，请稍后再试" }
     }
 
-    static func data(from url: URL, accept: String = "text/html,application/xhtml+xml") async throws -> Data {
+    static func data(from url: URL, accept: String = "text/html,application/xhtml+xml", emptyOnNotFound: Bool = true) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
+        for (field, value) in WallpaperSources.requestHeaders(for: url) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "cf-mitigated") == "challenge" {
+            throw WallperError.network("图源要求浏览器安全验证，暂时无法在应用中加载。请稍后重试或在官网查看。")
+        }
         if status == 429 || status == 503 { throw Busy() }
         // 翻过最后一页时网页类站点返回 404：当作没有更多
-        if status == 404 { return Data() }
+        if status == 404, emptyOnNotFound { return Data() }
         guard (200...299).contains(status) else { throw WallperError.network("加载壁纸失败（\(status)）。") }
         return data
     }
