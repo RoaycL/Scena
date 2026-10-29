@@ -333,6 +333,14 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         call("window.dispatchEvent(new Event('resize'))")
         lastPlaybackState = nil
         updatePlayback()
+        refreshMedia()
+    }
+
+    /// 让各页面（含壁纸 iframe）重算视频画面层的位置，修正合成层与布局不一致造成的错位
+    func refreshMedia() {
+        for frame in documentFrames {
+            webView.evaluateJavaScript("window.__scenaRefreshMedia?.()", in: frame, in: .page) { _ in }
+        }
     }
 
     func snapshot() async -> CGImage? {
