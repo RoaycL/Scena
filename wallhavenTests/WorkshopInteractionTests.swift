@@ -6,6 +6,7 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct WorkshopInteractionTests {
+    private let testDefaults = TestDefaults()
     @Test func disabledConversionNeverSelectsCachedVideo() {
         var cacheReads = 0
         let cached = URL(fileURLWithPath: "/test/converted.mp4")
@@ -53,7 +54,7 @@ struct WorkshopInteractionTests {
         try Data(#"{"type":"web","file":"index.html","title":"Test"}"#.utf8).write(to: folder.appendingPathComponent("project.json"))
         try Data("<html><button>Test</button></html>".utf8).write(to: folder.appendingPathComponent("index.html"))
         let item = try #require(WorkshopItem.load(from: folder, computeSize: false))
-        let player = WorkshopPlayerNSView(item: item)
+        let player = WorkshopPlayerNSView(item: item, storage: WorkshopWebStorage(scope: item.id, defaults: testDefaults.make(), directory: testDefaults.makeDirectory()))
         defer { player.stop() }
         player.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
         player.layoutSubtreeIfNeeded()
@@ -71,7 +72,7 @@ struct WorkshopInteractionTests {
 
     @Test func scenePlayerDoesNotBecomeAnInteractiveWebPage() {
         let item = WorkshopItem(id: "test", title: "Test", type: .scene, tags: [])
-        let player = WorkshopPlayerNSView(item: item)
+        let player = WorkshopPlayerNSView(item: item, storage: WorkshopWebStorage(scope: item.id, defaults: testDefaults.make(), directory: testDefaults.makeDirectory()))
         defer { player.stop() }
         player.setInteractionEnabled(true)
         #expect(!player.allowsInteraction)

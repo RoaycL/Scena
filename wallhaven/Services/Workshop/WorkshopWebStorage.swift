@@ -2,20 +2,36 @@ import CryptoKit
 import Foundation
 
 /// 给不具备浏览器存储权限的沙盒网页提供按壁纸隔离的设置存储，不放宽 iframe 沙盒。
+/// 每个壁纸一个 JSON 文件（最多 256 KiB）。不放进偏好设置：壁纸多了会让偏好文件变大、拖慢启动
 @MainActor
 final class WorkshopWebStorage {
     static let limit = 256 * 1024
-    private let defaults: UserDefaults
-    private let key: String
+    static let defaultDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("com.roayc.wallhaven/WorkshopWebStorage", isDirectory: true)
+    private let file: URL
     private(set) var values: [String: String]
 
-    init(scope: String, defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    /// defaults：1.0.35 及更早版本把设置存在偏好设置里，读到后迁移到文件并删除原记录
+    init(scope: String, defaults: UserDefaults = .standard, directory: URL = WorkshopWebStorage.defaultDirectory) {
         let hash = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
-        key = "workshop.webStorage.v1." + hash
-        values = defaults.data(forKey: key).flatMap { data in
+        file = directory.appendingPathComponent(hash + ".json")
+        var data = try? Data(contentsOf: file)
+        let legacyKey = "workshop.webStorage.v1." + hash
+        if let legacy = defaults.data(forKey: legacyKey) {
+            if data == nil {
+                data = legacy
+                Self.write(legacy, to: file)
+            }
+            defaults.removeObject(forKey: legacyKey)
+        }
+        values = data.flatMap { data in
             data.count <= Self.limit ? try? JSONDecoder().decode([String: String].self, from: data) : nil
         } ?? [:]
+    }
+
+    private static func write(_ data: Data, to file: URL) {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
     }
 
     func apply(_ message: [String: Any]) {
@@ -31,8 +47,9 @@ final class WorkshopWebStorage {
         default: return
         }
         guard next.count <= 512, let data = try? JSONEncoder().encode(next), data.count <= Self.limit else { return }
+        guard next != values else { return }
         values = next
-        defaults.set(data, forKey: key)
+        if next.isEmpty { try? FileManager.default.removeItem(at: file) } else { Self.write(data, to: file) }
     }
 
     func script() -> String {

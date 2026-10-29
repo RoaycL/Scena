@@ -223,6 +223,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     private var lastPlaybackState: Bool?
     private var isStopped = false
     private(set) var allowsInteraction = false
+    private let navigationGuard = WorkshopNavigationGuard()
     private lazy var visibility = WindowVisibilityObserver { [weak self] visible in
         self?.isWindowVisible = visible
         self?.updatePlayback()
@@ -256,6 +257,9 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         webView.autoresizingMask = [.width, .height]
         addSubview(webView)
         config.userContentController.add(WeakScriptMessageHandler(self), name: "host")
+        webView.navigationDelegate = navigationGuard
+        webView.uiDelegate = navigationGuard
+        navigationGuard.owner = self
 
         if tracksMouse {
             addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
@@ -426,6 +430,67 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
 }
 
 /// WKUserContentController 会强引用 handler，用弱引用代理避免循环引用
+/// 壁纸网页的跳转限制：页面只能在本地壁纸内容之间跳转，不能把桌面窗口带到外部网站。
+/// 交互时用户点到的外部链接交给默认浏览器打开；壁纸内嵌的在线内容（天气、地图等 iframe）照常加载
+nonisolated enum WorkshopNavigationPolicy {
+    enum Decision: Equatable { case allow, cancel, openExternally(URL) }
+
+    /// userActivated：用户点击链接 / 提交表单；canOpenExternally：当前处于网页交互模式；
+    /// currentScheme：目标框架当前页面的协议（新建的 iframe 为空或 about）
+    static func decide(url: URL?, isMainFrame: Bool, isNewWindow: Bool, userActivated: Bool,
+                       canOpenExternally: Bool, currentScheme: String? = nil) -> Decision {
+        guard let url, let scheme = url.scheme?.lowercased() else { return .cancel }
+        let isWeb = scheme == "http" || scheme == "https"
+        if isWeb && (userActivated || isNewWindow) {
+            return canOpenExternally ? .openExternally(url) : .cancel
+        }
+        if isNewWindow { return .cancel }
+        if ["wewall", "about", "blob", "data"].contains(scheme) { return .allow }
+        // 壁纸自己的本地页面（wewall / blob）不能被脚本换成外部网站
+        let current = currentScheme?.lowercased() ?? ""
+        return isWeb && !isMainFrame && !["wewall", "blob"].contains(current) ? .allow : .cancel
+    }
+}
+
+@MainActor
+private final class WorkshopNavigationGuard: NSObject, WKNavigationDelegate, WKUIDelegate {
+    weak var owner: WorkshopPlayerNSView?
+    private var lastExternalOpen = Date.distantPast
+
+    private func handle(_ action: WKNavigationAction, isNewWindow: Bool) -> Bool {
+        let decision = WorkshopNavigationPolicy.decide(
+            url: action.request.url, isMainFrame: action.targetFrame?.isMainFrame ?? false, isNewWindow: isNewWindow,
+            userActivated: [.linkActivated, .formSubmitted].contains(action.navigationType),
+            canOpenExternally: owner?.allowsInteraction == true,
+            currentScheme: action.targetFrame?.request.url?.scheme)
+        switch decision {
+        case .allow:
+            return true
+        case .cancel:
+            return false
+        case .openExternally(let url):
+            // 防止脚本借交互模式连续弹出浏览器
+            if Date().timeIntervalSince(lastExternalOpen) > 1 {
+                lastExternalOpen = Date()
+                NSWorkspace.shared.open(url)
+            }
+            return false
+        }
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(handle(navigationAction, isNewWindow: navigationAction.targetFrame == nil) ? .allow : .cancel)
+    }
+
+    /// target=_blank 和 window.open：不在 App 里开新窗口
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        _ = handle(navigationAction, isNewWindow: true)
+        return nil
+    }
+}
+
 private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WorkshopPlayerNSView?
 

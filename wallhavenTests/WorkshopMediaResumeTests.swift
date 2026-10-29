@@ -40,7 +40,7 @@ struct WorkshopMediaResumeTests {
         try html.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
         let item = try #require(WorkshopItem.load(from: folder, computeSize: false))
         let player = WorkshopPlayerNSView(item: item,
-            storage: WorkshopWebStorage(scope: folder.path, defaults: testDefaults.make()))
+            storage: WorkshopWebStorage(scope: folder.path, defaults: testDefaults.make(), directory: testDefaults.makeDirectory()))
         let window = WallpaperDesktopWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
             styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

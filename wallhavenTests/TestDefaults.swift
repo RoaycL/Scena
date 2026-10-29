@@ -11,6 +11,7 @@ final class TestDefaults {
     }()
 
     private var names: [String] = []
+    private var directories: [URL] = []
 
     func make() -> UserDefaults {
         let name = Self.folder.appendingPathComponent(UUID().uuidString).path
@@ -18,10 +19,18 @@ final class TestDefaults {
         return UserDefaults(suiteName: name)!
     }
 
+    /// 测试专用的空目录（随测试结束删除）
+    func makeDirectory() -> URL {
+        let url = Self.folder.appendingPathComponent("dir-\(UUID().uuidString)", isDirectory: true)
+        directories.append(url)
+        return url
+    }
+
     deinit {
         for name in names {
             UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
             try? FileManager.default.removeItem(atPath: name + ".plist")
         }
+        directories.forEach { try? FileManager.default.removeItem(at: $0) }
     }
 }

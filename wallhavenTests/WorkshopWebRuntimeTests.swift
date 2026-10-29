@@ -28,8 +28,8 @@ struct WorkshopWebRuntimeTests {
         </script></body></html>
         """
         try html.write(to: folder.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
-        let defaults = testDefaults.make()
-        let storage = WorkshopWebStorage(scope: "first", defaults: defaults)
+        let defaults = testDefaults.make(), directory = testDefaults.makeDirectory()
+        let storage = WorkshopWebStorage(scope: "first", defaults: defaults, directory: directory)
         let item = try #require(WorkshopItem.load(from: folder, computeSize: false))
         let player = WorkshopPlayerNSView(item: item, storage: storage)
         let window = WallpaperDesktopWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
@@ -57,8 +57,8 @@ struct WorkshopWebRuntimeTests {
         #expect((try await player.evaluateJavaScript("window.count", in: loaded)) as? Int == 1)
         for _ in 0..<100 where storage.values["count"] == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(storage.values["count"] == "1")
-        #expect(WorkshopWebStorage(scope: "first", defaults: defaults).values["count"] == "1")
-        #expect(WorkshopWebStorage(scope: "second", defaults: defaults).values.isEmpty)
+        #expect(WorkshopWebStorage(scope: "first", defaults: defaults, directory: directory).values["count"] == "1")
+        #expect(WorkshopWebStorage(scope: "second", defaults: defaults, directory: directory).values.isEmpty)
         let screenFrame = try #require(window.screen?.frame)
         let desktop = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
         window.setInteractionEnabled(true, desktopLevel: desktop)
@@ -105,8 +105,8 @@ struct WorkshopWebRuntimeTests {
     }
 
     @Test func storageRemovalClearAndQuotaAreIsolated() {
-        let defaults = testDefaults.make()
-        let store = WorkshopWebStorage(scope: "wallpaper", defaults: defaults)
+        let defaults = testDefaults.make(), directory = testDefaults.makeDirectory()
+        let store = WorkshopWebStorage(scope: "wallpaper", defaults: defaults, directory: directory)
         store.apply(["operation":"set", "key":"a", "value":"1"])
         store.apply(["operation":"set", "key":"b", "value":"2"])
         store.apply(["operation":"remove", "key":"a"])
@@ -114,7 +114,7 @@ struct WorkshopWebRuntimeTests {
         store.apply(["operation":"set", "key":"large", "value":String(repeating:"x", count:WorkshopWebStorage.limit)])
         #expect(store.values == ["b":"2"])
         store.apply(["operation":"clear"])
-        #expect(WorkshopWebStorage(scope: "wallpaper", defaults: defaults).values.isEmpty)
+        #expect(WorkshopWebStorage(scope: "wallpaper", defaults: defaults, directory: directory).values.isEmpty)
     }
 
     @Test func oldRecordsNeverEnterAutomaticUpdateQueue() {

@@ -13,10 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 不需要窗口标签页，去掉「显示」菜单里的 Show Tab Bar
         NSWindow.allowsAutomaticWindowTabbing = false
         StorageManager.configureImageCache()
-        // 测试通过注入会话验证，不读取用户真实的 Pixiv 钥匙串。
-        if !AppRuntime.isRunningTests {
-            _ = PixivAccountSession.shared
-        }
+        // 单元测试以 App 为宿主运行：不读取真实的 Pixiv 钥匙串，也不恢复用户的动态壁纸、播放列表、
+        // 全局快捷键和自动转换，避免测试在用户桌面上开窗口或迁移、改写用户数据
+        guard !AppRuntime.isRunningTests else { return }
+        _ = PixivAccountSession.shared
         LiveWallpaperController.shared.restore()
         PlaylistManager.shared.restore()
         DockIcon.apply()

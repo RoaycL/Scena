@@ -8,11 +8,15 @@
 
 切到其他 App、切换壁纸、停止壁纸、显示器配置变化或系统休眠时退出交互；交互期间不让播放列表自动切换壁纸。退出时重新同步整个屏幕的窗口与网页视口，网页可见性由原生暂停策略控制，避免仅因 App 失焦被挂起。网页本身的默认定格、循环及其他选项仍遵循作者实现。
 
-网页继续使用 `allow-scripts` 沙盒。遇到沙盒禁止浏览器存储的页面时，宿主提供按本地壁纸目录隔离的 `localStorage` 兼容层，并持久保存设置；`sessionStorage` 仅在本次页面内有效。每项最多 512 个键、总计 256 KiB。不会修改下载的网页脚本。Windows 专用接口、额外浏览器权限及作者自行实现的交互仍可能需要单独适配，不能保证所有工坊网页完全兼容。
+网页继续使用 `allow-scripts` 沙盒。遇到沙盒禁止浏览器存储的页面时，宿主提供按本地壁纸目录隔离的 `localStorage` 兼容层，设置保存在 `Application Support/com.roayc.wallhaven/WorkshopWebStorage/` 下每个壁纸一个文件（1.0.35 及更早版本存在偏好设置里的记录在首次加载时迁移并删除）；`sessionStorage` 仅在本次页面内有效。每项最多 512 个键、总计 256 KiB。不会修改下载的网页脚本。Windows 专用接口、额外浏览器权限及作者自行实现的交互仍可能需要单独适配，不能保证所有工坊网页完全兼容。
 
 本地网页入口需要完整注入 Wallpaper Engine 兼容桥，实际传递标准暂停 / 恢复通知。已提供播放管理接口的网页自行控制媒体交接和动画，宿主不会额外重播已取消的过渡。实现与测试见[网页运行时兼容说明](workshop-web-runtime.md)。
 
 桌面窗口单独向 WebKit 报告渲染可见，避免 Finder 桌面层的遮挡判断冻结 CSS 动画和视频合成；不是仅修改网页的 `document.hidden`。[WebKit 的窗口可见性判断](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/mac/PageClientImplMac.mm#L196-L216)同时读取 `isVisible` 和 `occlusionState`。系统真实遮挡状态仍单独保留，Scena 使用真实状态和覆盖窗口判断省电暂停，手动暂停、全屏与系统休眠策略继续生效。
+
+## 跳转限制
+
+壁纸页面只能在本地壁纸内容（`wewall`、`blob`、`about`、`data`）之间跳转：主框架和壁纸自己的本地页面不能被脚本或链接换成外部网站。交互时点到的外部链接（含 `target=_blank` 与 `window.open`）交给默认浏览器打开，每秒最多一次；非交互时忽略。壁纸内嵌的在线 iframe（天气、地图等）照常加载。
 
 ## 转换开关
 
