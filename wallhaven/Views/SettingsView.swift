@@ -285,11 +285,14 @@ private struct AccountSettings: View {
             HStack {
                 Button("检查工坊更新") { workshop.checkForUpdates(force: true) }
                     .disabled(workshop.isCheckingUpdates)
-                Button("更新 / 校验全部（\(workshop.pendingUpdateCount)）") { workshop.updateAllWallpapers() }
+                Button("更新全部（\(workshop.pendingUpdateCount)）") { workshop.updateAllWallpapers() }
                     .disabled(workshop.pendingUpdateCount == 0)
+                if workshop.pendingValidationCount > 0 {
+                    Button("校验旧记录（\(workshop.pendingValidationCount)）…") { workshop.validateOldWallpapers() }
+                }
                 if workshop.isCheckingUpdates { ProgressView().controlSize(.small) }
             }
-            SettingsFootnote("启动时及每 30 分钟检查本地工坊壁纸。自动更新默认关闭，不恢复已暂停、停止或失败的任务。旧版下载缺少版本记录，首次需校验；更新沿用下载队列，可暂停、恢复和停止。")
+            SettingsFootnote("启动及每 30 分钟检查。自动更新和更新全部只处理已确认的新版，不包含版本未知的旧记录。旧记录需手动校验，可能下载缺失或变化文件；校验使用现有下载队列，可暂停、恢复和停止。")
         } header: {
             Label("Steam 账号（订阅与下载）", systemImage: "arrow.triangle.2.circlepath")
         } footer: {

@@ -211,6 +211,9 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     private let item: WorkshopItem
     private let fps: Int
     private let webView: WKWebView
+    private let webStorage: WorkshopWebStorage
+    private(set) var documentFrames: [WKFrameInfo] = []
+    private(set) var runtimeErrors: [String] = []
     private var isPageLoaded = false
     private var wantsPlaying = true
     private var volume = 0.0
@@ -225,15 +228,21 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         self?.updatePlayback()
     }
 
-    init(item: WorkshopItem, fps: Int = 30, tracksMouse: Bool = false, pausesWhenHidden: Bool = false) {
+    init(item: WorkshopItem, fps: Int = 30, tracksMouse: Bool = false, pausesWhenHidden: Bool = false,
+         storage: WorkshopWebStorage? = nil) {
         self.item = item
         self.fps = fps
         self.pausesWhenHidden = pausesWhenHidden
+        webStorage = storage ?? WorkshopWebStorage(scope: item.localFolder?.standardizedFileURL.path ?? item.id)
 
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(WorkshopSchemeHandler.shared, forURLScheme: WorkshopSchemeHandler.scheme)
         config.mediaTypesRequiringUserActionForPlayback = []
         config.suppressesIncrementalRendering = true
+        // Native 已按实际可见性暂停，避免 WebKit 再按 App 失焦自行挂起桌面网页。
+        config.preferences.inactiveSchedulingPolicy = .none
+        config.userContentController.addUserScript(WKUserScript(source: webStorage.script(),
+            injectionTime: .atDocumentStart, forMainFrameOnly: false))
         webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         #if DEBUG
@@ -308,6 +317,22 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         guard playing != lastPlaybackState else { return }
         lastPlaybackState = playing
         call(playing ? "__host.resume()" : "__host.pause()")
+        for frame in documentFrames { updateDocumentVisibility(frame, playing: playing) }
+    }
+
+    private func updateDocumentVisibility(_ frame: WKFrameInfo, playing: Bool) {
+        webView.evaluateJavaScript("window.__scenaHostVisibility?.(\(playing))", in: frame, in: .page) { _ in }
+    }
+
+    func refreshViewport() {
+        guard !isStopped else { return }
+        webView.frame = bounds
+        webView.needsLayout = true
+        webView.layoutSubtreeIfNeeded()
+        webView.setNeedsDisplay(webView.bounds)
+        call("window.dispatchEvent(new Event('resize'))")
+        lastPlaybackState = nil
+        updatePlayback()
     }
 
     func snapshot() async -> CGImage? {
@@ -329,6 +354,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         call("__host.pause()")
         isPageLoaded = false
         readyCallbacks.removeAll()
+        documentFrames.removeAll()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "host")
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
@@ -341,9 +367,20 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         call("__host.pointer(\(Double(u)),\(Double(v)))")
     }
 
-    fileprivate func handle(message: [String: Any]) {
+    fileprivate func handle(message: [String: Any], frame: WKFrameInfo) {
         guard !isStopped else { return }
         switch message["type"] as? String {
+        case "webStorage":
+            guard let scheme = frame.request.url?.scheme, ["wewall", "blob", "about"].contains(scheme) else { return }
+            webStorage.apply(message)
+        case "webDocumentReady":
+            if documentFrames.count < 16 { documentFrames.append(frame) }
+            updateDocumentVisibility(frame, playing: lastPlaybackState ?? wantsPlaying)
+        case "webRuntimeError":
+            if let error = message["message"] as? String {
+                runtimeErrors.append(String(error.prefix(500)))
+                if runtimeErrors.count > 20 { runtimeErrors.removeFirst() }
+            }
         case "loaded":
             isPageLoaded = true
             let base = WorkshopSchemeHandler.baseURL(for: item.id)
@@ -366,6 +403,14 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     /// 在播放页里执行脚本（页面加载完成后）
     func evaluate(_ script: String) { call(script) }
 
+    func evaluateJavaScript(_ script: String, in frame: WKFrameInfo? = nil) async throws -> Any? {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript(script, in: frame, in: .page) { result in
+                continuation.resume(with: result.map { $0 as Any? })
+            }
+        }
+    }
+
     private func call(_ script: String) {
         guard isPageLoaded else { return }
         webView.evaluateJavaScript(script, completionHandler: nil)
@@ -382,7 +427,7 @@ private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any] else { return }
-        target?.handle(message: body)
+        target?.handle(message: body, frame: message.frameInfo)
     }
 }
 

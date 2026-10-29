@@ -48,6 +48,7 @@ nonisolated enum WorkshopUpdateStatus: Equatable, Sendable {
     /// 后台检查不恢复用户暂停、停止或失败的任务；手动“全部更新”也保留暂停状态。
     func canEnqueue(job: WorkshopDownloadJob?, automatic: Bool) -> Bool {
         guard self != .current else { return false }
+        if automatic && self != .available { return false }
         guard let job else { return true }
         if automatic { return job.state == .completed }
         return ![.queued, .downloading, .paused].contains(job.state)

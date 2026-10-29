@@ -422,8 +422,23 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 桌面被其他窗口完全挡住（最大化、全屏、铺满的窗口）时，这块屏幕上的壁纸看不见，暂停渲染
     private func isOccluded(_ window: NSWindow) -> Bool {
-        DesktopSettings.bool(DesktopSettings.pauseWhenOccluded, default: true)
-            && revealedWindows.contains(ObjectIdentifier(window)) && !window.occlusionState.contains(.visible)
+        guard DesktopSettings.bool(DesktopSettings.pauseWhenOccluded, default: true),
+              revealedWindows.contains(ObjectIdentifier(window)),
+              !((window as? WallpaperDesktopWindow)?.systemOcclusionState ?? window.occlusionState).contains(.visible),
+              let screen = window.screen, let primary = NSScreen.screens.first,
+              let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let ownDesktopIDs = Set((surfaces.active + surfaces.retiring).map { $0.window.windowNumber })
+        let frames = entries.compactMap { entry -> CGRect? in
+            guard (entry[kCGWindowLayer as String] as? Int) == 0,
+                  (entry[kCGWindowAlpha as String] as? Double ?? 1) >= 0.99,
+                  entry[kCGWindowOwnerName as String] as? String != "Finder",
+                  !ownDesktopIDs.contains(entry[kCGWindowNumber as String] as? Int ?? -1),
+                  let bounds = entry[kCGWindowBounds as String] as? NSDictionary else { return nil }
+            return CGRect(dictionaryRepresentation: bounds)
+        }
+        let frame = screen.visibleFrame
+        let target = CGRect(x: frame.minX, y: primary.frame.height - frame.maxY, width: frame.width, height: frame.height)
+        return DesktopOcclusionPolicy.isCovered(target, by: frames)
     }
 
     /// 新窗口淡入完成后再移除旧窗口

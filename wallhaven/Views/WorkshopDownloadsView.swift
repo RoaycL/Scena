@@ -80,7 +80,7 @@ private struct WorkshopDownloadsList: View {
             Divider()
             if workshop.pendingUpdateCount > 0 {
                 HStack {
-                    Text("\(workshop.pendingUpdateCount) 个工坊壁纸可更新或需校验").font(.caption)
+                    Text("\(workshop.pendingUpdateCount) 个工坊壁纸可更新").font(.caption)
                     Spacer()
                     Button("更新全部") { workshop.updateAllWallpapers() }.controlSize(.small)
                 }

@@ -1053,7 +1053,8 @@ final class WorkshopViewModel: ObservableObject {
 
     // MARK: - Workshop content updates
 
-    var pendingUpdateCount: Int { updateStatuses.values.filter { $0 != .current }.count }
+    var pendingUpdateCount: Int { updateStatuses.values.filter { $0 == .available }.count }
+    var pendingValidationCount: Int { updateStatuses.values.filter { $0 == .unverified }.count }
 
     private func invalidateUpdateCheck() {
         updateGeneration = UUID()
@@ -1074,9 +1075,17 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func updateAllWallpapers(automatic: Bool = false) {
+        enqueueContentMaintenance(status: .available, automatic: automatic)
+    }
+
+    func validateOldWallpapers() {
+        enqueueContentMaintenance(status: .unverified, automatic: false)
+    }
+
+    private func enqueueContentMaintenance(status: WorkshopUpdateStatus, automatic: Bool) {
         let jobs = Dictionary(downloadJobs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let items = updateItems.values.filter { item in
-            updateStatuses[item.id]?.canEnqueue(job: jobs[item.id], automatic: automatic) == true
+            updateStatuses[item.id] == status && status.canEnqueue(job: jobs[item.id], automatic: automatic)
         }.sorted { $0.id < $1.id }
         guard !items.isEmpty else { return }
         enqueueDownloads(items, automatic: automatic, validating: true)
@@ -1117,7 +1126,9 @@ final class WorkshopViewModel: ObservableObject {
                     let message: String
                     if local.isEmpty { message = "没有可检查的本地工坊壁纸" }
                     else if inventory.items.isEmpty { message = "本次未能获取工坊壁纸的版本" }
-                    else if pendingUpdateCount > 0 { message = "\(pendingUpdateCount) 个壁纸可更新或需校验版本" }
+                    else if pendingUpdateCount > 0 || pendingValidationCount > 0 {
+                        message = "\(pendingUpdateCount) 个壁纸可更新，\(pendingValidationCount) 个旧记录待校验"
+                    }
                     else { message = "\(inventory.items.count) 个工坊壁纸已是最新版本" }
                     toast.show(message + (unavailable > 0 ? "；\(unavailable) 个条目无法获取版本" : ""), style: .info)
                 }
