@@ -24,6 +24,10 @@ nonisolated struct WorkshopDownloadJob: Codable, Identifiable, Sendable {
     var applyWhenDone = false
     /// 工坊详情里的文件大小，用于显示进度（未知时为 nil）
     var totalBytes: Int64? = nil
+    /// 更新 / 强制校验意图必须跨重启保留，不能被“本地已完整”短路。
+    var requiresValidation: Bool? = nil
+
+    var canCompleteLocally: Bool { [.queued, .paused].contains(state) && requiresValidation != true }
 }
 
 /// 每个条目单独结算；中断一个批次不会丢弃其中其他条目的下载意图。
@@ -47,6 +51,7 @@ nonisolated enum WorkshopDownloadQueue {
             if downloaded.contains(job.id) {
                 job.state = .completed
                 job.error = nil
+                job.requiresValidation = nil
             } else if job.state == .downloading {
                 job.state = interrupted ? .queued : .failed
                 job.error = interrupted ? nil : (failures[job.id] ?? "下载未完成")

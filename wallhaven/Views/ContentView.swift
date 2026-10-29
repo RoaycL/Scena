@@ -972,11 +972,13 @@ struct ContentView: View {
             case .library:
                 librarySearchField
                 libraryAddMenu
+                WorkshopUpdatesMenu()
             case .playlists:
                 EmptyView()
             case .workshop:
                 workshopSearchField
                 workshopFilterButton
+                WorkshopUpdatesMenu()
                 if workshop.mode == .subscribed, workshop.isLoggedIn {
                     Button { workshop.syncSubscriptions(force: true) } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
@@ -1413,6 +1415,12 @@ struct ContentView: View {
             }
 
         case .workshop(let workshopItem):
+            if workshopItem.isDownloaded, workshopItem.type.isPlayable, workshopItem.workshopPageURL != nil {
+                Button(workshop.updateStatus(for: workshopItem) == .available ? "更新壁纸" : "校验并更新壁纸") {
+                    workshop.updateWallpaper(workshopItem)
+                }
+                .disabled(workshop.downloading.contains(workshopItem.id))
+            }
             workshopInfoPanel(workshopItem, item: item)
         }
     }
@@ -1476,6 +1484,9 @@ struct ContentView: View {
             }
             if BakedWallpapers.canBake(workshopItem) {
                 BakeVideoButton(item: workshopItem).id("bake-\(item.id)")
+            }
+            if workshopItem.isDownloaded, workshopItem.type == .web {
+                WebWallpaperInteractionButton(item: workshopItem)
             }
             if let folder = workshopItem.localFolder {
                 CircleIconButton(systemImage: "folder", help: "在 Finder 中显示") {
@@ -1545,6 +1556,9 @@ struct ContentView: View {
             Divider()
             Button("移到废纸篓", role: .destructive) { deleteLocal(local) }
         case .workshop(let workshopItem):
+            if workshopItem.isDownloaded, workshopItem.type == .web {
+                Button("进入网页壁纸交互") { liveController.beginInteraction(with: workshopItem) }
+            }
             if workshopItem.type.isPlayable {
                 Button(workshopItem.isDownloaded ? "设为壁纸" : "下载并应用") { workshop.apply(workshopItem) }
             }

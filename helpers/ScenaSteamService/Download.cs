@@ -69,7 +69,8 @@ internal static partial class Program
                 }
                 else throw new ServiceFailure("unavailable");
                 var folder = Install(staging, Path.Combine(contentRoot, itemId));
-                Emit(new { v = 1, id = request.Id, type = "itemDone", itemId, folder });
+                Emit(new { v = 1, id = request.Id, type = "itemDone", itemId, folder,
+                    manifestId = item.hcontent_file.ToString(), updatedAt = item.time_updated });
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { throw; }
             catch (ServiceFailure failure) when (failure.Code is "unavailable" or "notOwned" or "storage")

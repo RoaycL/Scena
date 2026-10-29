@@ -42,8 +42,8 @@ private struct WorkshopDownloadsList: View {
     @State private var showsFolded = false
 
     // 始终保持入队顺序；暂停、完成与进度变化只更新原来的行，避免按钮移位。
-    private var visibleJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { !foldedIDs.contains($0.id) } }
-    private var foldedJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { foldedIDs.contains($0.id) } }
+    private var visibleJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { !foldedIDs.contains($0.id) || $0.state != .completed } }
+    private var foldedJobs: [WorkshopDownloadJob] { workshop.downloadJobs.filter { foldedIDs.contains($0.id) && $0.state == .completed } }
 
     private var summary: String {
         let active = progress.entries.count
@@ -78,6 +78,13 @@ private struct WorkshopDownloadsList: View {
             }
             .controlSize(.small)
             Divider()
+            if workshop.pendingUpdateCount > 0 {
+                HStack {
+                    Text("\(workshop.pendingUpdateCount) 个工坊壁纸可更新或需校验").font(.caption)
+                    Spacer()
+                    Button("更新全部") { workshop.updateAllWallpapers() }.controlSize(.small)
+                }
+            }
             if workshop.downloadJobs.isEmpty {
                 ContentUnavailableView("暂无下载任务", systemImage: "arrow.down.circle")
             } else {
@@ -158,6 +165,9 @@ private struct WorkshopDownloadsList: View {
     private func rowText(_ job: WorkshopDownloadJob, entry: WorkshopDownloadProgress.Entry?) -> some View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(job.title).lineLimit(1).truncationMode(.middle)
+                if job.requiresValidation == true {
+                    Text("工坊更新 / 校验").font(.caption).foregroundStyle(.secondary)
+                }
                 if job.state == .downloading, let entry {
                     if let fraction = entry.fraction {
                         ProgressView(value: fraction).controlSize(.small)

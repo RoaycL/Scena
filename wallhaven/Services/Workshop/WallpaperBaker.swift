@@ -60,7 +60,15 @@ nonisolated enum BakedWallpapers {
 
 extension WorkshopItem {
     /// 桌面和画廊直接用硬件解码播放的视频：视频类壁纸的原片，或场景 / 网页壁纸的烘焙结果
-    nonisolated var playbackVideoURL: URL? { nativeVideoURL ?? BakedWallpapers.videoURL(for: self) }
+    nonisolated var playbackVideoURL: URL? {
+        playbackVideoURL(useConvertedVideo: UserDefaults.standard.bool(forKey: WorkshopPlaybackPolicy.convertedVideoKey))
+    }
+
+    nonisolated func playbackVideoURL(useConvertedVideo: Bool) -> URL? {
+        WorkshopPlaybackPolicy.videoURL(original: nativeVideoURL, useConvertedVideo: useConvertedVideo) {
+            BakedWallpapers.videoURL(for: self)
+        }
+    }
 }
 
 @MainActor
@@ -387,6 +395,7 @@ private extension WallpaperBaker.Phase {
 
 /// 信息面板里的「转为视频」按钮：未烘焙 → 进度环（点击取消）→ 已转为视频（点击恢复实时渲染）
 struct BakeVideoButton: View {
+    @AppStorage(WorkshopPlaybackPolicy.convertedVideoKey) private var useConvertedVideo = false
     @ObservedObject private var baker = WallpaperBaker.shared
     let item: WorkshopItem
 
@@ -401,10 +410,10 @@ struct BakeVideoButton: View {
         case .failed, nil:
             if baker.isBaked(item) {
                 CircleIconButton(systemImage: "film.fill", tint: .green,
-                                 help: "已转为视频，桌面用硬件解码播放、更省电。点击恢复实时渲染") { baker.removeBake(item) }
+                                 help: useConvertedVideo ? "已转为视频，点击删除转换视频并恢复源文件播放" : "转换视频已保留，当前使用源文件；点击删除转换视频") { baker.removeBake(item) }
             } else {
                 CircleIconButton(systemImage: "film",
-                                 help: "转为视频：录制约 20 秒画面生成循环视频，桌面改用硬件解码播放，更省电（鼠标、音乐等互动效果会消失）") {
+                                 help: "转为视频：生成循环视频；关闭自动转换开关时仍使用源文件播放（视频不保留互动效果）") {
                     baker.bake(item)
                 }
             }

@@ -7,8 +7,9 @@ nonisolated struct WorkshopDownloadReceipt: Codable, Equatable, Sendable {
         let modified: Date
     }
     let files: [String: FileStamp]
+    var contentVersion: WorkshopContentVersion? = nil
 
-    static func capture(folder: URL) -> Self? {
+    static func capture(folder: URL, contentVersion: WorkshopContentVersion? = nil) -> Self? {
         let fm = FileManager.default
         let root = folder.resolvingSymlinksInPath().standardizedFileURL
         guard let data = try? Data(contentsOf: root.appendingPathComponent("project.json")),
@@ -30,8 +31,8 @@ nonisolated struct WorkshopDownloadReceipt: Codable, Equatable, Sendable {
             files[String(url.path.dropFirst(root.path.count + 1))] = FileStamp(size: size, modified: modified)
         }
         guard !failed, !files.isEmpty else { return nil }
-        return Self(files: files)
+        return Self(files: files, contentVersion: contentVersion)
     }
 
-    func matches(folder: URL) -> Bool { Self.capture(folder: folder) == self }
+    func matches(folder: URL) -> Bool { Self.capture(folder: folder)?.files == files }
 }

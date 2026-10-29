@@ -281,6 +281,15 @@ private struct AccountSettings: View {
                     }
                 }
             }
+            Toggle("自动更新已下载的工坊壁纸", isOn: $workshop.autoUpdateWallpapers)
+            HStack {
+                Button("检查工坊更新") { workshop.checkForUpdates(force: true) }
+                    .disabled(workshop.isCheckingUpdates)
+                Button("更新 / 校验全部（\(workshop.pendingUpdateCount)）") { workshop.updateAllWallpapers() }
+                    .disabled(workshop.pendingUpdateCount == 0)
+                if workshop.isCheckingUpdates { ProgressView().controlSize(.small) }
+            }
+            SettingsFootnote("启动时及每 30 分钟检查本地工坊壁纸。自动更新默认关闭，不恢复已暂停、停止或失败的任务。旧版下载缺少版本记录，首次需校验；更新沿用下载队列，可暂停、恢复和停止。")
         } header: {
             Label("Steam 账号（订阅与下载）", systemImage: "arrow.triangle.2.circlepath")
         } footer: {
@@ -666,7 +675,7 @@ private struct WorkshopSettings: View {
             } header: {
                 Text("转为视频")
             } footer: {
-                SettingsFootnote("场景和网页壁纸转成循环视频后，桌面改用硬件解码播放，几乎不占 CPU 和 GPU（鼠标、音乐等互动效果会消失）。自动转换只在接通电源、电脑 3 分钟没有操作、系统不热时进行，一次一个；一动鼠标或键盘就立即停下，下次空闲再继续。也可以在壁纸信息面板里点 🎞 手动转换。")
+                SettingsFootnote("开启后自动转换场景和网页壁纸，并优先播放已生成的循环视频；鼠标、音乐等互动效果会消失。关闭后桌面和预览立即改用源文件，已生成的视频保留。自动转换只在接通电源、电脑 3 分钟无操作、系统不热时进行，一次一个；有操作就暂停，下次空闲继续。也可以在壁纸信息面板里手动转换。")
             }
 
         }

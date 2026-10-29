@@ -30,6 +30,16 @@ final class LiveWallpaperController: ObservableObject {
 
     @Published private(set) var current: LiveContent?
     @Published private(set) var isPaused = false
+    @Published private(set) var isInteracting = false
+    @Published private(set) var canInteract = false
+    private let interactionHUD = WallpaperInteractionHUD()
+    private var interactionKeyMonitor: Any?
+    private weak var previousKeyWindow: NSWindow?
+    private var previousApplication: NSRunningApplication?
+    private var interactionWasPaused = false
+    /// 交互后保留源网页实例；切换壁纸时清除。
+    private var sourcePlaybackOverride: URL?
+    private var convertedVideoPreference = UserDefaults.standard.bool(forKey: WorkshopPlaybackPolicy.convertedVideoKey)
     @Published private(set) var volume = min(1, max(0, UserDefaults.standard.double(forKey: "liveWallpaper.volume")))
 
     func setVolume(_ value: Double) {
@@ -145,6 +155,8 @@ final class LiveWallpaperController: ObservableObject {
     func reloadIfShowing(_ item: WorkshopItem) {
         guard let current, current.kind == .workshop,
               current.url.standardizedFileURL == item.localFolder?.standardizedFileURL else { return }
+        canInteract = item.type == .web
+        if isInteracting && !canInteract { endInteraction() }
         rebuildWindows()
     }
 
@@ -158,7 +170,10 @@ final class LiveWallpaperController: ObservableObject {
         guard FileManager.default.fileExists(atPath: content.path) else {
             throw WallperError.wallpaper("壁纸文件不存在。")
         }
+        endInteraction(restoreFocus: false)
+        sourcePlaybackOverride = nil
         current = content
+        canInteract = content.kind == .workshop && WorkshopItem.load(from: content.url, computeSize: false)?.type == .web
         isPaused = false
         if let data = try? JSONEncoder().encode(content) {
             UserDefaults.standard.set(data, forKey: storageKey)
@@ -186,6 +201,9 @@ final class LiveWallpaperController: ObservableObject {
     }
 
     func stop() {
+        endInteraction(restoreFocus: false)
+        sourcePlaybackOverride = nil
+        canInteract = false
         tearDownWindows()
         current = nil
         isPaused = false
@@ -193,9 +211,83 @@ final class LiveWallpaperController: ObservableObject {
     }
 
     func togglePause() {
-        isPaused.toggle()
+        let shouldPause = !isPaused
+        if isInteracting { endInteraction() }
+        isPaused = shouldPause
         PlaylistManager.shared.setPlaybackPaused(isPaused)
         updatePlayback()
+    }
+
+    // MARK: - Web wallpaper interaction
+
+    func beginInteraction(with item: WorkshopItem? = nil) {
+        do {
+            if let item {
+                guard item.type == .web, let folder = item.localFolder else { return }
+                if current?.kind != .workshop || currentURL?.standardizedFileURL != folder.standardizedFileURL {
+                    try start(workshop: item)
+                }
+            }
+            guard canInteract, let content = current, !isInteracting else { return }
+            previousKeyWindow = NSApp.keyWindow
+            previousApplication = NSWorkspace.shared.frontmostApplication.flatMap {
+                $0.processIdentifier != ProcessInfo.processInfo.processIdentifier ? $0 : nil
+            }
+            interactionWasPaused = isPaused
+            sourcePlaybackOverride = content.url.standardizedFileURL
+            if players.contains(where: { $0 is LoopingVideoNSView }) { rebuildWindows() }
+            guard !windows.isEmpty else { return }
+            isInteracting = true
+            isPaused = false
+            configureInteractionWindows()
+            interactionKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard event.keyCode == 53 else { return event }
+                return MainActor.assumeIsolated {
+                    guard let self, self.isInteracting else { return event }
+                    self.endInteraction()
+                    return nil
+                }
+            }
+            let screen = windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.screen ?? windows.first?.screen
+            if let screen {
+                interactionHUD.show(title: content.title, screen: screen) { [weak self] in self?.endInteraction() }
+            }
+            updatePlayback()
+        } catch { ToastCenter.shared.show("无法进入网页交互：\(error.localizedDescription)", style: .error) }
+    }
+
+    func endInteraction(restoreFocus: Bool = true) {
+        guard isInteracting else { return }
+        isInteracting = false
+        isPaused = interactionWasPaused
+        if let interactionKeyMonitor { NSEvent.removeMonitor(interactionKeyMonitor) }
+        interactionKeyMonitor = nil
+        interactionHUD.dismiss()
+        configureInteractionWindows()
+        if restoreFocus {
+            if let previousKeyWindow { previousKeyWindow.makeKeyAndOrderFront(nil) }
+            else { previousApplication?.activate(options: []) }
+        }
+        previousKeyWindow = nil
+        previousApplication = nil
+        updatePlayback()
+    }
+
+    private var desktopWindowLevel: NSWindow.Level {
+        NSWindow.Level(rawValue: DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)
+            ? Int(CGWindowLevelForKey(.desktopIconWindow)) + 1 : Int(CGWindowLevelForKey(.desktopWindow)))
+    }
+
+    private func configureInteractionWindows() {
+        for window in windows {
+            (window as? WallpaperDesktopWindow)?.setInteractionEnabled(isInteracting, desktopLevel: desktopWindowLevel)
+            if isInteracting { window.orderFront(nil) }
+        }
+        if isInteracting {
+            NSApp.activate()
+            let target = windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? windows.first
+            target?.makeKeyAndOrderFront(nil)
+        }
     }
 
     // MARK: - Windows
@@ -208,7 +300,7 @@ final class LiveWallpaperController: ObservableObject {
             // 播放只需要入口元数据，不在主线程遍历整份壁纸的资源大小。
             guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return nil }
             // 视频类工坊壁纸（以及烘焙成视频的场景 / 网页壁纸）优先用 AVFoundation 播放，更省电
-            if let videoURL = item.playbackVideoURL {
+            if sourcePlaybackOverride != content.url.standardizedFileURL, let videoURL = item.playbackVideoURL {
                 return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
             }
             let player = WorkshopPlayerNSView(item: item, fps: frameRate)
@@ -223,6 +315,9 @@ final class LiveWallpaperController: ObservableObject {
 
     /// 新窗口先以透明状态创建，播放器出第一帧后淡入，再移除旧窗口：切换时不会黑屏
     private func rebuildWindows() {
+        for surface in surfaces.active {
+            (surface.window as? WallpaperDesktopWindow)?.setInteractionEnabled(false, desktopLevel: desktopWindowLevel)
+        }
         let currentGeneration = surfaces.beginReplacement()
         revealedWindows.removeAll()
         removeMouseTracking()
@@ -246,7 +341,7 @@ final class LiveWallpaperController: ObservableObject {
             (player as? LoopingVideoNSView)?.setFit(keepAspectRatio: keepAspect, background: background)
             // 多屏只让主屏输出声音，避免重复播放与叠加音量。
             player.setVolume(screen == NSScreen.screens.first ? volume : 0)
-            let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            let window = WallpaperDesktopWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.level = NSWindow.Level(rawValue: level)
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
             window.ignoresMouseEvents = true
@@ -301,6 +396,7 @@ final class LiveWallpaperController: ObservableObject {
         if players.contains(where: { $0 is WorkshopPlayerNSView }) {
             installMouseTracking()
         }
+        if isInteracting { configureInteractionWindows() }
         updatePlayback()
     }
 
@@ -370,16 +466,16 @@ final class LiveWallpaperController: ObservableObject {
     private func updatePlayback() {
         // 手动暂停优先；自动暂停条件解除后自动继续
         // 全屏只暂停被盖住的那块屏幕，其他条件暂停所有屏幕
-        let blocked = isSystemSuspended || !autoPauseReasons.subtracting([.fullScreen]).isEmpty
+        let blocked = isSystemSuspended || (!isInteracting && !autoPauseReasons.subtracting([.fullScreen]).isEmpty)
         let covered = autoPause.fullScreenDisplays
         for (window, player) in zip(windows, players) {
-            let isCovered = window.screen.map { covered.contains($0.displayUUID) } ?? false
+            let isCovered = !isInteracting && (window.screen.map { covered.contains($0.displayUUID) } ?? false)
             let shouldPlay = !isPaused && !blocked && !isCovered && !isOccluded(window)
             shouldPlay ? player.play() : player.pause()
         }
         // 播放列表只在所有屏幕都被暂停时才停止轮换（手动暂停由播放列表自己处理）
         let allCovered = !windows.isEmpty && windows.allSatisfy { $0.screen.map { covered.contains($0.displayUUID) } ?? false }
-        PlaylistManager.shared.setAutomaticPlaybackPaused(blocked || allCovered)
+        PlaylistManager.shared.setAutomaticPlaybackPaused(isInteracting || blocked || allCovered)
     }
 
     /// 桌面窗口不接收鼠标事件，把全局鼠标位置推给场景壁纸（视差 / 鼠标交互效果）
@@ -399,6 +495,7 @@ final class LiveWallpaperController: ObservableObject {
     }
 
     private func pushMouseLocation() {
+        guard !isInteracting else { return }
         let location = NSEvent.mouseLocation
         for (window, player) in zip(windows, players) {
             guard let player = player as? WorkshopPlayerNSView, window.frame.contains(location) else { continue }
@@ -550,6 +647,7 @@ final class LiveWallpaperController: ObservableObject {
         observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.isActive else { return }
+                self.endInteraction(restoreFocus: false)
                 self.rebuildWindows()
             }
         })
@@ -567,10 +665,18 @@ final class LiveWallpaperController: ObservableObject {
                 // 暂停相关的开关可能变了
                 self.updatePlayback()
                 let signature = Self.currentLayoutSignature
-                guard signature != self.layoutSignature else { return }
+                let converted = UserDefaults.standard.bool(forKey: WorkshopPlaybackPolicy.convertedVideoKey)
+                let playbackChanged = converted != self.convertedVideoPreference
+                self.convertedVideoPreference = converted
+                if playbackChanged && !self.isInteracting { self.sourcePlaybackOverride = nil }
+                guard signature != self.layoutSignature || (playbackChanged && self.current?.kind == .workshop && !self.isInteracting) else { return }
                 self.layoutSignature = signature
                 if self.isActive { self.rebuildWindows() }
             }
+        })
+
+        observers.append(center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.endInteraction(restoreFocus: false) }
         })
 
         let workspace = NSWorkspace.shared.notificationCenter
@@ -587,6 +693,7 @@ final class LiveWallpaperController: ObservableObject {
         for name in suspendNames {
             observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    self?.endInteraction(restoreFocus: false)
                     self?.isSystemSuspended = true
                     self?.updatePlayback()
                 }

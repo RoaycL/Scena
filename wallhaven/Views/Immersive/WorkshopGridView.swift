@@ -51,6 +51,7 @@ struct WorkshopGridView<MenuItems: View>: View {
                                 item: item,
                                 isSelected: item.id == selectedID,
                                 downloadState: workshop.downloadState(of: item),
+                                updateStatus: workshop.updateStatus(for: item),
                                 isLive: isLive(item)
                             )
                             .id(item.id)
@@ -168,6 +169,7 @@ private struct WorkshopTile: View {
     let item: WorkshopItem
     let isSelected: Bool
     let downloadState: DownloadState
+    let updateStatus: WorkshopUpdateStatus?
     let isLive: Bool
 
     @State private var isHovered = false
@@ -258,6 +260,14 @@ private struct WorkshopTile: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(.green, in: Capsule())
+        } else if let status = updateStatus, status != .current {
+            Text(status == .available ? "可更新" : "待校验")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.accentColor, in: Capsule())
+                .help(status.label)
         } else if item.isDownloaded {
             Image(systemName: "checkmark")
                 .font(.system(size: 9, weight: .bold))
@@ -272,6 +282,7 @@ private struct WorkshopTile: View {
 // MARK: - Detail panel
 
 private struct WorkshopDetailPanel: View {
+    @AppStorage(WorkshopPlaybackPolicy.convertedVideoKey) private var useConvertedVideo = false
     @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.colorScheme) private var scheme
     let item: WorkshopItem
@@ -290,13 +301,13 @@ private struct WorkshopDetailPanel: View {
                     .placeholder { Color.white.opacity(0.06) }
                     .resizable()
                     .scaledToFill()
-                if let videoURL = item.playbackVideoURL {
+                if let videoURL = item.playbackVideoURL(useConvertedVideo: useConvertedVideo) {
                     // 已下载的视频壁纸直接播放实际效果（硬件解码，窗口隐藏时自动暂停）
                     LoopingVideoView(url: videoURL)
-                        .id(videoURL)
+                        .id(videoURL.absoluteString + (item.localRevision ?? ""))
                 } else if let url = item.previewURL {
                     AnimatedPreviewImage(url: url)
-                        .id(url)
+                        .id(url.absoluteString + (item.localRevision ?? ""))
                 }
                 let state = workshop.downloadState(of: item)
                 if state != .none && state != .completed {
@@ -352,6 +363,26 @@ private struct WorkshopDetailPanel: View {
     @ViewBuilder
     private func actions(isDownloading: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            if item.isDownloaded, item.type == .web {
+                HStack {
+                    Text("网页交互 · Esc 退出").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    WebWallpaperInteractionButton(item: item)
+                }
+            }
+            if item.isDownloaded, let status = workshop.updateStatus(for: item) {
+                HStack {
+                    Label(status.label, systemImage: status == .current ? "checkmark.circle" : "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(status == .current ? Color.secondary : Color.accentColor)
+                    Spacer()
+                    if status != .current {
+                        Button(status == .available ? "更新" : "校验并更新") { workshop.updateWallpaper(item) }
+                            .disabled(isDownloading)
+                            .controlSize(.small)
+                    }
+                }
+            }
             if !item.type.isPlayable {
                 Text("Windows 程序，macOS 无法运行")
                     .font(.system(size: 12, weight: .medium))

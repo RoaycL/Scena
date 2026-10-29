@@ -46,12 +46,16 @@ nonisolated struct WorkshopItem: Identifiable, Hashable, Codable, Sendable {
     var subscriptions: Int = 0
     var favorited: Int = 0
     var authorID: String?
+    /// 远程条目的内容版本；旧收藏、旧索引和本地导入可以没有。
+    var contentVersion: WorkshopContentVersion?
     /// 下载到本地的时间（文件夹创建时间），资料库按它排序
     var downloadedAt: Date?
     /// 已下载 / 导入时的本地文件夹
     var localFolder: URL?
     /// project.json 的 file 字段（场景包 / 视频文件 / 网页入口）
     var entryFile: String?
+    /// 扫描时采集的本地文件版本，用于同一路径替换后刷新预览缓存。
+    var localRevision: String?
 
     var isDownloaded: Bool { localFolder != nil }
 
@@ -93,6 +97,11 @@ nonisolated extension WorkshopItem {
         let preview = (json["preview"] as? String).map { folder.appendingPathComponent($0) }
             .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
 
+        let localRevision = ([folder, folder.appendingPathComponent("project.json")]
+            + [file.map { folder.appendingPathComponent($0) }, preview].compactMap { $0 }).map { url in
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return "\(values?.fileSize ?? 0):\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        }.joined(separator: "|")
         return WorkshopItem(
             id: workshopID ?? folder.lastPathComponent,
             title: (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? folder.lastPathComponent,
@@ -102,7 +111,8 @@ nonisolated extension WorkshopItem {
             contentRating: json["contentrating"] as? String,
             fileSize: computeSize ? folderSize(folder) : 0,
             localFolder: folder,
-            entryFile: file
+            entryFile: file,
+            localRevision: localRevision
         )
     }
 

@@ -108,6 +108,13 @@ struct WallhavenCommands: Commands {
                 .disabled(!liveController.isActive)
             Button("停止动态壁纸") { liveController.stop() }
                 .disabled(!liveController.isActive)
+            if liveController.canInteract {
+                Button(liveController.isInteracting ? "退出网页交互" : "进入网页壁纸交互") {
+                    if liveController.isInteracting { liveController.endInteraction() }
+                    else { liveController.beginInteraction() }
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            }
             Divider()
             Menu("自动暂停") { AutoPauseMenuItems() }
         }
@@ -208,6 +215,12 @@ struct StatusMenuContent: View {
         }
         .disabled(!liveController.isActive && playlists.activePlaylist == nil)
         Menu("自动暂停") { AutoPauseMenuItems() }
+        if liveController.canInteract {
+            Button(liveController.isInteracting ? "退出网页交互（Esc）" : "进入网页壁纸交互") {
+                if liveController.isInteracting { liveController.endInteraction() }
+                else { liveController.beginInteraction() }
+            }
+        }
         Menu("音量调节") {
             ForEach(volumeLevels, id: \.self) { level in
                 Button {

@@ -43,6 +43,7 @@ final class SteamContentDownloader {
     nonisolated struct BatchResult: Sendable {
         var downloaded: [String: URL] = [:]
         var failed: [String: String] = [:]
+        var versions: [String: WorkshopContentVersion] = [:]
     }
 
     enum Event {
@@ -51,9 +52,14 @@ final class SteamContentDownloader {
     }
 
     private var process: Process?
+    private let executableOverride: URL?
+
+    init(executable: URL? = nil) { executableOverride = executable }
+
+    private var executable: URL? { executableOverride ?? SteamServiceClient.bundledExecutable() }
 
     var isAvailable: Bool {
-        SteamServiceClient.bundledExecutable().map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
+        executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
     }
 
     var isBusy: Bool { process != nil }
@@ -62,7 +68,7 @@ final class SteamContentDownloader {
     /// 条目级失败记在结果里；登录失效、账号没有 Wallpaper Engine 等整体失败直接抛出
     func download(ids: [String], credential: SteamCredential, loginID: UInt32, contentRoot: URL, stagingRoot: URL,
                   concurrency: Int = 8, onEvent: @escaping @MainActor (Event) -> Void) async throws -> BatchResult {
-        guard let executable = SteamServiceClient.bundledExecutable(), isAvailable else { throw SteamContentError.componentMissing }
+        guard let executable, isAvailable else { throw SteamContentError.componentMissing }
         guard process == nil else { throw SteamContentError.connection }
         let ids = ids.filter { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
         guard !ids.isEmpty else { return BatchResult() }
@@ -122,6 +128,7 @@ final class SteamContentDownloader {
                     // 组件只能写到指定的资料库目录
                     guard folder.standardizedFileURL.deletingLastPathComponent().path == contentRoot.standardizedFileURL.path else { break }
                     result.downloaded[itemID] = folder
+                    result.versions[itemID] = WorkshopContentVersion(json: message)
                     onEvent(.downloaded(id: itemID, folder: folder))
                 case "itemError":
                     if let itemID, ids.contains(itemID) {

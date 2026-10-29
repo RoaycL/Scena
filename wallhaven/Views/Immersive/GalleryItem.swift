@@ -59,13 +59,14 @@ struct GalleryItem: Identifiable, Equatable {
             }
             return .provider(LocalFileImageDataProvider(fileURL: item.url))
         case .workshop(let item):
-            return Self.source(for: item.previewURL)
+            return Self.source(for: item.previewURL, revision: item.localRevision)
         }
     }
 
-    private static func source(for url: URL?) -> Source? {
+    private static func source(for url: URL?, revision: String? = nil) -> Source? {
         guard let url else { return nil }
-        return url.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: url)) : url.convertToSource()
+        return url.isFileURL ? .provider(LocalFileImageDataProvider(fileURL: url,
+            cacheKey: revision.map { url.absoluteString + "#" + $0 } ?? url.absoluteString)) : url.convertToSource()
     }
 
     /// 缩略图处理器：在线缩略图本身很小，直接用原图（和背景占位共享缓存）；
@@ -98,7 +99,7 @@ struct GalleryItem: Identifiable, Equatable {
             return item.isVideo ? nil : .provider(LocalFileImageDataProvider(fileURL: item.url))
         case .workshop(let item):
             // 工坊封面分辨率较低，背景直接使用封面（已下载的条目会实时渲染）
-            return Self.source(for: item.previewURL)
+            return Self.source(for: item.previewURL, revision: item.localRevision)
         }
     }
 }

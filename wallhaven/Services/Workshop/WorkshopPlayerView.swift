@@ -219,6 +219,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     private var isWindowVisible = false
     private var lastPlaybackState: Bool?
     private var isStopped = false
+    private(set) var allowsInteraction = false
     private lazy var visibility = WindowVisibilityObserver { [weak self] visible in
         self?.isWindowVisible = visible
         self?.updatePlayback()
@@ -275,7 +276,14 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     }
 
     /// 不拦截鼠标事件，让上层 SwiftUI 界面正常交互
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        allowsInteraction ? super.hitTest(point) : nil
+    }
+
+    func setInteractionEnabled(_ enabled: Bool) {
+        allowsInteraction = enabled && item.type == .web && !isStopped
+        if allowsInteraction { window?.makeFirstResponder(webView) }
+    }
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -315,6 +323,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     func stop() {
         guard !isStopped else { return }
         isStopped = true
+        allowsInteraction = false
         visibility.stop()
         wantsPlaying = false
         call("__host.pause()")

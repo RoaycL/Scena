@@ -112,6 +112,12 @@ struct LiveWallpaperStatus: View {
             Menu {
                 Text(content.title)
                 Divider()
+                if controller.canInteract {
+                    Button(controller.isInteracting ? "退出网页交互（Esc）" : "进入网页壁纸交互") {
+                        if controller.isInteracting { controller.endInteraction() }
+                        else { controller.beginInteraction() }
+                    }
+                }
                 Button(controller.isPaused ? "继续播放" : "暂停") { controller.togglePause() }
                 Button("停止动态壁纸", role: .destructive) { controller.stop() }
             } label: {

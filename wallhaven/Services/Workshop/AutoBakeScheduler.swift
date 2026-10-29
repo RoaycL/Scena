@@ -18,7 +18,7 @@ final class AutoBakeScheduler: ObservableObject {
     static let shared = AutoBakeScheduler()
 
     private enum Keys {
-        static let enabled = "workshop.autoBake.enabled"
+        static let enabled = WorkshopPlaybackPolicy.convertedVideoKey
         static let queue = "workshop.autoBake.queue"
         static let skipped = "workshop.autoBake.skipped"
     }

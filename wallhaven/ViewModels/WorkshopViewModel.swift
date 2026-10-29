@@ -55,6 +55,21 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var subscribedItems: [WorkshopItem] = []
     @Published private(set) var isSyncing = false
     @Published private(set) var lastSyncAt: Date?
+    @Published private(set) var updateStatuses: [String: WorkshopUpdateStatus] = [:]
+    @Published private(set) var isCheckingUpdates = false
+    @Published private(set) var lastUpdateCheckAt: Date?
+    @Published var autoUpdateWallpapers: Bool {
+        didSet {
+            UserDefaults.standard.set(autoUpdateWallpapers, forKey: Keys.autoUpdate)
+            if autoUpdateWallpapers { checkForUpdates(force: true) }
+        }
+    }
+    private var updateItems: [String: WorkshopItem] = [:]
+    private var updateCheckTask: Task<Void, Never>?
+    private var updateTimer: Task<Void, Never>?
+    private var updateGeneration = UUID()
+    private var contentGeneration: UInt64 = 0
+    private var stagingCleanups: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     @Published var subscribeOnDownload: Bool {
         didSet { UserDefaults.standard.set(subscribeOnDownload, forKey: Keys.subscribeOnDownload) }
     }
@@ -101,6 +116,7 @@ final class WorkshopViewModel: ObservableObject {
         static let downloadReceipts = "workshop.downloadReceipts.v1"
         static let downloadJobs = "workshop.downloadJobs.v1"
         static let autoDownload = "workshop.autoDownloadSubscriptions"
+        static let autoUpdate = "workshop.autoUpdateWallpapers"
         static let maxConcurrentDownloads = "workshop.maxConcurrentDownloads"
         /// 已经提示过「无法获取详情」的订阅：同一批失败不会每次后台同步都提示
         static let notifiedUnavailable = "workshop.notifiedUnavailableSubscriptions"
@@ -165,6 +181,7 @@ final class WorkshopViewModel: ObservableObject {
         extraFolders = uniqueFolders
         subscribeOnDownload = defaults.object(forKey: Keys.subscribeOnDownload) as? Bool ?? true
         autoDownloadSubscriptions = defaults.object(forKey: Keys.autoDownload) as? Bool ?? true
+        autoUpdateWallpapers = defaults.bool(forKey: Keys.autoUpdate)
         let savedConcurrency = defaults.integer(forKey: Keys.maxConcurrentDownloads)
         maxConcurrentDownloads = savedConcurrency == 0 ? 3 : min(10, max(1, savedConcurrency))
         if let data = defaults.data(forKey: Keys.downloadJobs),
@@ -175,11 +192,20 @@ final class WorkshopViewModel: ObservableObject {
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.isShuttingDown = true
+                self?.updateTimer?.cancel()
+                self?.invalidateUpdateCheck()
                 self?.pauseAllDownloads()
             }
         }
         storageObserver = NotificationCenter.default.addObserver(forName: .storageLocationDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshLibrary() }
+            MainActor.assumeIsolated {
+                self?.invalidateUpdateCheck()
+                self?.lastUpdateCheckAt = nil
+                self?.updateItems = [:]
+                self?.updateStatuses = [:]
+                self?.refreshLibrary()
+                self?.checkForUpdates(force: true)
+            }
         }
         // 在终端登录 steamcmd 后切回 App 时刷新状态
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -193,6 +219,17 @@ final class WorkshopViewModel: ObservableObject {
                 Task { [weak self] in
                     guard let self, account.steamID == id else { return }
                     syncSubscriptions(force: true)
+                }
+            }
+        }
+        if !AppRuntime.isRunningTests {
+            // 启动检查一次；之后每半小时检查，网络失败不把旧文件判作最新。
+            updateTimer = Task { [weak self] in
+                self?.checkForUpdates()
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(1800)) } catch { return }
+                    guard let self, !self.isShuttingDown else { return }
+                    self.checkForUpdates()
                 }
             }
         }
@@ -380,6 +417,7 @@ final class WorkshopViewModel: ObservableObject {
             if let localItem = local[item.id] {
                 item.localFolder = localItem.localFolder
                 item.entryFile = localItem.entryFile
+                item.localRevision = localItem.localRevision
                 // 已下载时优先用本地自带的预览图（线上接口查不到详情的受限条目没有预览图），
                 // 线上缺失的类型、标签、分级也用本地 project.json 补上
                 if let localPreview = localItem.previewURL { item.previewURL = localPreview }
@@ -401,6 +439,9 @@ final class WorkshopViewModel: ObservableObject {
 
     /// 移到废纸篓；unsubscribe 为 true 时同时取消 Steam 订阅（Windows 上也会移除）
     func delete(_ item: WorkshopItem, unsubscribe: Bool = false) {
+        invalidateUpdateCheck()
+        updateItems[item.id] = nil
+        updateStatuses[item.id] = nil
         if unsubscribe { setSubscribed(item, false) }
         guard let folder = item.localFolder else { return }
         do {
@@ -572,16 +613,24 @@ final class WorkshopViewModel: ObservableObject {
         }
     }
 
-    private func enqueueDownloads(_ items: [WorkshopItem], applyWhenDone: Bool = false, automatic: Bool = false) {
+    private func enqueueDownloads(_ items: [WorkshopItem], applyWhenDone: Bool = false, automatic: Bool = false,
+                                  validating: Bool = false) {
         var jobs = downloadJobs
         // 只有最新的手动应用意图可以在下载结束后改变桌面。
         if applyWhenDone {
             for index in jobs.indices { jobs[index].applyWhenDone = false }
         }
         for item in items {
+            if validating { WallpaperBaker.shared.cancel(item.id) }
             if let index = jobs.firstIndex(where: { $0.id == item.id }) {
-                if automatic { continue } // 同步不能自动恢复用户暂停、停止或失败的任务。
+                if automatic && !(validating && jobs[index].state == .completed) { continue }
+                if validating {
+                    jobs[index].requiresValidation = true
+                    jobs[index].totalBytes = item.fileSize > 0 ? Int64(item.fileSize) : nil
+                    forcedValidation.insert(item.id)
+                }
                 if [.failed, .cancelled].contains(jobs[index].state) {
+                    jobs[index].requiresValidation = true
                     downloadReceipts[item.id] = nil
                     forcedValidation.insert(item.id)
                 }
@@ -590,7 +639,8 @@ final class WorkshopViewModel: ObservableObject {
                 jobs[index].applyWhenDone = applyWhenDone || jobs[index].applyWhenDone
             } else {
                 jobs.append(WorkshopDownloadJob(id: item.id, title: item.title, state: .queued, applyWhenDone: applyWhenDone,
-                                                totalBytes: item.fileSize > 0 ? Int64(item.fileSize) : nil))
+                                                totalBytes: item.fileSize > 0 ? Int64(item.fileSize) : nil,
+                                                requiresValidation: validating ? true : nil))
             }
         }
         downloadJobs = jobs
@@ -675,7 +725,7 @@ final class WorkshopViewModel: ObservableObject {
     /// 用户点「重试」的条目（forcedValidation）总是交给 Steam 校验。
     private func completeJobsAlreadyOnDisk() async {
         let candidates = downloadJobs
-            .filter { [.queued, .paused].contains($0.state) && !forcedValidation.contains($0.id) }
+            .filter { $0.canCompleteLocally && !forcedValidation.contains($0.id) }
             .map { ($0.id, downloadReceipts[$0.id]) }
         guard !candidates.isEmpty else { return }
         let roots = libraryRoots
@@ -688,8 +738,7 @@ final class WorkshopViewModel: ObservableObject {
         for (id, receipt) in complete { downloadReceipts[id] = receipt }
         // 检查期间用户可能暂停 / 停止 / 要求重试，只更新状态仍然符合的任务
         downloadJobs = downloadJobs.map { job in
-            guard complete[job.id] != nil, [.queued, .paused].contains(job.state),
-                  !forcedValidation.contains(job.id) else { return job }
+            guard complete[job.id] != nil, job.canCompleteLocally, !forcedValidation.contains(job.id) else { return job }
             var completed = job
             completed.state = .completed
             completed.error = nil
@@ -721,6 +770,13 @@ final class WorkshopViewModel: ObservableObject {
         guard !isProcessingQueue, !isShuttingDown else { return }
         isProcessingQueue = true
         Task {
+            // “停止后立即重试”要等旧暂存清理完成，不能删到新下载的文件。
+            for id in downloadJobs.filter({ $0.state == .queued }).map(\.id) {
+                while let cleanup = stagingCleanups[id] {
+                    await cleanup.task.value
+                    if stagingCleanups[id]?.id == cleanup.id { stagingCleanups[id] = nil }
+                }
+            }
             // 已经在本地的条目不再交给 steamcmd（否则会重新校验、重写整个文件夹）
             await completeJobsAlreadyOnDisk()
             isProcessingQueue = false
@@ -732,6 +788,11 @@ final class WorkshopViewModel: ObservableObject {
         guard !isProcessingQueue, !isShuttingDown else { return }
         // 每批数量：这一批标记为「下载中」，其余继续排队
         let batch = Array(downloadJobs.filter { $0.state == .queued }.prefix(maxConcurrentDownloads).map(\.id))
+        let updateIDs = Set(downloadJobs.filter { $0.requiresValidation == true && batch.contains($0.id) }.map(\.id))
+        let batchContentRoot = StorageManager.shared.workshopContentFolder
+        let batchStagingRoot = Self.contentStagingFolder
+        let steamCMDUpdateInstall = batchStagingRoot.deletingLastPathComponent()
+            .appendingPathComponent("scena-steamcmd", isDirectory: true)
         if let job = downloadJobs.first(where: { $0.state == .completed && $0.applyWhenDone }),
            let item = libraryItems.first(where: { $0.id == job.id }) {
             if let index = downloadJobs.firstIndex(where: { $0.id == job.id }) { downloadJobs[index].applyWhenDone = false }
@@ -757,7 +818,9 @@ final class WorkshopViewModel: ObservableObject {
         if usesSteamCDN {
             progress.track(ids: batch, totalBytes: sizes)
         } else {
-            progress.start(ids: batch, totalBytes: sizes, stagingFolder: Self.stagingFolder)
+            let staging = updateIDs.isEmpty ? Self.stagingFolder : steamCMDUpdateInstall
+                .appendingPathComponent("steamapps/workshop/downloads/431960", isDirectory: true)
+            progress.start(ids: batch, totalBytes: sizes, stagingFolder: staging)
         }
         Task {
             defer {
@@ -767,25 +830,56 @@ final class WorkshopViewModel: ObservableObject {
                 processDownloadQueue()
             }
             let result: SteamCMDDownloader.BatchResult
+            var installedVersions: [String: WorkshopContentVersion] = [:]
             do {
                 if batchInterrupted || isShuttingDown {
                     result = .init()
                 } else if usesSteamCDN {
                     guard let access = await account.contentCredential() else { throw SteamContentError.signedOut }
+                    guard !batchInterrupted, !isShuttingDown else { throw CancellationError() }
                     let downloaded = try await SteamContentDownloader.shared.download(
                         ids: batch, credential: access.credential, loginID: access.loginID,
-                        contentRoot: StorageManager.shared.workshopContentFolder, stagingRoot: Self.contentStagingFolder
+                        contentRoot: batchContentRoot, stagingRoot: batchStagingRoot
                     ) { [weak self] event in
                         switch event {
                         case .progress(let id, let received, let total): self?.progress.report(id: id, bytes: received, total: total)
                         case .downloaded(let id, _): self?.progress.finish(id: id); self?.markDownloaded(id)
                         }
                     }
+                    installedVersions = downloaded.versions
                     result = .init(downloaded: downloaded.downloaded, failed: downloaded.failed)
                 } else {
-                    let relay = DownloadProgressRelay(self)
-                    result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername) { id in
-                        relay.downloaded(id)
+                    // steamcmd 自行获取最新版。保守记录下载前的远程版本，避免下载后
+                    // 再查询时将作者刚发布、但尚未下载的新版本误记成已安装。
+                    let details = try? await api.details(ids: batch)
+                    installedVersions = Dictionary((details ?? []).compactMap { item in
+                        item.contentVersion.map { (item.id, $0) }
+                    }, uniquingKeysWith: { first, _ in first })
+                    guard !batchInterrupted, !isShuttingDown else { throw CancellationError() }
+                    if updateIDs.isEmpty {
+                        let relay = DownloadProgressRelay(self)
+                        result = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername) { id in
+                            relay.downloaded(id)
+                        }
+                    } else {
+                        let install = steamCMDUpdateInstall
+                        let staged = try await SteamCMDDownloader.shared.download(ids: batch, username: steamUsername, installDir: install)
+                        var installed = SteamCMDDownloader.BatchResult(failed: staged.failed)
+                        let contentRoot = batchContentRoot
+                        for (id, folder) in staged.downloaded {
+                            do {
+                                guard !batchInterrupted, downloadJobs.first(where: { $0.id == id })?.state == .downloading else { continue }
+                                guard Self.pathKey(folder.resolvingSymlinksInPath()).hasPrefix(Self.pathKey(install.resolvingSymlinksInPath()) + "/"),
+                                      folder.lastPathComponent == id else { throw CocoaError(.fileReadInvalidFileName) }
+                                let destination = contentRoot.appendingPathComponent(id, isDirectory: true)
+                                try await Task.detached(priority: .utility) {
+                                    try WorkshopUpdateInstallation.install(staged: folder, destination: destination)
+                                }.value
+                                installed.downloaded[id] = destination
+                                markDownloaded(id)
+                            } catch { installed.failed[id] = "更新安装失败：\(error.localizedDescription)；旧版文件已保留" }
+                        }
+                        result = installed
                     }
                 }
             } catch {
@@ -794,16 +888,25 @@ final class WorkshopViewModel: ObservableObject {
                 result = .init(failed: Dictionary(uniqueKeysWithValues: batch.map { ($0, error.localizedDescription) }))
             }
             if !result.downloaded.isEmpty, !usesSteamCDN { setSteamCMDLogin(valid: true) }
+            if !result.downloaded.isEmpty {
+                contentGeneration &+= 1
+                lastUpdateCheckAt = nil
+            }
             for (id, folder) in result.downloaded {
+                if updateIDs.contains(id) { BakedWallpapers.remove(id: id) }
                 await WorkshopLibraryIndex.shared.invalidate(folder: folder)
                 AutoBakeScheduler.shared.didDownload(folder: folder)
                 if let video = WorkshopItem.load(from: folder, computeSize: false)?.nativeVideoURL {
                     Task(priority: .utility) { await VideoPosterCache.shared.prewarm([video]) }
                 }
+                let version = installedVersions[id]
                 if let receipt = await Task.detached(priority: .utility, operation: {
-                    WorkshopDownloadReceipt.capture(folder: folder)
+                    WorkshopDownloadReceipt.capture(folder: folder, contentVersion: version)
                 }).value {
                     downloadReceipts[id] = receipt
+                    if let remote = updateItems[id]?.contentVersion, let version {
+                        updateStatuses[id] = WorkshopUpdateStatus.compare(remote: remote, installed: version)
+                    }
                 }
                 let root = folder.deletingLastPathComponent()
                 if !libraryRoots.contains(where: { Self.pathKey($0) == Self.pathKey(root) }) {
@@ -828,6 +931,11 @@ final class WorkshopViewModel: ObservableObject {
                 }
             }
             await refreshLibraryAndWait()
+            for id in result.downloaded.keys {
+                if let updated = libraryItems.first(where: { $0.id == id }) {
+                    LiveWallpaperController.shared.reloadIfShowing(updated)
+                }
+            }
             if let id = shouldApply { applyIfRequested(id) }
             for id in result.downloaded.keys { addToPendingPlaylists(id) }
             downloadJobs = downloadJobs.map {
@@ -870,7 +978,16 @@ final class WorkshopViewModel: ObservableObject {
     /// 停止下载时删掉已下载的部分；暂停则保留，恢复时继续
     private func discardStaging(_ id: String) {
         let folder = Self.contentStagingFolder.appendingPathComponent(id, isDirectory: true)
-        Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: folder) }
+        let cmd = Self.contentStagingFolder.deletingLastPathComponent().appendingPathComponent("scena-steamcmd/steamapps/workshop")
+        let previous = stagingCleanups[id]?.task
+        let task = Task.detached(priority: .utility) {
+            await previous?.value
+            try? FileManager.default.removeItem(at: folder)
+            for category in ["content", "downloads"] {
+                try? FileManager.default.removeItem(at: cmd.appendingPathComponent("\(category)/431960/\(id)"))
+            }
+        }
+        stagingCleanups[id] = (UUID(), task)
     }
 
     func resumeDownload(_ id: String) {
@@ -880,6 +997,7 @@ final class WorkshopViewModel: ObservableObject {
         if downloadJobs[index].state != .paused {
             downloadReceipts[id] = nil
             forcedValidation.insert(id)
+            downloadJobs[index].requiresValidation = true
         }
         downloadJobs[index].state = .queued
         downloadJobs[index].error = nil
@@ -930,6 +1048,83 @@ final class WorkshopViewModel: ObservableObject {
             batchInterrupted = true
             SteamCMDDownloader.shared.terminateAll()
             SteamContentDownloader.shared.cancelAll()
+        }
+    }
+
+    // MARK: - Workshop content updates
+
+    var pendingUpdateCount: Int { updateStatuses.values.filter { $0 != .current }.count }
+
+    private func invalidateUpdateCheck() {
+        updateGeneration = UUID()
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
+        isCheckingUpdates = false
+    }
+
+    func updateStatus(for item: WorkshopItem) -> WorkshopUpdateStatus? {
+        guard item.isDownloaded else { return nil }
+        return updateStatuses[item.id]
+    }
+
+    func updateWallpaper(_ item: WorkshopItem) {
+        guard item.isDownloaded, item.type.isPlayable, item.workshopPageURL != nil,
+              !downloading.contains(item.id) else { return }
+        enqueueDownloads([updateItems[item.id] ?? item], validating: true)
+    }
+
+    func updateAllWallpapers(automatic: Bool = false) {
+        let jobs = Dictionary(downloadJobs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let items = updateItems.values.filter { item in
+            updateStatuses[item.id]?.canEnqueue(job: jobs[item.id], automatic: automatic) == true
+        }.sorted { $0.id < $1.id }
+        guard !items.isEmpty else { return }
+        enqueueDownloads(items, automatic: automatic, validating: true)
+    }
+
+    /// 只查询已扫描到的本地工坊 ID。未下载订阅仍交给订阅同步处理。
+    func checkForUpdates(force: Bool = false) {
+        guard !isCheckingUpdates, !isShuttingDown else { return }
+        if !force, let lastUpdateCheckAt, Date().timeIntervalSince(lastUpdateCheckAt) < 1800 { return }
+        let generation = UUID()
+        updateGeneration = generation
+        let contentEpoch = contentGeneration
+        let roots = libraryRoots
+        isCheckingUpdates = true
+        updateCheckTask = Task {
+            defer {
+                if updateGeneration == generation { isCheckingUpdates = false; updateCheckTask = nil }
+            }
+            do {
+                let local = await refreshLibraryAndWait().filter { $0.workshopPageURL != nil && $0.type.isPlayable }
+                var remote: [WorkshopItem] = []
+                for start in stride(from: 0, to: local.count, by: 100) {
+                    try Task.checkCancellation()
+                    remote += try await api.details(ids: Array(local[start..<min(start + 100, local.count)].map(\.id)))
+                }
+                let receipts = downloadReceipts
+                let inventory = await Task.detached(priority: .utility) {
+                    WorkshopUpdateInventory(local: local, remote: remote, receipts: receipts)
+                }.value
+                guard !Task.isCancelled, updateGeneration == generation, contentEpoch == contentGeneration,
+                      roots == libraryRoots else { return }
+                updateItems = inventory.items
+                updateStatuses = inventory.statuses
+                lastUpdateCheckAt = Date()
+                if autoUpdateWallpapers { updateAllWallpapers(automatic: true) }
+                if force {
+                    let unavailable = local.count - inventory.items.count
+                    let message: String
+                    if local.isEmpty { message = "没有可检查的本地工坊壁纸" }
+                    else if inventory.items.isEmpty { message = "本次未能获取工坊壁纸的版本" }
+                    else if pendingUpdateCount > 0 { message = "\(pendingUpdateCount) 个壁纸可更新或需校验版本" }
+                    else { message = "\(inventory.items.count) 个工坊壁纸已是最新版本" }
+                    toast.show(message + (unavailable > 0 ? "；\(unavailable) 个条目无法获取版本" : ""), style: .info)
+                }
+            } catch {
+                guard !Task.isCancelled, updateGeneration == generation else { return }
+                if force { toast.show("检查工坊更新失败：\(error.localizedDescription)", style: .error) }
+            }
         }
     }
 
@@ -992,6 +1187,7 @@ final class WorkshopViewModel: ObservableObject {
                     toast.show(message, style: .info) { MainWindow.reveal(subscribedWorkshopItemID: first) }
                 }
                 UserDefaults.standard.set(unavailableIDs, forKey: Keys.notifiedUnavailable)
+                checkForUpdates(force: force)
             } catch {
                 guard !Task.isCancelled, subscriptionGeneration == operation,
                       account.sessionIdentifier == accountEpoch else { return }

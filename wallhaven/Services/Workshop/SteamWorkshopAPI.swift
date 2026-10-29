@@ -281,7 +281,8 @@ struct SteamWorkshopAPI: Sendable {
             fileSize: int(json["file_size"]),
             subscriptions: int(json["subscriptions"]),
             favorited: int(json["favorited"]),
-            authorID: json["creator"] as? String
+            authorID: json["creator"] as? String,
+            contentVersion: WorkshopContentVersion(json: json)
         )
     }
 

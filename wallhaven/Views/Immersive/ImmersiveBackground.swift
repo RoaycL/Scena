@@ -71,6 +71,7 @@ struct ImmersiveBackground: View {
 }
 
 private struct BackgroundLayer: View {
+    @AppStorage(WorkshopPlaybackPolicy.convertedVideoKey) private var useConvertedVideo = false
     let item: GalleryItem
     let staticOnly: Bool
     let showsPreviewCard: Bool
@@ -164,6 +165,10 @@ private struct BackgroundLayer: View {
             }
         }
         .onChange(of: staticOnly) { isLiveReady = false }
+        .onChange(of: useConvertedVideo) {
+            isLiveReady = false
+            liveFailed = false
+        }
         .task(id: item.id) {
             guard let remote = item.remote, remote.isVideo else { return }
             if let local = remote.localFileURL { remoteVideoURL = local; return }
@@ -182,12 +187,13 @@ private struct BackgroundLayer: View {
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
                 }
-            } else if let videoURL = item.playableWorkshopItem?.playbackVideoURL {
+            } else if let videoURL = item.playableWorkshopItem?.playbackVideoURL(useConvertedVideo: useConvertedVideo) {
                 // 工坊视频壁纸：直接用 AVFoundation 硬件解码、从磁盘流式播放（网页渲染器要先把整个文件读进来，大文件很慢）。
                 // 封面取视频本身的画面，构图和随后淡入的视频完全一致
                 videoPoster(videoURL, size: size)
                 if !staticOnly {
                     LoopingVideoView(url: videoURL, onReady: { liveDidBecomeReady() })
+                        .id(item.workshop?.localRevision)
                         .frame(width: size.width, height: size.height)
                         .opacity(isLiveReady ? 1 : 0)
                 }
@@ -203,6 +209,7 @@ private struct BackgroundLayer: View {
                             onFailure()
                         }
                     }
+                    .id(workshopItem.localRevision)
                     .frame(width: size.width, height: size.height)
                     .opacity(isLiveReady ? 1 : 0)
                 }
@@ -344,8 +351,13 @@ struct AnimatedPreviewImage: NSViewRepresentable {
         func load(_ url: URL, into view: NSImageView) {
             task = Task { [weak view] in
                 // 独立的大容量缓存：重复查看、来回切换不重复下载几 MB 的 GIF
-                guard let (data, _) = try? await CacheLocations.previewSession.data(from: url),
-                      !Task.isCancelled,
+                let data: Data?
+                if url.isFileURL {
+                    data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
+                } else {
+                    data = try? await CacheLocations.previewSession.data(from: url).0
+                }
+                guard let data, !Task.isCancelled,
                       let image = NSImage(data: data) else { return }
                 view?.image = image
             }

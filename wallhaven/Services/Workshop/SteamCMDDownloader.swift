@@ -135,7 +135,8 @@ final class SteamCMDDownloader {
 
     /// 一次登录下载多个条目（减少登录次数，也更快）
     /// onItemDownloaded：某个条目下载完成时立即回调（不必等整批结束），在后台线程调用
-    func download(ids: [String], username: String, onItemDownloaded: (@Sendable (String) -> Void)? = nil) async throws -> BatchResult {
+    func download(ids: [String], username: String, installDir: URL? = nil,
+                  onItemDownloaded: (@Sendable (String) -> Void)? = nil) async throws -> BatchResult {
         guard let steamcmd = Self.locate() else { throw SteamCMDError.notInstalled }
         guard Self.isValidUsername(username) else { throw SteamCMDError.missingUsername }
         let ids = ids.filter { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
@@ -150,7 +151,7 @@ final class SteamCMDDownloader {
             "+@sSteamCmdForcePlatformType", "windows",
         ]
         // 设置了存储位置时，工坊壁纸下载到该位置（必须在 +login 之前）
-        if let installDir = StorageManager.shared.workshopInstallDir {
+        if let installDir = installDir ?? StorageManager.shared.workshopInstallDir {
             try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
             arguments += ["+force_install_dir", installDir.path]
         }
