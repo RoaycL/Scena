@@ -19,6 +19,8 @@ struct WorkshopWebRuntimeTests {
         <div id="cover" style="opacity:1;transition:opacity 120ms linear">Still cover</div><script>
         const storage = localStorage;
         window.started = true;
+        window.pauseNotifications = [];
+        window.wallpaperPropertyListener = {setPaused(value) { window.pauseNotifications.push(value); }};
         window.count = Number(storage.getItem('count') || '0');
         document.getElementById('play').addEventListener('click', () => {
           window.count++; storage.setItem('count', String(window.count));
@@ -49,6 +51,7 @@ struct WorkshopWebRuntimeTests {
         }
         let diagnostic = try? await player.evaluateJavaScript("JSON.stringify({url:location.href,html:document.documentElement.outerHTML.slice(-1800),bridge:typeof window.__scenaHostVisibility,frames:document.querySelectorAll('iframe').length})")
         let loaded = try #require(frame, "Page failed to initialize: \(player.runtimeErrors), state: \(player.state), frames: \(player.documentFrames.count), diagnostic: \(String(describing: diagnostic))")
+        #expect((try await player.evaluateJavaScript("typeof window.__weSetPaused", in: loaded)) as? String == "function")
         #expect((try await player.evaluateJavaScript("document.querySelector('iframe').getAttribute('sandbox')")) as? String == "allow-scripts")
         _ = try await player.evaluateJavaScript("document.getElementById('play').click()", in: loaded)
         #expect((try await player.evaluateJavaScript("window.count", in: loaded)) as? Int == 1)
@@ -82,12 +85,22 @@ struct WorkshopWebRuntimeTests {
         }
         #expect((try await player.evaluateJavaScript("window.coverRevealed", in: loaded)) as? Bool == true)
         #expect((try await player.evaluateJavaScript("Number(getComputedStyle(document.getElementById('cover')).opacity)", in: loaded)) as? Double == 0)
+        _ = try await player.evaluateJavaScript("""
+        window.pendingFade = document.getElementById('cover').animate([{opacity:1}, {opacity:0}], {duration:60000});
+        window.wallpaperPropertyListener.setPaused = value => {
+          window.pauseNotifications.push(value);
+          if (!value) window.pendingFade.cancel();
+        };
+        void 0;
+        """, in: loaded)
         player.pause()
         try await Task.sleep(for: .milliseconds(100))
         #expect((try await player.evaluateJavaScript("document.hidden", in: loaded)) as? Bool == true)
         player.play()
         try await Task.sleep(for: .milliseconds(100))
         #expect((try await player.evaluateJavaScript("document.hidden", in: loaded)) as? Bool == false)
+        #expect((try await player.evaluateJavaScript("window.pauseNotifications.includes(true) && window.pauseNotifications.at(-1) === false", in: loaded)) as? Bool == true)
+        #expect((try await player.evaluateJavaScript("window.pendingFade.playState", in: loaded)) as? String == "idle")
         #expect(player.runtimeErrors.isEmpty)
     }
 
