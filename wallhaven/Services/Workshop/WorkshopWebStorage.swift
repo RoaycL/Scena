@@ -106,9 +106,11 @@ final class WorkshopWebStorage {
           // 视频在读到尺寸之前就有了渲染对象（尤其在透明度为 0 时加载、再显示出来），会一直沿用默认的 300×150，
           // 16:9 画面被画进贴顶的 2:1 区域；窗口缩放后也可能停在旧尺寸。改样式、隐藏再显示都纠正不了，
           // 只有把元素移出 DOM 再插回、重新创建渲染对象才会按真实尺寸重建这一层（插回原位会被当作无操作）。
-          // 解码出第一帧和开始播放时立即重建（WebM 的画面层尺寸在第一帧之后才确定，读到元数据时重建太早）；
-          // 换片的页面这时通常还没把它显示出来，看不出变化。窗口或元素尺寸变化、恢复可见后，
-          // 等变化停下来再重建可见的视频。同步插回不会暂停播放
+          // 每个片源在解码出第一帧、第一次开始播放时各重建一次（WebM 的画面层尺寸在第一帧之后才确定）；
+          // 换片的页面这时通常还没把它显示出来，看不出变化。暂停后恢复播放不重建：反复重建会让后台播放卡顿。
+          // 正在显示的视频换片源时，新片源的头几帧还在旧框里（看起来是画面先小后大的缩放），
+          // 先临时隐藏它（露出页面自己垫在下面的封面），重建完成后再显示。
+          // 元素尺寸真的变化（窗口缩放）后，等变化停下来再重建可见的视频。同步插回不会暂停播放
           const rebuildVideoLayer = video => {
             if (!(video instanceof HTMLVideoElement) || !video.isConnected) return;
             const playing = !video.paused;
@@ -116,6 +118,29 @@ final class WorkshopWebStorage {
             parent.removeChild(video);
             parent.insertBefore(video, next);
             if (playing && video.paused) video.play().catch(() => {});
+          };
+          const concealed = new Map();
+          const reveal = video => {
+            const timer = concealed.get(video);
+            if (timer === undefined) return;
+            clearTimeout(timer);
+            concealed.delete(video);
+            video.style.removeProperty('visibility');
+          };
+          const conceal = video => {
+            if (concealed.has(video) || video.style.getPropertyValue('visibility')) return;
+            if (Number(getComputedStyle(video).opacity) === 0 || getComputedStyle(video).visibility === 'hidden') return;
+            video.style.setProperty('visibility', 'hidden', 'important');
+            // 兜底：页面不播放这个片源时也要恢复
+            concealed.set(video, setTimeout(() => reveal(video), 3000));
+          };
+          const rebuiltStages = new WeakMap();
+          const rebuildOncePerSource = (video, stage) => {
+            const done = rebuiltStages.get(video);
+            if (done?.src !== video.currentSrc) rebuiltStages.set(video, {src: video.currentSrc, stages: new Set([stage])});
+            else if (done.stages.has(stage)) return;
+            else done.stages.add(stage);
+            rebuildVideoLayer(video);
           };
           const pending = new Set();
           let pendingTimer = 0;
@@ -145,16 +170,20 @@ final class WorkshopWebStorage {
             document.addEventListener(type, event => {
               const video = event.target;
               if (!(video instanceof HTMLVideoElement)) return;
-              rebuildVideoLayer(video);
+              rebuildOncePerSource(video, type);
               resizeObserver.observe(video);
+              // 重建后的新画面层画出来再显示
+              if (type === 'playing') setTimeout(() => reveal(video), 60);
             }, true);
           }
-          window.addEventListener('resize', scheduleAll);
+          document.addEventListener('loadstart', event => {
+            const video = event.target;
+            if (video instanceof HTMLVideoElement && video.isConnected) conceal(video);
+          }, true);
           window.__scenaRefreshMedia = scheduleAll;
 
           window.__scenaHostVisibility = value => {
             value = Boolean(value);
-            if (value && !hostVisible) scheduleAll();
             if (value === hostVisible) return;
             hostVisible = value;
             document.dispatchEvent(new Event('visibilitychange'));
