@@ -102,57 +102,59 @@ final class WorkshopWebStorage {
           let hostVisible = true;
           Object.defineProperty(document, 'hidden', {configurable:true, get:() => !hostVisible});
           Object.defineProperty(document, 'visibilityState', {configurable:true, get:() => hostVisible ? 'visible' : 'hidden'});
-          // WebKit 的视频画面是单独的原生层。视频在隐藏状态（透明度为 0）下加载后再显示出来，
-          // 这一层可能沿用读到尺寸之前的默认大小（300×150）：16:9 画面被画进贴顶的 2:1 区域，右侧和底部露出底图。
-          // 改样式、隐藏再显示、调整窗口尺寸都纠正不了，只有重新创建元素的渲染对象才会按真实尺寸重建这一层。
-          // 所以视频的显示状态（class / style、过渡动画、片源）变化停下来后，把可见的视频原地重新插入；
-          // 同步插回不会暂停播放
-          const pending = new Set();
-          let pendingTimer = 0;
-          let observer = null;
+          // WebKit 的视频画面是单独的原生层，大小在元素的渲染对象创建时确定，之后只在少数情况下更新：
+          // 视频在读到尺寸之前就有了渲染对象（尤其在透明度为 0 时加载、再显示出来），会一直沿用默认的 300×150，
+          // 16:9 画面被画进贴顶的 2:1 区域；窗口缩放后也可能停在旧尺寸。改样式、隐藏再显示都纠正不了，
+          // 只有把元素移出 DOM 再插回、重新创建渲染对象才会按真实尺寸重建这一层（插回原位会被当作无操作）。
+          // 解码出第一帧和开始播放时立即重建（WebM 的画面层尺寸在第一帧之后才确定，读到元数据时重建太早）；
+          // 换片的页面这时通常还没把它显示出来，看不出变化。窗口或元素尺寸变化、恢复可见后，
+          // 等变化停下来再重建可见的视频。同步插回不会暂停播放
           const rebuildVideoLayer = video => {
-            if (!(video instanceof HTMLVideoElement) || !video.isConnected || !video.videoWidth) return;
-            if (Number(getComputedStyle(video).opacity) === 0) return;
+            if (!(video instanceof HTMLVideoElement) || !video.isConnected) return;
             const playing = !video.paused;
-            // 插回原位时 WebKit 会当作无事发生，必须先移除
             const parent = video.parentNode, next = video.nextSibling;
             parent.removeChild(video);
             parent.insertBefore(video, next);
-            // 丢掉自己这次插入产生的变化记录，避免反复重建
-            observer?.takeRecords();
             if (playing && video.paused) video.play().catch(() => {});
           };
+          const pending = new Set();
+          let pendingTimer = 0;
           const schedule = video => {
             pending.add(video);
             clearTimeout(pendingTimer);
             pendingTimer = setTimeout(() => {
               const videos = [...pending];
               pending.clear();
-              videos.forEach(rebuildVideoLayer);
-            }, 150);
+              for (const video of videos) {
+                if (video.videoWidth && Number(getComputedStyle(video).opacity) > 0) rebuildVideoLayer(video);
+              }
+            }, 200);
           };
-          observer = new MutationObserver(records => {
-            for (const record of records) {
-              if (record.type === 'attributes') {
-                if (record.target instanceof HTMLVideoElement) schedule(record.target);
-                continue;
-              }
-              for (const node of record.addedNodes) {
-                if (node instanceof HTMLVideoElement) schedule(node);
-                else if (node instanceof Element) node.querySelectorAll('video').forEach(schedule);
-              }
+          const scheduleAll = () => document.querySelectorAll('video').forEach(schedule);
+          // 元素尺寸变化（含窗口缩放引起的）；首次观察时的回调跳过
+          const sized = new WeakMap();
+          const resizeObserver = new ResizeObserver(entries => {
+            for (const entry of entries) {
+              const size = `${Math.round(entry.contentRect.width)}x${Math.round(entry.contentRect.height)}`;
+              const previous = sized.get(entry.target);
+              sized.set(entry.target, size);
+              if (previous && previous !== size) schedule(entry.target);
             }
           });
-          const observe = () => observer.observe(document.documentElement,
-            {subtree:true, childList:true, attributes:true, attributeFilter:['class', 'style', 'id', 'hidden']});
-          if (document.documentElement) observe(); else document.addEventListener('DOMContentLoaded', observe, {once:true});
-          for (const type of ['loadedmetadata', 'resize', 'playing', 'transitionend', 'animationend']) {
-            document.addEventListener(type, event => event.target instanceof HTMLVideoElement && schedule(event.target), true);
+          for (const type of ['loadeddata', 'playing']) {
+            document.addEventListener(type, event => {
+              const video = event.target;
+              if (!(video instanceof HTMLVideoElement)) return;
+              rebuildVideoLayer(video);
+              resizeObserver.observe(video);
+            }, true);
           }
-          window.__scenaRefreshMedia = () => document.querySelectorAll('video').forEach(schedule);
+          window.addEventListener('resize', scheduleAll);
+          window.__scenaRefreshMedia = scheduleAll;
 
           window.__scenaHostVisibility = value => {
             value = Boolean(value);
+            if (value && !hostVisible) scheduleAll();
             if (value === hostVisible) return;
             hostVisible = value;
             document.dispatchEvent(new Event('visibilitychange'));

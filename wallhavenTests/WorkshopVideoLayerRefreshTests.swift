@@ -5,7 +5,7 @@ import Testing
 import WebKit
 @testable import wallhaven
 
-/// 视频画面层重建：可见的视频显示状态变化后原地重新插入（WebKit 按真实尺寸重建画面层），隐藏的视频不动
+/// 视频画面层重建：解码出第一帧、开始播放、尺寸变化后把视频原地重新插入（WebKit 按真实尺寸重建画面层），播放不中断
 @MainActor @Suite(.serialized)
 struct WorkshopVideoLayerRefreshTests {
     private let testDefaults = TestDefaults()
@@ -54,21 +54,30 @@ struct WorkshopVideoLayerRefreshTests {
             try await Task.sleep(for: .milliseconds(25))
         }
         let frame = try #require(loaded, "Video failed to load: \(player.runtimeErrors)")
-        // 读到尺寸、开始播放后重建过可见的视频；隐藏的视频不动
-        try await Task.sleep(for: .milliseconds(500))
-        let removed = "JSON.stringify(window.removed)"
-        #expect(try await player.evaluateJavaScript(removed, in: frame) as? String == #"{"current":1,"next":0}"#)
+        // 解码出第一帧后两个视频都重建过（隐藏的下一段也要在显示之前重建）
+        try await Task.sleep(for: .milliseconds(300))
+        let counts = "[removed.current, removed.next]"
+        let loadedCounts = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        #expect(loadedCounts.allSatisfy { $0 >= 1 }, "\(loadedCounts)")
 
-        // 切换：下一段显示出来、当前段隐藏后，只重建新显示的那个
+        // 切换：下一段开始播放时再重建一次
         _ = try await player.evaluateJavaScript("next.play(); next.classList.add('visible'); current.classList.remove('visible'); void 0", in: frame)
-        try await Task.sleep(for: .milliseconds(500))
-        #expect(try await player.evaluateJavaScript(removed, in: frame) as? String == #"{"current":1,"next":1}"#)
+        try await Task.sleep(for: .milliseconds(400))
+        let switched = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        #expect(switched[1] > loadedCounts[1])
         // 元素还在原位，继续播放，作者样式不变
         #expect(try await player.evaluateJavaScript("[...document.body.children].map(e => e.id).slice(0, 2).join()", in: frame) as? String == "current,next")
         let before = try #require(try await player.evaluateJavaScript("next.currentTime", in: frame) as? Double)
         try await Task.sleep(for: .milliseconds(300))
         #expect(try await player.evaluateJavaScript("!next.paused && next.currentTime", in: frame) as? Double ?? 0 > before)
         #expect(try await player.evaluateJavaScript("current.style.getPropertyValue('object-position')", in: frame) as? String == "left top")
+
+        // 窗口缩放后重建可见的视频，隐藏的不动
+        let beforeResize = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        window.setFrame(NSRect(x: 0, y: 0, width: 480, height: 270), display: true)
+        try await Task.sleep(for: .milliseconds(600))
+        let resized = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        #expect(resized[0] == beforeResize[0] && resized[1] > beforeResize[1], "\(beforeResize) -> \(resized)")
         #expect(player.runtimeErrors.isEmpty)
     }
 
