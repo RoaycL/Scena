@@ -108,10 +108,15 @@ struct ContentView: View {
         }
     }
 
-    /// 工坊网格的数据随页签切换：发现 = 在线，收藏 = 已订阅
+    /// 资料库只看创意工坊时可以用工坊筛选（和收藏页的工坊筛选是同一套条件）
+    private var isLibraryWorkshop: Bool { page == .library && librarySource == .workshop }
+
+    /// 工坊网格的数据随页签切换：发现 = 在线，收藏 = 已订阅，资料库 = 已下载
     private func syncWorkshopMode() {
-        guard page == .workshop || currentTab == .collections else { return }
-        let mode: WorkshopViewModel.Mode = currentTab == .discover ? .online : .subscribed
+        let mode: WorkshopViewModel.Mode
+        if isLibraryWorkshop { mode = .library }
+        else if page == .workshop || currentTab == .collections { mode = currentTab == .discover ? .online : .subscribed }
+        else { return }
         if workshop.mode != mode { workshop.mode = mode }
     }
 
@@ -121,7 +126,13 @@ struct ContentView: View {
         let workshopItems = workshop.libraryItems.map { GalleryItem(origin: .workshop($0)) }
         // 按下载 / 导入时间排序，最新的在最前
         return (local + workshopItems)
-            .filter { librarySource.matches($0) && $0.matchesLibrarySearch(libraryQuery) }
+            .filter { item in
+                guard librarySource.matches(item) else { return false }
+                if librarySource == .workshop, let workshopItem = item.workshop {
+                    return workshop.filters.matches(workshopItem, query: libraryQuery)
+                }
+                return item.matchesLibrarySearch(libraryQuery)
+            }
             .sorted { $0.addedDate > $1.addedDate }
     }
 
@@ -675,7 +686,11 @@ struct ContentView: View {
         }
         .onChange(of: discoverSource) { restartGalleryCountdown() }
         .onChange(of: collectionSource) { restartGalleryCountdown() }
-        .onChange(of: librarySource) { restartGalleryCountdown() }
+        .onChange(of: librarySource) {
+            restartGalleryCountdown()
+            syncWorkshopMode()
+            if librarySource != .workshop { isWorkshopFilterPresented = false }
+        }
         .onChange(of: viewModel.selectedFolderID) { restartGalleryCountdown() }
         .onChange(of: selectedItem?.id) {
             failedBackgroundID = nil
@@ -971,6 +986,7 @@ struct ContentView: View {
                 if collectionSource == .wallhaven { folderMenu }
             case .library:
                 librarySearchField
+                if librarySource == .workshop { workshopFilterButton }
                 libraryAddMenu
                 WorkshopUpdatesMenu()
             case .playlists:
@@ -1310,11 +1326,19 @@ struct ContentView: View {
                 Image(systemName: "photo.stack").font(.system(size: 34, weight: .light))
                 if librarySource != .all || !libraryQuery.isEmpty {
                     Text("没有符合条件的壁纸")
-                    Button("显示全部") {
-                        librarySource = .all
-                        libraryQuery = ""
+                    HStack {
+                        if librarySource == .workshop {
+                            Button("调整筛选") { isWorkshopFilterPresented = true }.buttonStyle(.bordered)
+                            if !workshop.filters.isDefault {
+                                Button("重置筛选") { workshop.resetFilters() }.buttonStyle(.bordered)
+                            }
+                        }
+                        Button("显示全部") {
+                            librarySource = .all
+                            libraryQuery = ""
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
                 } else {
                     Text("资料库还是空的")
                     Text("下载的壁纸、导入的图片和视频、已下载的创意工坊壁纸都会出现在这里")

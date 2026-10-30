@@ -452,6 +452,7 @@ private struct LiveWallpaperSettings: View {
             }
 
             LiveDisplaySection()
+            WebDesktopInputSection()
             AutoPauseSection(live: live)
         }
         .formStyle(.grouped)
@@ -508,6 +509,66 @@ private struct LiveDisplaySection: View {
     private func setEnabled(_ enabled: Bool, _ id: String) {
         if enabled { disabled.remove(id) } else { disabled.insert(id) }
         UserDefaults.standard.set(Array(disabled), forKey: DesktopSettings.disabledDisplays)
+    }
+}
+
+/// 网页壁纸：不进入交互模式，直接在桌面上点按、拖拽、滚动
+private struct WebDesktopInputSection: View {
+    @AppStorage(DesktopSettings.webDesktopInput) private var mode: WebDesktopInputMode = .off
+    @State private var isTrusted = AXIsProcessTrusted()
+    @State private var clickRevealsDesktop = WebDesktopInputSection.readClickRevealsDesktop()
+
+    var body: some View {
+        Section {
+            Picker("在桌面上直接操作", selection: $mode) {
+                ForEach(WebDesktopInputMode.allCases) { Text($0.title).tag($0) }
+            }
+            if mode == .forward {
+                LabeledContent("区分桌面图标") {
+                    if isTrusted {
+                        Label("已授权", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("授予辅助功能权限…") {
+                            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+                        }
+                    }
+                }
+                if clickRevealsDesktop {
+                    LabeledContent {
+                        Button("打开桌面与程序坞设置…") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Desktop-Settings.extension")!)
+                        }
+                    } label: {
+                        Text("系统设置里「点按墙纸以显示桌面」为「始终」")
+                        Text("每次点壁纸，窗口都会移开露出桌面。建议改为「仅在台前调度中」。")
+                    }
+                }
+            }
+        } header: {
+            Text("网页壁纸交互")
+        } footer: {
+            SettingsFootnote(footnote)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            isTrusted = AXIsProcessTrusted()
+            clickRevealsDesktop = Self.readClickRevealsDesktop()
+        }
+    }
+
+    private var footnote: String {
+        switch mode {
+        case .off:
+            "只能通过壁纸的交互按钮或菜单栏进入交互，Esc 退出。"
+        case .forward:
+            "和 Windows 上的 Wallpaper Engine 一样，桌面图标、右键菜单、拖放照常使用，点桌面空白处时把点按、拖拽、滚轮和指针移动转给网页壁纸。不授权辅助功能时点图标也会传给壁纸。转发的是模拟事件，少数需要真实点击的功能（如有声播放）不响应；需要键盘时仍要进入交互。"
+        case .direct:
+            "网页壁纸放到桌面图标之上，直接接收真实的鼠标操作，兼容性最好，不会把 Scena 切到前台。桌面图标会被盖住，桌面右键菜单和拖放到桌面不可用；需要键盘时仍要进入交互。"
+        }
+    }
+
+    /// macOS 14 起点按墙纸会让窗口移开（未设置时默认开启）
+    private static func readClickRevealsDesktop() -> Bool {
+        UserDefaults(suiteName: "com.apple.WindowManager")?.object(forKey: "EnableStandardClickToShowDesktop") as? Bool ?? true
     }
 }
 

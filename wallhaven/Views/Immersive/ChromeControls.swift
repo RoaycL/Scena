@@ -106,6 +106,7 @@ struct FilterPanel: View {
 /// 顶栏上的动态壁纸状态
 struct LiveWallpaperStatus: View {
     @ObservedObject var controller: LiveWallpaperController
+    @AppStorage(DesktopSettings.webDesktopInput) private var desktopInput: WebDesktopInputMode = .off
 
     var body: some View {
         if let content = controller.current {
@@ -117,6 +118,10 @@ struct LiveWallpaperStatus: View {
                         if controller.isInteracting { controller.endInteraction() }
                         else { controller.beginInteraction() }
                     }
+                    Picker("在桌面上直接操作", selection: $desktopInput) {
+                        ForEach(WebDesktopInputMode.allCases) { Text($0.shortTitle).tag($0) }
+                    }
+                    Divider()
                 }
                 Button(controller.isPaused ? "继续播放" : "暂停") { controller.togglePause() }
                 Button("停止动态壁纸", role: .destructive) { controller.stop() }

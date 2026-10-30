@@ -146,6 +146,66 @@ final class WorkshopWebStorage {
             hostVisible = value;
             document.dispatchEvent(new Event('visibilitychange'));
           };
+
+          // 桌面上的鼠标操作：壁纸窗口留在图标下面、不接收鼠标时，由宿主把点按、拖拽、滚轮转成页面事件。
+          // 合成事件的 isTrusted 为 false，不会触发 :hover 样式，也不能解锁需要真实点击的功能（如有声播放）
+          let hovered = null, pressed = null, suppressMouse = false;
+          const pointerInit = (x, y, buttons) => ({bubbles:true, cancelable:true, composed:true, view:window,
+            clientX:x, clientY:y, screenX:x, screenY:y, button:0, buttons,
+            pointerId:1, pointerType:'mouse', isPrimary:true, width:1, height:1, pressure:buttons ? 0.5 : 0});
+          // pointerdown 被取消后，浏览器在这次按下期间不再派发兼容的 mouse 事件（click 照常）
+          const fire = (target, pointerType, mouseType, init) => {
+            if (!target.dispatchEvent(new PointerEvent(pointerType, init)) && pointerType === 'pointerdown') suppressMouse = true;
+            if (!suppressMouse) target.dispatchEvent(new MouseEvent(mouseType, init));
+          };
+          const crossing = (target, prefix, init, related) => {
+            fire(target, `pointer${prefix === 'enter' ? 'over' : 'out'}`, `mouse${prefix === 'enter' ? 'over' : 'out'}`, {...init, relatedTarget:related});
+            const flat = {...init, bubbles:false, relatedTarget:related};
+            target.dispatchEvent(new PointerEvent(`pointer${prefix}`, flat));
+            target.dispatchEvent(new MouseEvent(`mouse${prefix}`, flat));
+          };
+          const hover = (target, init) => {
+            if (target === hovered) return;
+            const previous = hovered;
+            hovered = target;
+            if (previous?.isConnected) crossing(previous, 'leave', init, target);
+            if (target) crossing(target, 'enter', init, previous);
+          };
+          const scrollable = (element, dx, dy) => {
+            for (let node = element; node && node !== document.documentElement; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              if (dy && /auto|scroll/.test(style.overflowY) && node.scrollHeight > node.clientHeight) return node;
+              if (dx && /auto|scroll/.test(style.overflowX) && node.scrollWidth > node.clientWidth) return node;
+            }
+            return document.scrollingElement;
+          };
+          window.__scenaPointer = (kind, x, y, dx, dy) => {
+            const target = kind === 'leave' ? null : (document.elementFromPoint(x, y) ?? document.documentElement);
+            // 外层播放页：壁纸在全屏 iframe 里，交给 iframe 内的文档处理
+            if (target instanceof HTMLIFrameElement) return;
+            const init = pointerInit(x, y, kind === 'down' || (kind === 'move' && pressed) ? 1 : 0);
+            hover(target, init);
+            if (!target) { pressed = null; suppressMouse = false; return; }
+            if (kind === 'move') {
+              fire(target, 'pointermove', 'mousemove', init);
+            } else if (kind === 'down') {
+              pressed = target;
+              suppressMouse = false;
+              fire(target, 'pointerdown', 'mousedown', init);
+              target.closest('input,textarea,select,button,a[href],[tabindex]')?.focus?.({preventScroll:true});
+            } else if (kind === 'up') {
+              fire(target, 'pointerup', 'mouseup', init);
+              // click 派发给按下和松开位置的最近公共祖先
+              let common = pressed;
+              while (common && !common.contains(target)) common = common.parentElement;
+              if (common) common.dispatchEvent(new MouseEvent('click', init));
+              pressed = null;
+              suppressMouse = false;
+            } else if (kind === 'wheel') {
+              if (target.dispatchEvent(new WheelEvent('wheel', {...init, deltaX:dx, deltaY:dy, deltaMode:0})))
+                scrollable(target, dx, dy)?.scrollBy(dx, dy);
+            }
+          };
           window.addEventListener('error', event => {
             if (event.message) post({type:'webRuntimeError', message:String(event.message).slice(0,500)});
           });

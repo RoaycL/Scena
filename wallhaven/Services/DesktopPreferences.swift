@@ -16,6 +16,7 @@ enum DesktopSettings {
     static let keepAspectRatio = "desktop.keepAspectRatio"
     static let backgroundColor = "desktop.backgroundColor"
     static let coverDesktopIcons = "desktop.coverDesktopIcons"
+    static let webDesktopInput = "desktop.webDesktopInput"
     static let disabledDisplays = "desktop.disabledDisplays"
     static let showDockIcon = "app.showDockIcon"
 
@@ -34,8 +35,40 @@ enum DesktopSettings {
         UserDefaults.standard.string(forKey: backgroundColor).flatMap(NSColor.init(hex:)) ?? .black
     }
 
+    static var webDesktopInputMode: WebDesktopInputMode {
+        UserDefaults.standard.string(forKey: webDesktopInput).flatMap(WebDesktopInputMode.init(rawValue:)) ?? .off
+    }
+
     static var disabledDisplayIDs: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: disabledDisplays) ?? [])
+    }
+}
+
+/// 不进入交互模式、直接在桌面上操作网页壁纸的方式
+nonisolated enum WebDesktopInputMode: String, CaseIterable, Identifiable {
+    /// 只能通过「进入交互」按钮操作
+    case off
+    /// 壁纸留在桌面图标下面，点桌面空白处时把鼠标操作转给网页（类似 Windows 的 Wallpaper Engine）
+    case forward
+    /// 壁纸放到桌面图标之上，直接接收真实的鼠标事件（盖住桌面图标）
+    case direct
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: "关闭"
+        case .forward: "点击桌面空白处（保留图标）"
+        case .direct: "壁纸直接接收鼠标（盖住图标）"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .off: "关闭"
+        case .forward: "点击桌面空白处"
+        case .direct: "壁纸直接接收鼠标"
+        }
     }
 }
 

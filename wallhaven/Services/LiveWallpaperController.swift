@@ -33,6 +33,7 @@ final class LiveWallpaperController: ObservableObject {
     @Published private(set) var isInteracting = false
     @Published private(set) var canInteract = false
     private let interactionHUD = WallpaperInteractionHUD()
+    private let pointerForwarder = DesktopPointerForwarder()
     private var interactionKeyMonitor: Any?
     private weak var previousKeyWindow: NSWindow?
     private var previousApplication: NSRunningApplication?
@@ -112,6 +113,16 @@ final class LiveWallpaperController: ObservableObject {
 
     private init() {
         observeSystemEvents()
+        pointerForwarder.targets = { [weak self] in
+            guard let self else { return [] }
+            return self.surfaces.active.compactMap { surface in
+                (surface.player as? WorkshopPlayerNSView).map { .init(frame: surface.window.frame, player: $0) }
+            }
+        }
+        pointerForwarder.ownWindowNumbers = { [weak self] in
+            Set((self.map { $0.surfaces.active + $0.surfaces.retiring } ?? []).map(\.window.windowNumber))
+        }
+        pointerForwarder.iconsHidden = { DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false) }
         autoPause.onChange = { [weak self] in
             guard let self else { return }
             self.autoPauseReasons = self.autoPause.reasons
@@ -123,6 +134,7 @@ final class LiveWallpaperController: ObservableObject {
     private static var currentLayoutSignature: String {
         [
             String(DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)),
+            DesktopSettings.webDesktopInputMode.rawValue,
             String(DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)),
             DesktopSettings.backgroundNSColor.hexString,
             DesktopSettings.disabledDisplayIDs.sorted().joined(separator: ","),
@@ -273,20 +285,44 @@ final class LiveWallpaperController: ObservableObject {
         updatePlayback()
     }
 
+    /// 当前壁纸在桌面上（不进入交互模式时）的操作方式；只有网页壁纸可以操作
+    var desktopInputMode: WebDesktopInputMode {
+        canInteract ? DesktopSettings.webDesktopInputMode : .off
+    }
+
+    /// 盖住桌面图标，或网页壁纸要直接接收鼠标时，窗口放到图标层之上
     private var desktopWindowLevel: NSWindow.Level {
-        NSWindow.Level(rawValue: DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)
+        let aboveIcons = DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false) || desktopInputMode == .direct
+        return NSWindow.Level(rawValue: aboveIcons
             ? Int(CGWindowLevelForKey(.desktopIconWindow)) + 1 : Int(CGWindowLevelForKey(.desktopWindow)))
     }
 
     private func configureInteractionWindows() {
-        for window in windows {
-            (window as? WallpaperDesktopWindow)?.setInteractionEnabled(isInteracting, desktopLevel: desktopWindowLevel)
-            if isInteracting { window.orderFront(nil) }
+        guard isInteracting else {
+            applyDesktopInput()
+            return
         }
-        if isInteracting {
-            NSApp.activate()
-            let target = windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? windows.first
-            target?.makeKeyAndOrderFront(nil)
+        pointerForwarder.stop()
+        for window in windows {
+            (window as? WallpaperDesktopWindow)?.setInputMode(.interacting, desktopLevel: desktopWindowLevel)
+            window.orderFront(nil)
+        }
+        NSApp.activate()
+        let target = windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? windows.first
+        target?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 不在交互模式时，按设置让网页壁纸直接接收鼠标，或转发桌面空白处的点击
+    private func applyDesktopInput() {
+        guard !isInteracting else { return }
+        let mode = desktopInputMode
+        for window in windows {
+            (window as? WallpaperDesktopWindow)?.setInputMode(mode == .direct ? .desktop : .passive, desktopLevel: desktopWindowLevel)
+        }
+        if mode == .forward && players.contains(where: { $0 is WorkshopPlayerNSView }) {
+            pointerForwarder.start()
+        } else {
+            pointerForwarder.stop()
         }
     }
 
@@ -300,7 +336,9 @@ final class LiveWallpaperController: ObservableObject {
             // 播放只需要入口元数据，不在主线程遍历整份壁纸的资源大小。
             guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return nil }
             // 视频类工坊壁纸（以及烘焙成视频的场景 / 网页壁纸）优先用 AVFoundation 播放，更省电
-            if sourcePlaybackOverride != content.url.standardizedFileURL, let videoURL = item.playbackVideoURL {
+            // 网页壁纸开启了桌面交互时播放原网页，烘焙出的视频不能交互
+            let needsPage = item.type == .web && DesktopSettings.webDesktopInputMode != .off
+            if sourcePlaybackOverride != content.url.standardizedFileURL, !needsPage, let videoURL = item.playbackVideoURL {
                 return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
             }
             let player = WorkshopPlayerNSView(item: item, fps: frameRate)
@@ -324,14 +362,13 @@ final class LiveWallpaperController: ObservableObject {
 
         guard let content = current else {
             fadeOut(surfaces.removeAll())
+            pointerForwarder.stop()
             return
         }
 
         let disabled = DesktopSettings.disabledDisplayIDs
-        // 盖住桌面图标：窗口放到图标层之上（仍然不接收鼠标事件）
-        let level = DesktopSettings.bool(DesktopSettings.coverDesktopIcons, default: false)
-            ? Int(CGWindowLevelForKey(.desktopIconWindow)) + 1
-            : Int(CGWindowLevelForKey(.desktopWindow))
+        // 盖住桌面图标：窗口放到图标层之上（除非网页壁纸要直接接收鼠标，否则仍然不接收鼠标事件）
+        let level = desktopWindowLevel
         let keepAspect = DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)
         let background = DesktopSettings.backgroundNSColor
         for screen in NSScreen.screens where !disabled.contains(screen.displayUUID) {
@@ -342,7 +379,7 @@ final class LiveWallpaperController: ObservableObject {
             // 多屏只让主屏输出声音，避免重复播放与叠加音量。
             player.setVolume(screen == NSScreen.screens.first ? volume : 0)
             let window = WallpaperDesktopWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-            window.level = NSWindow.Level(rawValue: level)
+            window.level = level
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
             window.ignoresMouseEvents = true
             window.isOpaque = false
@@ -367,6 +404,7 @@ final class LiveWallpaperController: ObservableObject {
 
         guard !surfaces.active.isEmpty else {
             fadeOut(surfaces.removeAll())
+            pointerForwarder.stop()
             updatePlayback()
             return
         }
@@ -396,7 +434,7 @@ final class LiveWallpaperController: ObservableObject {
         if players.contains(where: { $0 is WorkshopPlayerNSView }) {
             installMouseTracking()
         }
-        if isInteracting { configureInteractionWindows() }
+        configureInteractionWindows()
         updatePlayback()
     }
 
@@ -470,6 +508,7 @@ final class LiveWallpaperController: ObservableObject {
     private func tearDownWindows() {
         revealedWindows.removeAll()
         removeMouseTracking()
+        pointerForwarder.stop()
         fadeOut(surfaces.removeAll())
     }
 

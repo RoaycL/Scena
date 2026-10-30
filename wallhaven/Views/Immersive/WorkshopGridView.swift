@@ -283,6 +283,7 @@ private struct WorkshopTile: View {
 
 private struct WorkshopDetailPanel: View {
     @AppStorage(WorkshopPlaybackPolicy.convertedVideoKey) private var useConvertedVideo = false
+    @AppStorage(DesktopSettings.webDesktopInput) private var desktopInput: WebDesktopInputMode = .off
     @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.colorScheme) private var scheme
     let item: WorkshopItem
@@ -365,7 +366,8 @@ private struct WorkshopDetailPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             if item.isDownloaded, item.type == .web {
                 HStack {
-                    Text("网页交互 · Esc 退出").font(.caption).foregroundStyle(.secondary)
+                    Text(desktopInput == .off ? "网页交互" : "网页交互 · \(desktopInput.shortTitle)")
+                        .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     WebWallpaperInteractionButton(item: item)
                 }

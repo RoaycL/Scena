@@ -244,7 +244,7 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         config.preferences.inactiveSchedulingPolicy = .none
         config.userContentController.addUserScript(WKUserScript(source: webStorage.script(),
             injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = WallpaperWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
         #if DEBUG
         webView.isInspectable = true
@@ -294,8 +294,22 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     }
 
     func setInteractionEnabled(_ enabled: Bool) {
-        allowsInteraction = enabled && item.type == .web && !isStopped
-        if allowsInteraction { window?.makeFirstResponder(webView) }
+        setInputMode(enabled ? .interacting : .passive)
+    }
+
+    /// desktop：留在桌面上直接接收鼠标，不抢键盘焦点
+    func setInputMode(_ mode: WallpaperDesktopWindow.InputMode) {
+        allowsInteraction = mode != .passive && item.type == .web && !isStopped
+        if allowsInteraction && mode == .interacting { window?.makeFirstResponder(webView) }
+    }
+
+    /// 把桌面上的鼠标操作转成网页里的指针事件。x、y 是视图内的坐标（左上角为原点）
+    func forwardPointer(_ type: DesktopPointerEvent.Kind, x: CGFloat, y: CGFloat, deltaX: CGFloat = 0, deltaY: CGFloat = 0) {
+        guard isPageLoaded, !isStopped, item.type == .web else { return }
+        let script = "window.__scenaPointer?.('\(type.rawValue)',\(Double(x)),\(Double(y)),\(Double(deltaX)),\(Double(deltaY)))"
+        for frame in documentFrames {
+            webView.evaluateJavaScript(script, in: frame, in: .page) { _ in }
+        }
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -429,7 +443,11 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
     }
 }
 
-/// WKUserContentController 会强引用 handler，用弱引用代理避免循环引用
+/// 桌面壁纸窗口不会成为键盘窗口（App 也不在前台），第一次点击也要交给网页，而不是只用来激活窗口
+private final class WallpaperWebView: WKWebView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// 壁纸网页的跳转限制：页面只能在本地壁纸内容之间跳转，不能把桌面窗口带到外部网站。
 /// 交互时用户点到的外部链接交给默认浏览器打开；壁纸内嵌的在线内容（天气、地图等 iframe）照常加载
 nonisolated enum WorkshopNavigationPolicy {
@@ -491,6 +509,7 @@ private final class WorkshopNavigationGuard: NSObject, WKNavigationDelegate, WKU
     }
 }
 
+/// WKUserContentController 会强引用 handler，用弱引用代理避免循环引用
 private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WorkshopPlayerNSView?
 
