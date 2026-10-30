@@ -88,14 +88,14 @@ final class AutoBakeScheduler: ObservableObject {
     /// 资料库中可以排队的数量（未转换、未失败过、不在队列里）
     func candidateCount(in items: [WorkshopItem]) -> Int {
         items.filter { item in
-            BakedWallpapers.canBake(item) && !skipped.contains(item.id) && BakedWallpapers.videoURL(for: item) == nil
+            BakedWallpapers.shouldAutoBake(item) && !skipped.contains(item.id) && BakedWallpapers.videoURL(for: item) == nil
                 && !pending.contains(item.localFolder?.path ?? "")
         }.count
     }
 
     private func enqueue(_ folders: [URL]) {
         for folder in folders {
-            guard let item = WorkshopItem.load(from: folder, computeSize: false), BakedWallpapers.canBake(item),
+            guard let item = WorkshopItem.load(from: folder, computeSize: false), BakedWallpapers.shouldAutoBake(item),
                   !skipped.contains(item.id), BakedWallpapers.videoURL(for: item) == nil,
                   !pending.contains(folder.path) else { continue }
             pending.append(folder.path)
@@ -129,7 +129,7 @@ final class AutoBakeScheduler: ObservableObject {
         guard !WallpaperBaker.shared.isBusy else { waitingReason = "正在手动转换"; return }
         let path = pending[0]
         guard let item = WorkshopItem.load(from: URL(fileURLWithPath: path, isDirectory: true), computeSize: false),
-              BakedWallpapers.canBake(item), BakedWallpapers.videoURL(for: item) == nil else {
+              BakedWallpapers.shouldAutoBake(item), BakedWallpapers.videoURL(for: item) == nil else {
             pending.removeFirst()
             tick()
             return

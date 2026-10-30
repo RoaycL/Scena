@@ -21,7 +21,13 @@ nonisolated enum BakedWallpapers {
         let projectModified: Double
         let loopDuration: Double
         let createdAt: Date
+        /// 录制时的渲染器修订号；旧记录没有这一项
+        var renderer: Int?
     }
+
+    /// 渲染器的修订号。修复会影响画面的渲染问题后加一，受影响的旧视频作废
+    /// 2：场景文字伸出文字框时不再被裁掉一半（1.0.44）
+    static let rendererRevision = 2
 
     static var folder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -39,7 +45,17 @@ nonisolated enum BakedWallpapers {
               let data = try? Data(contentsOf: recordFile(for: item.id)),
               let record = try? JSONDecoder().decode(Record.self, from: data),
               let stamp = projectStamp(folder) else { return nil }
-        return stamp.size == record.projectSize && abs(stamp.modified - record.projectModified) < 1 ? video : nil
+        guard stamp.size == record.projectSize, abs(stamp.modified - record.projectModified) < 1 else { return nil }
+        // 文字裁切修复之前录的场景视频把被裁的文字也录了进去
+        if item.type == .scene, (record.renderer ?? 1) < 2, SceneTextInspector.info(for: folder).hasText { return nil }
+        return video
+    }
+
+    /// 后台自动转换的条件：带实时文字（时钟、日期等）的场景转成视频后时间会定格，保留实时渲染；手动转换不受限
+    static func shouldAutoBake(_ item: WorkshopItem) -> Bool {
+        guard canBake(item) else { return false }
+        guard item.type == .scene, let folder = item.localFolder else { return true }
+        return !SceneTextInspector.info(for: folder).hasLiveText
     }
 
     static func projectStamp(_ folder: URL) -> (size: Int, modified: Double)? {
@@ -186,7 +202,8 @@ final class WallpaperBaker: ObservableObject {
             throw CancellationError()
         }
         let record = BakedWallpapers.Record(projectSize: stamp.size, projectModified: stamp.modified,
-                                            loopDuration: loop.duration.seconds, createdAt: Date())
+                                            loopDuration: loop.duration.seconds, createdAt: Date(),
+                                            renderer: BakedWallpapers.rendererRevision)
         try JSONEncoder().encode(record).write(to: BakedWallpapers.recordFile(for: item.id), options: .atomic)
     }
 
