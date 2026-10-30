@@ -59,9 +59,6 @@ final class WorkshopWebStorage {
           if (!['wewall:', 'blob:', 'about:'].includes(location.protocol)) return;
           const seed = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('\(encoded)'), c => c.charCodeAt(0))));
           const post = message => { try { window.webkit.messageHandlers.host.postMessage(message); } catch (_) {} };
-          // 兼容桥稍后会接管页面的帧回调和定时器（暂停时扣住）；视频层刷新要用原始版本
-          const nativeFrame = window.requestAnimationFrame.bind(window);
-          const nativeTimeout = window.setTimeout.bind(window);
           function install(name, initial, persistent) {
             try { window[name].getItem('__scena_probe__'); return; } catch (_) {}
             const data = Object.assign(Object.create(null), initial);
@@ -105,43 +102,57 @@ final class WorkshopWebStorage {
           let hostVisible = true;
           Object.defineProperty(document, 'hidden', {configurable:true, get:() => !hostVisible});
           Object.defineProperty(document, 'visibilityState', {configurable:true, get:() => hostVisible ? 'visible' : 'hidden'});
-          // WebKit 的视频画面是单独合成的一层，框只在视频元素几何变化时重算。
-          // 若在视频还没读到尺寸、或页面暂时不可见时算错了框（16:9 画面被塞进 2:1 的框），
-          // 而作者布局始终全屏不变，这一层就会一直错位。这里把 object-position 偏移 1/32 像素
-          // （低于屏幕像素精度，看不出移动）保持两帧再还原作者样式，迫使 WebKit 按当前布局重算
-          const refreshing = new WeakSet();
-          const refreshVideo = video => {
-            if (!(video instanceof HTMLVideoElement) || !video.isConnected || !video.videoWidth || refreshing.has(video)) return;
-            refreshing.add(video);
-            const inline = video.style.getPropertyValue('object-position');
-            const priority = video.style.getPropertyPriority('object-position');
-            const [x = '50%', y = '50%'] = getComputedStyle(video).objectPosition.split(' ');
-            video.style.setProperty('object-position', `calc(${x} + 0.03125px) ${y}`, 'important');
-            void video.offsetWidth;
-            const restore = () => {
-              if (inline) video.style.setProperty('object-position', inline, priority);
-              else video.style.removeProperty('object-position');
-              refreshing.delete(video);
-            };
-            // 不可见时帧回调不会触发，用定时器兜底还原
-            let done = false;
-            const finish = () => { if (!done) { done = true; restore(); } };
-            nativeFrame(() => nativeFrame(finish));
-            nativeTimeout(finish, 250);
+          // WebKit 的视频画面是单独的原生层。视频在隐藏状态（透明度为 0）下加载后再显示出来，
+          // 这一层可能沿用读到尺寸之前的默认大小（300×150）：16:9 画面被画进贴顶的 2:1 区域，右侧和底部露出底图。
+          // 改样式、隐藏再显示、调整窗口尺寸都纠正不了，只有重新创建元素的渲染对象才会按真实尺寸重建这一层。
+          // 所以视频的显示状态（class / style、过渡动画、片源）变化停下来后，把可见的视频原地重新插入；
+          // 同步插回不会暂停播放
+          const pending = new Set();
+          let pendingTimer = 0;
+          let observer = null;
+          const rebuildVideoLayer = video => {
+            if (!(video instanceof HTMLVideoElement) || !video.isConnected || !video.videoWidth) return;
+            if (Number(getComputedStyle(video).opacity) === 0) return;
+            const playing = !video.paused;
+            // 插回原位时 WebKit 会当作无事发生，必须先移除
+            const parent = video.parentNode, next = video.nextSibling;
+            parent.removeChild(video);
+            parent.insertBefore(video, next);
+            // 丢掉自己这次插入产生的变化记录，避免反复重建
+            observer?.takeRecords();
+            if (playing && video.paused) video.play().catch(() => {});
           };
-          const refreshAllVideos = () => document.querySelectorAll('video').forEach(refreshVideo);
-          for (const type of ['loadedmetadata', 'resize', 'playing']) {
-            document.addEventListener(type, event => refreshVideo(event.target), true);
+          const schedule = video => {
+            pending.add(video);
+            clearTimeout(pendingTimer);
+            pendingTimer = setTimeout(() => {
+              const videos = [...pending];
+              pending.clear();
+              videos.forEach(rebuildVideoLayer);
+            }, 150);
+          };
+          observer = new MutationObserver(records => {
+            for (const record of records) {
+              if (record.type === 'attributes') {
+                if (record.target instanceof HTMLVideoElement) schedule(record.target);
+                continue;
+              }
+              for (const node of record.addedNodes) {
+                if (node instanceof HTMLVideoElement) schedule(node);
+                else if (node instanceof Element) node.querySelectorAll('video').forEach(schedule);
+              }
+            }
+          });
+          const observe = () => observer.observe(document.documentElement,
+            {subtree:true, childList:true, attributes:true, attributeFilter:['class', 'style', 'id', 'hidden']});
+          if (document.documentElement) observe(); else document.addEventListener('DOMContentLoaded', observe, {once:true});
+          for (const type of ['loadedmetadata', 'resize', 'playing', 'transitionend', 'animationend']) {
+            document.addEventListener(type, event => event.target instanceof HTMLVideoElement && schedule(event.target), true);
           }
-          window.addEventListener('resize', refreshAllVideos);
-          window.__scenaRefreshMedia = refreshAllVideos;
-          // 兜底：错位的起因不总能捕获到，可见期间定期刷新，最迟几秒内恢复
-          const periodic = () => { if (hostVisible) refreshAllVideos(); nativeTimeout(periodic, 3000); };
-          nativeTimeout(periodic, 3000);
+          window.__scenaRefreshMedia = () => document.querySelectorAll('video').forEach(schedule);
 
           window.__scenaHostVisibility = value => {
             value = Boolean(value);
-            if (value) nativeTimeout(refreshAllVideos, 0);
             if (value === hostVisible) return;
             hostVisible = value;
             document.dispatchEvent(new Event('visibilitychange'));

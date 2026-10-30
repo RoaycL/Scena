@@ -31,11 +31,16 @@ nonisolated enum DesktopHitTest {
         }
     }
 
+    /// 程序坞在自己的层级放了一个铺满屏幕的透明窗口，不能算作遮挡；
+    /// 程序坞本身所在的区域由调用方用屏幕的可用区域排除
     static func onScreenWindows() -> [WindowEntry] {
         let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
         return entries.compactMap { entry in
             guard let number = entry[kCGWindowNumber as String] as? Int,
                   let layer = entry[kCGWindowLayer as String] as? Int,
+                  !(layer == dockLayer && (entry[kCGWindowOwnerPID as String] as? pid_t) == dock),
                   let bounds = (entry[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) })
             else { return nil }
             return WindowEntry(number: number, layer: layer, alpha: entry[kCGWindowAlpha as String] as? Double ?? 1, bounds: bounds)
@@ -171,7 +176,8 @@ final class DesktopPointerForwarder {
 
     /// 窗口列表和辅助功能查询都要跨进程，移动和滚轮复用很短时间内的结果
     private func isEmptyDesktop(_ location: CGPoint, maxAge: TimeInterval) -> Bool {
-        guard let primary = NSScreen.screens.first else { return false }
+        guard let primary = NSScreen.screens.first,
+              NSScreen.screens.contains(where: { $0.visibleFrame.contains(location) }) else { return false }
         let point = CGPoint(x: location.x, y: primary.frame.height - location.y)
         if let cachedHit, Date().timeIntervalSince(cachedHit.time) < maxAge, hypot(cachedHit.point.x - point.x, cachedHit.point.y - point.y) < 24 {
             return cachedHit.empty
