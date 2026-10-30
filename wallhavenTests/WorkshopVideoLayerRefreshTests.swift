@@ -72,6 +72,12 @@ struct WorkshopVideoLayerRefreshTests {
         try await Task.sleep(for: .milliseconds(300))
         #expect(try await player.evaluateJavaScript("!next.paused && next.currentTime", in: frame) as? Double ?? 0 > before)
         #expect(try await player.evaluateJavaScript("current.style.getPropertyValue('object-position')", in: frame) as? String == "left top")
+        // 布局稳定后，仍在显示、播放的视频再重建一次；隐藏的不动
+        let afterSwitch = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        try await Task.sleep(for: .milliseconds(900))
+        let settled = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
+        #expect(settled[0] == afterSwitch[0] && settled[1] == afterSwitch[1] + 1, "\(afterSwitch) -> \(settled)")
+        #expect(try await player.evaluateJavaScript("!next.paused", in: frame) as? Bool == true)
 
         // 后台暂停后恢复播放不重建（反复重建会让播放卡顿）
         let beforePause = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])

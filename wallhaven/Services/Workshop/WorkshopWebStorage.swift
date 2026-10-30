@@ -162,6 +162,18 @@ final class WorkshopWebStorage {
             else if (done.stages.has(stage)) return;
             else done.stages.add(stage);
             rebuildVideoLayer(video);
+            // 第一帧到达、开始播放时布局可能还没按真实尺寸更新，WebKit 会在这次重建里按默认的 2:1 框创建画面层，
+            // 之后只改外框、不改画面。布局稳定后再重建一次：第一帧时视频通常还没显示；开始播放时只重建仍在显示的
+            const src = video.currentSrc;
+            setTimeout(() => {
+              if (video.currentSrc !== src || !video.videoWidth) return;
+              if (stage === 'playing' && (video.paused || !isShown(video))) return;
+              rebuildVideoLayer(video);
+            }, stage === 'playing' ? 1000 : 500);
+          };
+          const isShown = video => {
+            const style = getComputedStyle(video);
+            return Number(style.opacity) > 0 && style.visibility !== 'hidden';
           };
           const pending = new Set();
           let pendingTimer = 0;
