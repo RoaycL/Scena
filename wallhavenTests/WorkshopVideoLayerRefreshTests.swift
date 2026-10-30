@@ -6,7 +6,7 @@ import WebKit
 @testable import wallhaven
 
 /// 视频画面层重建：每个片源在解码出第一帧、第一次开始播放时把视频原地重新插入（WebKit 按真实尺寸重建画面层），
-/// 暂停后恢复不重建；正在显示的视频换片源时先隐藏到重建完成；窗口缩放后重建可见的视频
+/// 暂停后恢复不重建；正在显示的视频换片源时隐藏到解码出第一帧并重建；窗口缩放后重建可见的视频
 @MainActor @Suite(.serialized)
 struct WorkshopVideoLayerRefreshTests {
     private let testDefaults = TestDefaults()
@@ -83,19 +83,21 @@ struct WorkshopVideoLayerRefreshTests {
         try await Task.sleep(for: .milliseconds(300))
         #expect(try await player.evaluateJavaScript(counts, in: frame) as? [Int] == beforePause)
 
-        // 正在显示的视频换片源：加载期间隐藏，开始播放并重建后恢复显示
+        // 正在显示的视频换片源：加载期间隐藏，解码出第一帧并重建后立即显示（不必等到开始播放）
         _ = try await player.evaluateJavaScript("""
-        window.visibility = [];
-        next.addEventListener('loadstart', () => visibility.push('loadstart:' + getComputedStyle(next).visibility));
-        next.src = 'clip.mov?second'; next.play().catch(() => {}); void 0
+        window.shownAtFirstFrame = null;
+        next.addEventListener('loadeddata', () => setTimeout(() => window.shownAtFirstFrame = getComputedStyle(next).visibility, 0), {once: true});
+        next.src = 'clip.mov?second'; void 0
         """, in: frame)
-        try await Task.sleep(for: .milliseconds(30))
         #expect(try await player.evaluateJavaScript("getComputedStyle(next).visibility", in: frame) as? String == "hidden")
         for _ in 0..<60 {
-            if try await player.evaluateJavaScript("!next.paused && getComputedStyle(next).visibility === 'visible'", in: frame) as? Bool == true { break }
+            if try await player.evaluateJavaScript("window.shownAtFirstFrame !== null", in: frame) as? Bool == true { break }
             try await Task.sleep(for: .milliseconds(50))
         }
-        #expect(try await player.evaluateJavaScript("getComputedStyle(next).visibility + ',' + next.style.getPropertyValue('visibility')", in: frame) as? String == "visible,")
+        #expect(try await player.evaluateJavaScript("window.shownAtFirstFrame + ',' + next.style.getPropertyValue('visibility')", in: frame) as? String == "visible,")
+        #expect(try await player.evaluateJavaScript("document.querySelectorAll('canvas').length", in: frame) as? Int == 0)
+        _ = try await player.evaluateJavaScript("next.play(); void 0", in: frame)
+        try await Task.sleep(for: .milliseconds(300))
         let changed = try #require(try await player.evaluateJavaScript(counts, in: frame) as? [Int])
         #expect(changed[1] >= beforePause[1] + 2, "\(beforePause) -> \(changed)")
 

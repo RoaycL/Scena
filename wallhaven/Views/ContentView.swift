@@ -82,6 +82,8 @@ struct ContentView: View {
     @State private var dismissedBackgroundID: String?
     /// 页面级加载提示（统一显示在顶部栏下方）；加载很快时不显示，避免闪一下
     @State private var showsPageLoading = false
+    /// 大图加载提示（画面正中）；同样等一小会儿再显示
+    @State private var showsBackgroundLoading = false
     /// 创意工坊网格的底部是否露出（用户滑到底、在等下一页）
     @State private var isWorkshopFooterVisible = false
     @State private var backgroundRetryToken = 0
@@ -1231,22 +1233,6 @@ struct ContentView: View {
                     infoPanel(for: item)
                         .opacity(actionableItem != nil ? 1 : 0.45)
                         .allowsHitTesting(actionableItem != nil)
-                        .overlay(alignment: .topTrailing) {
-                            if failedBackgroundID == selectedItem?.id, selectedItem != nil {
-                                HStack(spacing: 8) {
-                                    Label("加载失败", systemImage: "exclamationmark.triangle")
-                                    Button("重试") {
-                                        failedBackgroundID = nil
-                                        backgroundRetryToken += 1
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                                .font(.caption).foregroundStyle(Color.primary)
-                            } else if actionableItem == nil {
-                                Label("加载中", systemImage: "arrow.triangle.2.circlepath")
-                                    .font(.caption).foregroundStyle(Color.primary.opacity(0.8))
-                            }
-                        }
                         .animation(Motion.content, value: actionableItem?.id)
                         .opacity(dismissedBackgroundID != nil ? 0 : 1)
                         .offset(y: dismissedBackgroundID != nil && !Motion.reducesMotion ? 8 : 0)
@@ -1284,6 +1270,53 @@ struct ContentView: View {
                 .padding(.bottom, 16)
                 .onHover { immersive.setHold("strip", active: $0) }
             }
+            .overlay { backgroundLoadingState }
+        }
+    }
+
+    /// 大图还在加载的选中项（加载失败时也算，用来显示重试）
+    private var loadingBackgroundID: String? {
+        guard let selectedItem else { return nil }
+        return actionableItem == nil || failedBackgroundID == selectedItem.id ? selectedItem.id : nil
+    }
+
+    /// 大图加载中 / 加载失败：显示在画面正中，和顶部栏下方的页面加载提示同一样式。
+    /// 加载很快时不显示，避免闪一下
+    @ViewBuilder
+    private var backgroundLoadingState: some View {
+        Group {
+            if let selectedItem, failedBackgroundID == selectedItem.id {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Text("加载失败").foregroundStyle(Color.primary.opacity(0.9))
+                    Button("重试") {
+                        failedBackgroundID = nil
+                        backgroundRetryToken += 1
+                    }
+                    .buttonStyle(.plain)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.primary)
+                }
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .sceneGlass(in: Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.10), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+            } else if showsBackgroundLoading, loadingBackgroundID != nil {
+                PageLoadingCapsule(title: "加载中")
+                    .allowsHitTesting(false)
+            }
+        }
+        .transition(.opacity)
+        .animation(Motion.content, value: showsBackgroundLoading && loadingBackgroundID != nil)
+        .animation(Motion.content, value: failedBackgroundID)
+        .task(id: loadingBackgroundID) {
+            showsBackgroundLoading = false
+            guard loadingBackgroundID != nil else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            showsBackgroundLoading = true
         }
     }
 

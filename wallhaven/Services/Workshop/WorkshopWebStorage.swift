@@ -108,8 +108,10 @@ final class WorkshopWebStorage {
           // 只有把元素移出 DOM 再插回、重新创建渲染对象才会按真实尺寸重建这一层（插回原位会被当作无操作）。
           // 每个片源在解码出第一帧、第一次开始播放时各重建一次（WebM 的画面层尺寸在第一帧之后才确定）；
           // 换片的页面这时通常还没把它显示出来，看不出变化。暂停后恢复播放不重建：反复重建会让后台播放卡顿。
-          // 正在显示的视频换片源时，新片源的头几帧还在旧框里（看起来是画面先小后大的缩放），
-          // 先临时隐藏它（露出页面自己垫在下面的封面），重建完成后再显示。
+          // 正在显示的视频换片源时，新片源的头几帧可能画在旧框里（看起来是画面先小后大的缩放）：
+          // 换片时先隐藏视频，解码出第一帧并重建后立即显示。新片源没有画面前，视频元素本来就是透明的，
+          // 露出的是页面垫在下面的内容，所以隐藏不会比页面原本多露出什么（1.0.40 等到开始播放才显示，会多露出封面）。
+          // 不能用 canvas.drawImage 定格画面：WebKit 取视频帧要同步等 GPU 进程，视频没出帧时会一直等，冻住所有网页。
           // 元素尺寸真的变化（窗口缩放）后，等变化停下来再重建可见的视频。同步插回不会暂停播放
           const rebuildVideoLayer = video => {
             if (!(video instanceof HTMLVideoElement) || !video.isConnected) return;
@@ -128,11 +130,30 @@ final class WorkshopWebStorage {
             video.style.removeProperty('visibility');
           };
           const conceal = video => {
-            if (concealed.has(video) || video.style.getPropertyValue('visibility')) return;
-            if (Number(getComputedStyle(video).opacity) === 0 || getComputedStyle(video).visibility === 'hidden') return;
+            if (concealed.has(video) || video.style.getPropertyValue('visibility') || !video.isConnected) return;
+            const style = getComputedStyle(video);
+            if (Number(style.opacity) === 0 || style.visibility === 'hidden') return;
             video.style.setProperty('visibility', 'hidden', 'important');
-            // 兜底：页面不播放这个片源时也要恢复
+            // 兜底：页面不加载这个片源时也要恢复
             concealed.set(video, setTimeout(() => reveal(video), 3000));
+          };
+          // 页面换片源的入口：在新片源开始加载之前隐藏
+          const srcProperty = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+          if (srcProperty?.set) {
+            Object.defineProperty(HTMLMediaElement.prototype, 'src', {...srcProperty, set(value) {
+              if (this instanceof HTMLVideoElement) conceal(this);
+              srcProperty.set.call(this, value);
+            }});
+          }
+          const nativeLoad = HTMLMediaElement.prototype.load;
+          HTMLMediaElement.prototype.load = function () {
+            if (this instanceof HTMLVideoElement) conceal(this);
+            return nativeLoad.call(this);
+          };
+          const nativeSetAttribute = Element.prototype.setAttribute;
+          Element.prototype.setAttribute = function (name, value) {
+            if (this instanceof HTMLVideoElement && String(name).toLowerCase() === 'src') conceal(this);
+            return nativeSetAttribute.call(this, name, value);
           };
           const rebuiltStages = new WeakMap();
           const rebuildOncePerSource = (video, stage) => {
@@ -172,8 +193,7 @@ final class WorkshopWebStorage {
               if (!(video instanceof HTMLVideoElement)) return;
               rebuildOncePerSource(video, type);
               resizeObserver.observe(video);
-              // 重建后的新画面层画出来再显示
-              if (type === 'playing') setTimeout(() => reveal(video), 60);
+              if (type === 'loadeddata') reveal(video);
             }, true);
           }
           document.addEventListener('loadstart', event => {
