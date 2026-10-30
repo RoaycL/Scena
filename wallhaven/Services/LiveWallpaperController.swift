@@ -81,11 +81,13 @@ final class LiveWallpaperController: ObservableObject {
     private final class Surface {
         let window: NSWindow
         let player: LivePlaybackView
+        let displayID: String
         private var isClosed = false
 
-        init(window: NSWindow, player: LivePlaybackView) {
+        init(window: NSWindow, player: LivePlaybackView, displayID: String) {
             self.window = window
             self.player = player
+            self.displayID = displayID
         }
 
         func close() {
@@ -184,13 +186,15 @@ final class LiveWallpaperController: ObservableObject {
         }
         endInteraction(restoreFocus: false)
         sourcePlaybackOverride = nil
+        // 再次设置正在显示的壁纸（或播放列表轮到它）时接着播放，不从头重来
+        let isShowing = current == content
         current = content
         canInteract = content.kind == .workshop && WorkshopItem.load(from: content.url, computeSize: false)?.type == .web
         isPaused = false
         if let data = try? JSONEncoder().encode(content) {
             UserDefaults.standard.set(data, forKey: storageKey)
         }
-        rebuildWindows()
+        if !isShowing || !refreshWindowsInPlace() { rebuildWindows() }
         setStaticPoster(for: content)
     }
 
@@ -335,10 +339,7 @@ final class LiveWallpaperController: ObservableObject {
         case .workshop:
             // 播放只需要入口元数据，不在主线程遍历整份壁纸的资源大小。
             guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return nil }
-            // 视频类工坊壁纸（以及烘焙成视频的场景 / 网页壁纸）优先用 AVFoundation 播放，更省电
-            // 网页壁纸开启了桌面交互时播放原网页，烘焙出的视频不能交互
-            let needsPage = item.type == .web && DesktopSettings.webDesktopInputMode != .off
-            if sourcePlaybackOverride != content.url.standardizedFileURL, !needsPage, let videoURL = item.playbackVideoURL {
+            if let videoURL = videoPlaybackURL(for: item, content: content) {
                 return LoopingVideoNSView(url: videoURL, includeAudio: playsSound)
             }
             let player = WorkshopPlayerNSView(item: item, fps: frameRate)
@@ -349,6 +350,53 @@ final class LiveWallpaperController: ObservableObject {
             }
             return player
         }
+    }
+
+    /// 视频类工坊壁纸（以及烘焙成视频的场景 / 网页壁纸）优先用 AVFoundation 播放，更省电；
+    /// 网页壁纸开启了桌面交互时播放原网页，烘焙出的视频不能交互
+    private func videoPlaybackURL(for item: WorkshopItem, content: LiveContent) -> URL? {
+        let needsPage = item.type == .web && DesktopSettings.webDesktopInputMode != .off
+        guard sourcePlaybackOverride != content.url.standardizedFileURL, !needsPage else { return nil }
+        return item.playbackVideoURL
+    }
+
+    /// 要显示壁纸的屏幕
+    private var targetScreens: [NSScreen] {
+        let disabled = DesktopSettings.disabledDisplayIDs
+        return NSScreen.screens.filter { !disabled.contains($0.displayUUID) }
+    }
+
+    /// 屏幕参数或窗口设置变化、而播放内容不需要换时，只调整现有窗口。
+    /// 重建会重新加载网页壁纸，页面通常从头播放（看起来像播到一半突然重来）
+    private func refreshWindowsInPlace() -> Bool {
+        guard let content = current, !surfaces.active.isEmpty else { return false }
+        let screens = targetScreens
+        guard screens.map(\.displayUUID) == surfaces.active.map(\.displayID) else { return false }
+        let wantsPage: Bool
+        switch content.kind {
+        case .video:
+            wantsPage = false
+        case .workshop:
+            guard let item = WorkshopItem.load(from: content.url, computeSize: false) else { return false }
+            wantsPage = videoPlaybackURL(for: item, content: content) == nil
+        }
+        guard surfaces.active.allSatisfy({ surface in
+            let page = surface.player as? WorkshopPlayerNSView
+            // 渲染失败的网页要重建才能重试
+            if case .failed = page?.state { return false }
+            return (page != nil) == wantsPage
+        }) else { return false }
+        let keepAspect = DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)
+        let background = DesktopSettings.backgroundNSColor
+        for (surface, screen) in zip(surfaces.active, screens) {
+            (surface.player as? LoopingVideoNSView)?.setFit(keepAspectRatio: keepAspect, background: background)
+            surface.window.level = desktopWindowLevel
+            surface.window.setFrame(screen.frame, display: true)
+            surface.player.frame = CGRect(origin: .zero, size: screen.frame.size)
+        }
+        configureInteractionWindows()
+        updatePlayback()
+        return true
     }
 
     /// 新窗口先以透明状态创建，播放器出第一帧后淡入，再移除旧窗口：切换时不会黑屏
@@ -366,12 +414,11 @@ final class LiveWallpaperController: ObservableObject {
             return
         }
 
-        let disabled = DesktopSettings.disabledDisplayIDs
         // 盖住桌面图标：窗口放到图标层之上（除非网页壁纸要直接接收鼠标，否则仍然不接收鼠标事件）
         let level = desktopWindowLevel
         let keepAspect = DesktopSettings.bool(DesktopSettings.keepAspectRatio, default: false)
         let background = DesktopSettings.backgroundNSColor
-        for screen in NSScreen.screens where !disabled.contains(screen.displayUUID) {
+        for screen in targetScreens {
             // 多屏只让主屏输出声音；音量为 0 时视频不解码音轨
             let playsSound = screen == NSScreen.screens.first && volume > 0
             guard let player = makePlayer(for: content, playsSound: playsSound) else { continue }
@@ -399,7 +446,7 @@ final class LiveWallpaperController: ObservableObject {
             // 同一层级里后 orderFront 的在上面，盖住旧窗口
             window.orderFront(nil)
 
-            surfaces.append(Surface(window: window, player: player))
+            surfaces.append(Surface(window: window, player: player, displayID: screen.displayUUID))
         }
 
         guard !surfaces.active.isEmpty else {
@@ -702,7 +749,7 @@ final class LiveWallpaperController: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, self.isActive else { return }
                 self.endInteraction(restoreFocus: false)
-                self.rebuildWindows()
+                if !self.refreshWindowsInPlace() { self.rebuildWindows() }
             }
         })
 
@@ -725,7 +772,7 @@ final class LiveWallpaperController: ObservableObject {
                 if playbackChanged && !self.isInteracting { self.sourcePlaybackOverride = nil }
                 guard signature != self.layoutSignature || (playbackChanged && self.current?.kind == .workshop && !self.isInteracting) else { return }
                 self.layoutSignature = signature
-                if self.isActive { self.rebuildWindows() }
+                if self.isActive, playbackChanged || !self.refreshWindowsInPlace() { self.rebuildWindows() }
             }
         })
 
