@@ -23,6 +23,7 @@ enum WallpaperManager {
         for screen in screens {
             try NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [:])
         }
+        DesktopImageCache.invalidate()
         LiveWallpaperController.shared.stop()
     }
 }

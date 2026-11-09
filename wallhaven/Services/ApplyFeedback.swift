@@ -52,7 +52,24 @@ extension GalleryItem {
     }
 
     private static func isDesktopImage(_ url: URL) -> Bool {
-        guard let screen = NSScreen.main, let desktop = NSWorkspace.shared.desktopImageURL(for: screen) else { return false }
+        guard let desktop = DesktopImageCache.mainScreenImage() else { return false }
         return desktop.standardizedFileURL.path == url.standardizedFileURL.path
     }
+}
+
+/// 查询系统桌面图片每次约 1.5 毫秒，而按钮每次重绘都要判断一次；短时间内复用结果
+@MainActor
+enum DesktopImageCache {
+    private static var cached: (time: TimeInterval, url: URL?)?
+
+    static func mainScreenImage() -> URL? {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let cached, now - cached.time < 1 { return cached.url }
+        let url = NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+        cached = (now, url)
+        return url
+    }
+
+    /// 本 App 刚设置了桌面图片
+    static func invalidate() { cached = nil }
 }

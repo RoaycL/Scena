@@ -106,6 +106,8 @@ final class ImmersiveWindowController: ObservableObject {
     var canAdvanceGallery: Bool {
         holdReasons.isDisjoint(with: ["search", "filter", "workshopFilter", "alert", "menu"])
             && !isManuallyHidden && window?.isVisible == true
+            // 窗口被其他窗口完全挡住时不轮播：看不见，换图只会白白解码、重绘
+            && window?.occlusionState.contains(.visible) == true
             && window?.attachedSheet == nil && !NSApp.isHidden
             && autoplay.canAdvance(at: ProcessInfo.processInfo.systemUptime)
     }

@@ -88,6 +88,7 @@ final class DesktopPointerForwarder {
     private weak var hovered: WorkshopPlayerNSView?
     private var lastMove = Date.distantPast
     private var cachedHit: (time: Date, point: CGPoint, empty: Bool)?
+    private var cachedWindows: (time: Date, windows: [DesktopHitTest.WindowEntry])?
 
     var isRunning: Bool { !monitors.isEmpty }
 
@@ -115,6 +116,7 @@ final class DesktopPointerForwarder {
         hovered = nil
         pressed = nil
         cachedHit = nil
+        cachedWindows = nil
     }
 
     private func handle(_ event: NSEvent) {
@@ -174,7 +176,8 @@ final class DesktopPointerForwarder {
         hovered = nil
     }
 
-    /// 窗口列表和辅助功能查询都要跨进程，移动和滚轮复用很短时间内的结果
+    /// 窗口列表和辅助功能查询都要跨进程（各约 1 毫秒，Finder 忙时辅助功能查询最长 50 毫秒）。
+    /// 移动和滚轮复用很短时间内的结果：窗口列表与位置无关，鼠标移动时也复用；只有落在没被挡住的地方才问 Finder
     private func isEmptyDesktop(_ location: CGPoint, maxAge: TimeInterval) -> Bool {
         guard let primary = NSScreen.screens.first,
               NSScreen.screens.contains(where: { $0.visibleFrame.contains(location) }) else { return false }
@@ -182,7 +185,14 @@ final class DesktopPointerForwarder {
         if let cachedHit, Date().timeIntervalSince(cachedHit.time) < maxAge, hypot(cachedHit.point.x - point.x, cachedHit.point.y - point.y) < 24 {
             return cachedHit.empty
         }
-        let empty = DesktopHitTest.isUncovered(point, by: DesktopHitTest.onScreenWindows(), ignoring: ownWindowNumbers())
+        let windows: [DesktopHitTest.WindowEntry]
+        if let cachedWindows, Date().timeIntervalSince(cachedWindows.time) < min(maxAge, 0.25) {
+            windows = cachedWindows.windows
+        } else {
+            windows = DesktopHitTest.onScreenWindows()
+            cachedWindows = (Date(), windows)
+        }
+        let empty = DesktopHitTest.isUncovered(point, by: windows, ignoring: ownWindowNumbers())
             && (iconsHidden() || !DesktopHitTest.isOnDesktopIcon(point))
         cachedHit = (Date(), point, empty)
         return empty
