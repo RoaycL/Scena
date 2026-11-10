@@ -620,7 +620,8 @@ final class LiveWallpaperController: ObservableObject {
         var written: Set<String> = []
 
         for (index, (window, player)) in zip(windows, players).enumerated() {
-            guard let screen = window.screen, let image = await player.snapshot(),
+            // 拍到全透明或全黑（渲染器还没出画面）时保留原来的封面
+            guard let screen = window.screen, let image = await player.snapshot(), Self.averageBrightness(of: image) > 2,
                   !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) else { continue }
             let url = folder.appendingPathComponent("frozen-\(index)-\(stamp).png")
             guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
@@ -654,11 +655,49 @@ final class LiveWallpaperController: ObservableObject {
     private func setStaticPoster(for content: LiveContent) {
         guard DesktopSettings.bool(DesktopSettings.syncStaticWallpaper, default: true) else { return }
         Task {
-            guard let posterURL = try? await Self.makePoster(for: content) else { return }
+            let live = Self.livePosterURL(for: content)
+            let hasLive = FileManager.default.fileExists(atPath: live.path)
+            guard let posterURL = hasLive ? live : try? await Self.makePoster(for: content) else { return }
             // 期间可能已切换到别的壁纸
             guard self.current == content else { return }
-            for screen in NSScreen.screens where !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) {
-                try? NSWorkspace.shared.setDesktopImageURL(posterURL, for: screen, options: [:])
+            applyPoster(posterURL)
+            if !hasLive, Self.postersFromPreview(content) { captureLivePoster(for: content) }
+        }
+    }
+
+    private func applyPoster(_ url: URL) {
+        for screen in NSScreen.screens where !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) {
+            try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+        }
+        DesktopImageCache.invalidate()
+    }
+
+    /// 没有视频的工坊壁纸（场景、无视频的网页）只能用自带的预览图当封面，通常只有几百像素见方，
+    /// 锁屏和调度中心铺满屏幕时又糊又被放大。渲染出画面几秒后，把主屏幕的实际画面存成封面替换掉
+    nonisolated private static func postersFromPreview(_ content: LiveContent) -> Bool {
+        content.kind == .workshop && WorkshopItem.load(from: content.url, computeSize: false)?.playbackVideoURL == nil
+    }
+
+    nonisolated private static func livePosterURL(for content: LiveContent) -> URL {
+        let hash = SHA256.hash(data: Data(content.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return posterFolder.appendingPathComponent("poster-live-v1-\(hash).jpg")
+    }
+
+    private func captureLivePoster(for content: LiveContent) {
+        let surface = surfaces.active.first { $0.window.screen == NSScreen.main } ?? surfaces.active.first
+        guard let player = surface?.player else { return }
+        player.whenReady { [weak self] in
+            // 等入场动画和贴图加载完
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                Task { @MainActor in
+                    guard let self, self.current == content, self.players.contains(where: { $0 === player }),
+                          let image = await player.snapshot(), Self.averageBrightness(of: image) > 2,
+                          self.current == content else { return }
+                    let url = Self.livePosterURL(for: content)
+                    guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.92]),
+                          (try? data.write(to: url, options: .atomic)) != nil else { return }
+                    self.applyPoster(url)
+                }
             }
         }
     }

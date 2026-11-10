@@ -51,6 +51,13 @@
     // 桌面窗口不接收鼠标事件，指针（视差效果）由宿主推送
     pointer(u, v) { wp && wp.pushPointer(u, v, 0, 0); },
     pointerLeave() { wp && wp.pointerLeave(); },
+    // 当前画面（JPEG data URL）：渲染器保留绘图缓冲，可直接读 canvas；WKWebView 的截图拍不到 WebGL 画面。
+    // 没有 canvas（纯视频网页）或跨域时返回 null
+    frame() {
+      const canvas = largestCanvas();
+      if (!canvas || !canvas.width || !canvas.height) return null;
+      try { return canvas.toDataURL("image/jpeg", 0.92); } catch (_) { return null; }
+    },
     // 烘焙：把渲染画面录成 MP4，分段以 base64 交给宿主拼接
     record(seconds, bitrate) {
       const canvas = largestCanvas();

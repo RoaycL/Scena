@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import ImageIO
 import SwiftUI
 import WebKit
 
@@ -361,8 +362,17 @@ final class WorkshopPlayerNSView: NSView, LivePlaybackView {
         }
     }
 
+    /// 优先读渲染画面的 canvas（原始分辨率）；WKWebView 截图拍不到 WebGL 和视频画面层，拍出来常是全透明
     func snapshot() async -> CGImage? {
-        guard isPageLoaded, let image = try? await webView.takeSnapshot(configuration: nil) else { return nil }
+        guard isPageLoaded else { return nil }
+        if let dataURL = try? await evaluateJavaScript("window.__host && __host.frame ? __host.frame() : null") as? String,
+           let comma = dataURL.firstIndex(of: ","),
+           let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])),
+           let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            return image
+        }
+        guard let image = try? await webView.takeSnapshot(configuration: nil) else { return nil }
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 
