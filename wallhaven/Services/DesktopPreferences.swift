@@ -121,7 +121,7 @@ enum DockIcon {
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
         // 切换后窗口可能失去焦点，重新激活
-        if !show { DispatchQueue.main.async { NSApp.activate() } }
+        if !show { DispatchQueue.main.async { AppActivation.bringToFront() } }
     }
 }
 

@@ -999,7 +999,7 @@ private final class PlaylistNamePrompt: NSObject, NSTextFieldDelegate {
                     self.input = nil
                     return
                 }
-                NSApp.activate()
+                AppActivation.bringToFront()
                 window.makeKeyAndOrderFront(nil)
                 alert.beginSheetModal(for: window) { response in
                     MainActor.assumeIsolated {

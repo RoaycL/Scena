@@ -311,7 +311,7 @@ final class LiveWallpaperController: ObservableObject {
             (window as? WallpaperDesktopWindow)?.setInputMode(.interacting, desktopLevel: desktopWindowLevel)
             window.orderFront(nil)
         }
-        NSApp.activate()
+        AppActivation.bringToFront()
         let target = windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? windows.first
         target?.makeKeyAndOrderFront(nil)
     }

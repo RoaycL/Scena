@@ -8,6 +8,28 @@
 import AppKit
 import SwiftUI
 
+/// 把 App 带到最前面。macOS 14 起激活是协作式的：当前前台的 App 不让出，激活请求就会被忽略。
+/// 状态栏菜单的操作在菜单关闭后才执行，这时前台仍是别的 App，新打开的窗口会落在它们后面。
+/// 激活没生效时，把刚打开 / 刚带到前面的窗口直接摆到所有 App 的窗口之上，用户点一下就会激活
+@MainActor enum AppActivation {
+    static func bringToFront() {
+        NSApp.unhide(nil)
+        NSApp.activate()
+        // SwiftUI 新建窗口要等一两个运行循环，分两次检查
+        for delay in [0.15, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard !NSApp.isActive else { return }
+                frontmostAppWindow?.orderFrontRegardless()
+            }
+        }
+    }
+
+    /// App 自己的普通窗口里排在最前的那个（不含桌面壁纸窗口、浮动面板和菜单）
+    static var frontmostAppWindow: NSWindow? {
+        NSApp.orderedWindows.first { $0.isVisible && $0.level == .normal && $0.styleMask.contains(.titled) }
+    }
+}
+
 /// 当前窗口提供给菜单栏的操作（通过 FocusedValue 传递，菜单项随选中项自动启用 / 禁用）
 struct GalleryCommandActions {
     var currentTab: MainTab
@@ -129,10 +151,10 @@ struct PlaylistCommands: View {
 
     var body: some View {
         if showsManageShortcut {
-            Button("管理播放列表…") { openWindow(id: PlaylistsWindow.id) }
+            Button("管理播放列表…") { AppActivation.bringToFront(); openWindow(id: PlaylistsWindow.id) }
                 .keyboardShortcut("p", modifiers: [.command, .option])
         } else {
-            Button("管理播放列表…") { openWindow(id: PlaylistsWindow.id) }
+            Button("管理播放列表…") { AppActivation.bringToFront(); openWindow(id: PlaylistsWindow.id) }
         }
 
         if let active = manager.activePlaylist {
@@ -168,6 +190,7 @@ struct StatusMenuContent: View {
     @EnvironmentObject private var viewModel: WallpaperViewModel
     @EnvironmentObject private var workshop: WorkshopViewModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     private let volumeLevels = [0, 25, 50, 75, 100]
 
     @ObservedObject private var updates = UpdateManager.shared
@@ -180,12 +203,12 @@ struct StatusMenuContent: View {
         Button("素材中心") { showMainWindow() }
         Menu("播放列表") { PlaylistCommands(showsManageShortcut: false) }
         Button("导入本地图片或视频…") {
-            NSApp.activate()
+            AppActivation.bringToFront()
             LocalMediaViewModel().importFiles()
             showMainWindow(tab: .library)
         }
         Button("添加工坊壁纸文件夹…") {
-            NSApp.activate()
+            AppActivation.bringToFront()
             workshop.addLibraryFolder()
             showMainWindow(tab: .library)
         }
@@ -243,7 +266,7 @@ struct StatusMenuContent: View {
 
         Menu(workshop.downloading.isEmpty ? "下载任务" : "下载任务 · \(workshop.downloading.count)") {
             Button("管理下载…") {
-                NSApp.activate()
+                AppActivation.bringToFront()
                 openWindow(id: DownloadsWindow.id)
             }
             Divider()
@@ -258,8 +281,11 @@ struct StatusMenuContent: View {
             .disabled(workshop.isSyncing)
         Divider()
 
-        SettingsLink { Text("偏好设置…") }
-            .keyboardShortcut(",")
+        Button("偏好设置…") {
+            AppActivation.bringToFront()
+            openSettings()
+        }
+        .keyboardShortcut(",")
         Divider()
         Button("退出 Scena") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -290,7 +316,7 @@ enum MainWindow {
     /// 已有主窗口就带到前台（包括最小化的），否则新建一个
     static func show(tab: MainTab? = nil) {
         requestedTab = tab
-        NSApp.activate()
+        AppActivation.bringToFront()
         if let window = existingWindow, window.isVisible || window.isMiniaturized {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)

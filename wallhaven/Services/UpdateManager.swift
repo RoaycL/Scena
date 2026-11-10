@@ -271,7 +271,7 @@ final class UpdateManager: ObservableObject {
         }
         hasOpenedWindowForPrompt = false
         updateAlert = alert
-        NSApp.activate()
+        AppActivation.bringToFront()
         window.makeKeyAndOrderFront(nil)
         alert.beginSheetModal(for: window) { [weak self] response in
             Task { @MainActor in
