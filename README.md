@@ -53,7 +53,7 @@ Scena 将高清图片、动态壁纸和本地素材放在一个应用中。你�
 
 1. 前往 [最新发布页](https://github.com/RoaycL/Scena/releases/latest)，下载 `Scena-版本号.zip`。
 2. 解压，将 `Scena.app` 拖入「应用程序」目录后打开。
-3. 如需校验文件，可使用发布页中的 `SHA256SUMS.txt`。
+3. 若该版本附有 `SHA256SUMS.txt`，将它与 ZIP 保存到同一目录，运行 `shasum -a 256 -c SHA256SUMS.txt` 校验。部分历史版本（包括 `v1.0.48`）仅提供 ZIP，未附校验文件。
 
 当前安装包使用 Apple Development 签名，尚未经过 Apple 公证。首次打开如遇系统安全检查，请确认文件来自本仓库的发布页，再到「系统设置 → 隐私与安全性」查看提示。
 
@@ -193,10 +193,19 @@ xcodebuild test -project wallhaven.xcodeproj -scheme wallhaven \
 
 1. 更新工程的 `MARKETING_VERSION` 和 `CURRENT_PROJECT_VERSION`，在 [CHANGELOG.md](CHANGELOG.md) 添加说明。
 2. 构建并校验 Release 安装包，提交代码和对应的 `v版本号` 标签。
-3. 上传包含顶层 `Scena.app` 的 ZIP 到 GitHub Release，并附上说明和 `SHA256SUMS.txt`。
+3. 上传包含顶层 `Scena.app` 的 ZIP 到 GitHub Release，并附上发布说明。建议同时生成、上传 `SHA256SUMS.txt`，让下载者可以核对文件完整性。
 4. 核对线上版本、架构、签名及下载文件的完整性。
 
-[`scripts/release.sh`](scripts/release.sh) 提供认证组件构建、应用打包和创建 Release 的辅助流程，支持 `--draft`。应用的更新功能读取本仓库最新的正式 Release。认证组件采用自包含运行时，会增加安装包体积；完整依赖许可随组件一起打包。
+[`scripts/release.sh`](scripts/release.sh) 提供认证组件构建、应用打包和创建 Release 的辅助流程，支持 `--draft`；目前脚本仅上传 ZIP，校验文件需另行生成并上传：
+
+```bash
+# VERSION 应与本次发布的版本号一致
+VERSION=1.0.48
+(cd build/release && shasum -a 256 "Scena-$VERSION.zip" > SHA256SUMS.txt)
+gh release upload "v$VERSION" build/release/SHA256SUMS.txt --repo RoaycL/Scena
+```
+
+必须对本次实际上传的 ZIP 计算校验和，不要复用其他构建的结果。应用的更新功能读取本仓库最新的正式 Release。认证组件采用自包含运行时，会增加安装包体积；完整依赖许可随组件一起打包。
 
 </details>
 
