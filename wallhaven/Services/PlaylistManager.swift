@@ -38,6 +38,25 @@ struct PlaylistEntry: Codable, Hashable, Identifiable, Sendable {
         return thumbnail.hasPrefix("/") ? URL(fileURLWithPath: thumbnail) : URL(string: thumbnail)
     }
 
+    /// 判断「是不是同一张壁纸」用的标识。在线壁纸下载后成了本地文件（资料库里看到的就是它），
+    /// 两者是同一张图：按条目 ID 比较时，发现页加入后资料库里显示不在列表里，还能重复加入
+    var identity: String {
+        guard kind == .local, let path, let wallpaperID = Self.onlineWallpaperID(forFileAt: path) else { return id }
+        return "wh-\(wallpaperID)"
+    }
+
+    /// 在线图源下载的文件（存在图源文件夹、或 Wallhaven 的下载目录里，文件名就是壁纸 ID）对应的壁纸 ID；
+    /// 导入的文件和其他位置的文件返回 nil
+    nonisolated static func onlineWallpaperID(forFileAt path: String) -> String? {
+        let url = URL(fileURLWithPath: path)
+        let folder = url.deletingLastPathComponent().standardizedFileURL.path
+        let name = url.deletingPathExtension().lastPathComponent
+        if WallpaperSources.downloadFolders.contains(where: { $0.folder.standardizedFileURL.path == folder }) { return name }
+        if folder == URL(fileURLWithPath: DownloadLocation.currentPath).standardizedFileURL.path,
+           LocalMediaViewModel.isWallhavenFileName(url) { return name }
+        return nil
+    }
+
     var kindLabel: String {
         switch kind {
         case .remote: remote?.sourceName ?? "在线"
@@ -156,6 +175,8 @@ final class PlaylistManager: ObservableObject {
     @discardableResult
     func create(name: String? = nil, entries: [PlaylistEntry] = []) -> Playlist {
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var seen = Set<String>()
+        let entries = entries.filter { seen.insert($0.identity).inserted }
         let playlist = Playlist(id: UUID(), name: trimmedName.flatMap { $0.isEmpty ? nil : $0 } ?? "播放列表 \(playlists.count + 1)", entries: entries)
         playlists.append(playlist)
         save()
@@ -202,8 +223,8 @@ final class PlaylistManager: ObservableObject {
 
     func add(_ entries: [PlaylistEntry], to id: UUID) {
         guard let playlist = playlists.first(where: { $0.id == id }) else { return }
-        let existing = Set(playlist.entries.map(\.id))
-        let fresh = entries.filter { !existing.contains($0.id) }
+        var existing = Set(playlist.entries.map(\.identity))
+        let fresh = entries.filter { existing.insert($0.identity).inserted }
         update(id) { $0.entries += fresh }
         if fresh.isEmpty {
             toast.show("「\(playlist.name)」中已有该壁纸", style: .info)
@@ -212,6 +233,25 @@ final class PlaylistManager: ObservableObject {
             downloadLocalCopies(of: fresh)
         }
         if activeID == id { syncOrder() }
+    }
+
+    /// 播放列表里和这张壁纸是同一张的条目 ID（在线壁纸和它下载后的本地文件都算）
+    func entryIDs(matching identity: String, in id: UUID) -> Set<String> {
+        Set(playlists.first { $0.id == id }?.entries.filter { $0.identity == identity }.map(\.id) ?? [])
+    }
+
+    /// 播放列表里重复的条目（同一张壁纸出现多次）：每张保留一条，其余的条目 ID。
+    /// 正在播放的那条优先保留，其次保留最靠前的
+    func duplicateEntryIDs(in id: UUID) -> Set<String> {
+        guard let playlist = playlists.first(where: { $0.id == id }) else { return [] }
+        var groups: [String: [PlaylistEntry]] = [:]
+        for entry in playlist.entries { groups[entry.identity, default: []].append(entry) }
+        var duplicates = Set<String>()
+        for group in groups.values where group.count > 1 {
+            let keeper = (activeID == id ? group.first { $0.id == currentEntryID } : nil) ?? group[0]
+            for entry in group where entry.id != keeper.id { duplicates.insert(entry.id) }
+        }
+        return duplicates
     }
 
     func remove(_ entryIDs: Set<String>, from id: UUID) {

@@ -181,6 +181,7 @@ struct PlaylistsView: View {
                             }
                             Divider()
                             Button("重命名…") { rename(playlist) }
+                            Button("去除重复壁纸") { removeDuplicates(from: playlist) }
                             Button("删除列表", role: .destructive) { manager.delete(playlist.id) }
                         }
                     }
@@ -247,6 +248,17 @@ struct PlaylistsView: View {
         selectedEntries.subtract(removed)
     }
 
+    /// 同一张壁纸在列表里出现多次时，每张只留一条；可以用 ⌘Z 撤销
+    private func removeDuplicates(from playlist: Playlist) {
+        let duplicates = manager.duplicateEntryIDs(in: playlist.id)
+        guard !duplicates.isEmpty else {
+            ToastCenter.shared.show("「\(playlist.name)」中没有重复的壁纸", style: .info)
+            return
+        }
+        removeEntries(duplicates, from: playlist)
+        ToastCenter.shared.show("已从「\(playlist.name)」去除 \(duplicates.count) 张重复壁纸（⌘Z 撤销）", style: .success)
+    }
+
     private func undoRemoval() {
         // 命名 sheet 等输入框的 ⌘Z 仍交给文本编辑器。
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
@@ -297,6 +309,7 @@ struct PlaylistsView: View {
                 Button("新建播放列表…", action: createPlaylist)
                 if let playlist = selectedPlaylist {
                     Button("重命名…") { rename(playlist) }
+                    Button("去除重复壁纸") { removeDuplicates(from: playlist) }
                     if manager.activeID == playlist.id {
                         Button("停止播放") { manager.stop() }
                     }
@@ -872,12 +885,12 @@ struct AddToPlaylistItems: View {
         // 已经包含这张壁纸的列表打勾；再点一次从该列表移除
         ForEach(manager.playlists) { playlist in
             Toggle(MenuText.compact(playlist.name), isOn: Binding(
-                get: { playlist.entries.contains { $0.id == entry.id } },
+                get: { playlist.entries.contains { $0.identity == entry.identity } },
                 set: { add in
                     if add {
                         manager.add([entry], to: playlist.id)
                     } else {
-                        manager.remove([entry.id], from: playlist.id)
+                        manager.remove(manager.entryIDs(matching: entry.identity, in: playlist.id), from: playlist.id)
                         ToastCenter.shared.show("已从「\(playlist.name)」移除", style: .info)
                     }
                 }
@@ -942,8 +955,8 @@ struct AddToPlaylistButton: View {
 
     /// 已经在任意一个播放列表里：图标换成带对勾的样式
     private var isInPlaylist: Bool {
-        guard let id = PlaylistEntry(item)?.id else { return false }
-        return manager.playlists.contains { $0.entries.contains { $0.id == id } }
+        guard let identity = PlaylistEntry(item)?.identity else { return false }
+        return manager.playlists.contains { $0.entries.contains { $0.identity == identity } }
     }
 
     var body: some View {
