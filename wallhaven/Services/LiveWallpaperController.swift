@@ -623,8 +623,9 @@ final class LiveWallpaperController: ObservableObject {
             // 拍到全透明或全黑（渲染器还没出画面）时保留原来的封面
             guard let screen = window.screen, let image = await player.snapshot(), Self.averageBrightness(of: image) > 2,
                   !DesktopSettings.disabledDisplayIDs.contains(screen.displayUUID) else { continue }
-            let url = folder.appendingPathComponent("frozen-\(index)-\(stamp).png")
-            guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
+            // JPEG：5K 画面编码约 0.04 秒、1.5 MB；PNG 要 0.3 秒、10 MB，退出时在主线程上等
+            let url = folder.appendingPathComponent("frozen-\(index)-\(stamp).jpg")
+            guard let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.92]),
                   (try? data.write(to: url, options: .atomic)) != nil else { continue }
             try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
             written.insert(url.lastPathComponent)
@@ -702,35 +703,49 @@ final class LiveWallpaperController: ObservableObject {
         }
     }
 
-    nonisolated private static func makePoster(for content: LiveContent) async throws -> URL {
+    nonisolated static func makePoster(for content: LiveContent) async throws -> URL {
         let fm = FileManager.default
         let folder = posterFolder
 
-        // 每个内容一个独立文件名，系统才会刷新壁纸（v2：跳过黑帧，旧的黑色封面会重新生成）
+        // 封面来源：视频（含转成视频的场景 / 网页壁纸）取画面帧，否则用自带的预览图。
+        // 文件名带上来源：同一张壁纸后来转成视频、或视频重新转换后，会换一个文件名重新生成，
+        // 不会继续用转换前缓存的预览图（预览图常常很小，和实际画面也不一定一样）。
+        // 每个内容的文件名也要各不相同，系统才会刷新壁纸
+        let item = content.kind == .workshop ? WorkshopItem.load(from: content.url, computeSize: false) : nil
+        let videoURL = content.kind == .video ? content.url : item?.playbackVideoURL
         let hash = SHA256.hash(data: Data(content.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        let posterURL = folder.appendingPathComponent("poster-v2-\(hash).png")
+        let posterURL: URL
+        if let videoURL {
+            let modified = (try? videoURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let source = SHA256.hash(data: Data("\(videoURL.path)|\(Int(modified))".utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+            posterURL = folder.appendingPathComponent("poster-v3-\(hash)-\(source).jpg")
+        } else {
+            posterURL = folder.appendingPathComponent("poster-v2-\(hash).png")
+        }
         if fm.fileExists(atPath: posterURL.path) { return posterURL }
 
         let cgImage: CGImage
-        switch content.kind {
-        case .video:
-            cgImage = try await firstFrame(of: content.url)
-        case .workshop:
-            let item = WorkshopItem.load(from: content.url, computeSize: false)
-            if let videoURL = item?.playbackVideoURL {
-                cgImage = try await firstFrame(of: videoURL)
-            } else if let preview = item?.previewURL, let cg = posterFrame(ofImageAt: preview) {
-                cgImage = cg
-            } else {
-                throw WallperError.wallpaper("没有可用的封面。")
-            }
+        if let videoURL {
+            cgImage = try await firstFrame(of: videoURL)
+        } else if let preview = item?.previewURL, let cg = posterFrame(ofImageAt: preview) {
+            cgImage = cg
+        } else {
+            throw WallperError.wallpaper("没有可用的封面。")
         }
 
         let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = rep.representation(using: .png, properties: [:]) else {
+        let isVideoFrame = videoURL != nil
+        guard let data = isVideoFrame
+            ? rep.representation(using: .jpeg, properties: [.compressionFactor: 0.92])
+            : rep.representation(using: .png, properties: [:]) else {
             throw WallperError.wallpaper("无法生成封面。")
         }
         try data.write(to: posterURL, options: .atomic)
+        // 同一张壁纸旧来源的封面不再需要
+        for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? []
+        where name.hasPrefix("poster-v") && name.contains(hash) && name != posterURL.lastPathComponent {
+            try? fm.removeItem(at: folder.appendingPathComponent(name))
+        }
         return posterURL
     }
 
