@@ -82,7 +82,7 @@ struct InfoPanel<Actions: View>: View {
 }
 
 /// 「设为壁纸」：按钮本身显示过程和结果——设置中（转圈）→ 已设为壁纸（对勾，2 秒）；
-/// 这张正是当前桌面壁纸时常驻显示「当前壁纸」
+/// 这张正是当前桌面壁纸时常驻显示「当前壁纸」（样式和「设为壁纸」一致，只换文字）
 struct ApplyWallpaperButton: View {
     @ObservedObject private var feedback = ApplyFeedback.shared
     @Environment(\.colorScheme) private var scheme
@@ -108,11 +108,11 @@ struct ApplyWallpaperButton: View {
                     ProgressView().controlSize(.mini)
                         .environment(\.colorScheme, palette.primarySpinnerScheme)
                         .transition(.opacity)
-                case .applied, .current:
+                case .applied:
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))
                         .transition(Motion.reducesMotion ? .opacity : .scale(scale: 0.4).combined(with: .opacity))
-                case .idle:
+                case .idle, .current:
                     EmptyView()
                 }
                 Text(label(for: phase))
@@ -122,8 +122,7 @@ struct ApplyWallpaperButton: View {
             .foregroundStyle(palette.primaryText)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            // 「当前壁纸」是常驻状态，略微收敛，和可操作的主按钮区分开
-            .background(palette.primaryFill.opacity(phase == .current ? (palette.isDay ? 0.72 : 0.78) : 1), in: Capsule())
+            .background(palette.primaryFill, in: Capsule())
             .animation(Motion.hover, value: phase)
         }
         .buttonStyle(PressableButtonStyle())
